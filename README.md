@@ -1,44 +1,117 @@
-# Web-Meowverse
+# 🌿 Git Workflow (ทำงาน 3 คน แบบแยก Branch)
 
-This template should help get you started developing with Vue 3 in Vite.
+## 📌 กฎหลัก
+- ❌ ห้ามทำงานบน `main`
+- ❌ ห้าม push ลง `main` ตรง ๆ
+- ✅ ทุกคนต้องทำงานใน branch ของตัวเอง
+- ✅ ก่อนเริ่มงานต้อง `pull` ทุกครั้ง
 
-## Recommended IDE Setup
+---
 
-[VS Code](https://code.visualstudio.com/) + [Vue (Official)](https://marketplace.visualstudio.com/items?itemName=Vue.volar) (and disable Vetur).
+## 🧑‍💻 ครั้งแรก (Clone โปรเจกต์)
 
-## Recommended Browser Setup
-
-- Chromium-based browsers (Chrome, Edge, Brave, etc.):
-  - [Vue.js devtools](https://chromewebstore.google.com/detail/vuejs-devtools/nhdogjmejiglipccpnnnanhbledajbpd)
-  - [Turn on Custom Object Formatter in Chrome DevTools](http://bit.ly/object-formatters)
-- Firefox:
-  - [Vue.js devtools](https://addons.mozilla.org/en-US/firefox/addon/vue-js-devtools/)
-  - [Turn on Custom Object Formatter in Firefox DevTools](https://fxdx.dev/firefox-devtools-custom-object-formatters/)
-
-## Customize configuration
-
-See [Vite Configuration Reference](https://vite.dev/config/).
-
-## Project Setup
-
-```sh
+```bash
+git clone https://github.com/16Natthida/Meowverse.git
+cd Meowverse
 npm install
 ```
 
-### Compile and Hot-Reload for Development
+---
 
-```sh
-npm run dev
+## 🚀 เริ่มทำงาน (ทำทุกครั้งก่อนเริ่ม)
+
+```bash
+git checkout main
+git pull origin main
 ```
 
-### Compile and Minify for Production
+---
 
-```sh
-npm run build
+## 🌱 สร้าง Branch ของตัวเอง (ครั้งแรกเท่านั้น)
+
+```bash
+git checkout -b feature/ชื่อฟีเจอร์
 ```
 
-### Lint with [ESLint](https://eslint.org/)
-
-```sh
-npm run lint
+ตัวอย่าง:
+```bash
+git checkout -b feature/login
 ```
+
+---
+
+## 🔁 กลับมาทำงานใน branch ตัวเอง (วันถัดไป)
+
+```bash
+git checkout feature/ชื่อฟีเจอร์
+```
+
+---
+
+## 🔄 อัปเดตโค้ดล่าสุดจาก main (สำคัญมาก ทำทุกวัน)
+
+```bash
+git checkout main
+git pull origin main
+git checkout feature/ชื่อฟีเจอร์
+git merge main
+```
+
+---
+
+## 💻 เขียนโค้ด
+👉 ทำงานใน branch ของตัวเองเท่านั้น
+
+---
+
+## 💾 บันทึกงาน (ทำบ่อย ๆ)
+
+```bash
+git add .
+git commit -m "อธิบายงานที่ทำ เช่น เพิ่มหน้า login"
+```
+
+---
+
+## 📤 ส่งขึ้น GitHub
+
+```bash
+git push origin feature/ชื่อฟีเจอร์
+```
+
+ตัวอย่าง:
+```bash
+git push origin feature/login
+```
+
+---
+
+## 🔁 ทำงานต่อ (วนลูปทุกวัน)
+
+```bash
+git pull origin main
+git add .
+git commit -m "update"
+git push origin feature/ชื่อฟีเจอร์
+```
+
+---
+
+## 🔚 ส่งงานเข้า main (ตอนทำเสร็จ)
+
+```bash
+git checkout main
+git pull origin main
+git merge feature/ชื่อฟีเจอร์
+git push origin main
+```
+
+---
+
+## ⚠️ ข้อห้าม (สำคัญมาก)
+
+- ❌ ห้าม push main ตรง ๆ
+- ❌ ห้ามแก้ไฟล์เดียวกันพร้อมกัน
+- ❌ ห้ามลืม pull ก่อนทำงาน
+- ❌ ห้าม merge พร้อมกันหลายคน
+
