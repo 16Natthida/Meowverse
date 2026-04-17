@@ -17,12 +17,19 @@ const BACKEND_URL = import.meta.env.VITE_API_BASE || 'http://localhost:3000'
 
 async function onSubmit() {
   error.value = ''
+  
+  console.log('🔐 Attempting to login...')
+  console.log('Username:', memberId.value)
+  console.log('Backend URL:', BACKEND_URL)
+  
   if (!memberId.value.trim() || !password.value.trim()) {
     error.value = 'กรุณากรอกชื่อผู้ใช้และรหัสผ่าน'
+    console.warn('⚠️ Missing username or password')
     return
   }
 
   try {
+    console.log('📡 Sending login request...')
     const response = await fetch(`${BACKEND_URL}/login`, {
       method: 'POST',
       headers: {
@@ -34,17 +41,36 @@ async function onSubmit() {
       }),
     })
 
+    console.log('✅ Response received:', response.status)
     const data = await response.json()
+    console.log('📦 Response data:', data)
 
     if (!response.ok || !data.success) {
       error.value = data.error || 'เกิดข้อผิดพลาดในการเข้าสู่ระบบ'
+      console.error('❌ Login failed:', error.value)
       return
     }
 
-    login({ id: data.user.id, username: data.user.username }, remember.value)
-    router.push('/')
+    // ส่ง role ไปยัง login function
+    const userData = {
+      id: data.user.user_id,  // ✅ Backend ส่ง user_id
+      username: data.user.username,
+      role: data.user.role || 'user' // ค่าเริ่มต้นคือ 'user'
+    }
+    
+    console.log('👤 User data:', userData)
+    login(userData, remember.value)
+    
+    // redirect ตามแต่ละ role
+    if (userData.role === 'admin' || userData.role === 'Admin') {
+      console.log('👨‍💼 Redirecting to admin dashboard...')
+      router.push('/admin')
+    } else {
+      console.log('👥 Redirecting to user dashboard...')
+      router.push('/dashboard')
+    }
   } catch (err) {
-    console.error(err)
+    console.error('💥 Error occurred:', err)
     error.value = 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้'
   }
 }

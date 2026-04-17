@@ -10,8 +10,21 @@ function updateAuthState(value) {
   authState.value = value
 }
 
+function getUserRole() {
+  const user = localStorage.getItem('meowverse-user') || sessionStorage.getItem('meowverse-user')
+  if (!user) return null
+  
+  try {
+    const userData = JSON.parse(user)
+    return userData.role || null
+  } catch {
+    return null
+  }
+}
+
 export function useAuth() {
   const isLoggedIn = computed(() => authState.value)
+  const userRole = computed(() => getUserRole())
 
   function login(payload, remember = true) {
     const storage = remember ? localStorage : sessionStorage
@@ -32,9 +45,22 @@ export function useAuth() {
     updateAuthState(false)
   }
 
+  function getUser() {
+    const user = localStorage.getItem('meowverse-user') || sessionStorage.getItem('meowverse-user')
+    if (!user) return null
+    
+    try {
+      return JSON.parse(user)
+    } catch {
+      return null
+    }
+  }
+
   return {
     isLoggedIn,
+    userRole,
     login,
     logout,
+    getUser,
   }
 }
