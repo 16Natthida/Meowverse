@@ -54,8 +54,11 @@ db.connect((err) => {
       password VARCHAR(255) NOT NULL,
       role ENUM('user', 'admin') DEFAULT 'user',
       full_name VARCHAR(100) NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
+      phone_number VARCHAR(15) DEFAULT NULL,
+      line_id VARCHAR(50) DEFAULT NULL,
+      notes TEXT DEFAULT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP()
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
   `;
 
   db.query(createTableSql, async (tableErr) => {
@@ -126,8 +129,11 @@ app.post('/api/setup', (req, res) => {
       password VARCHAR(255) NOT NULL,
       role ENUM('user', 'admin') DEFAULT 'user',
       full_name VARCHAR(100) NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
+      phone_number VARCHAR(15) DEFAULT NULL,
+      line_id VARCHAR(50) DEFAULT NULL,
+      notes TEXT DEFAULT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP()
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
   `;
   db.query(sql, (err) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -241,20 +247,24 @@ app.get('/api/admin/order-list', authenticateToken, requireAdmin, (req, res) => 
 
 // Route สำหรับเพิ่ม user/admin (ต้องการ admin role)
 app.post('/api/users', authenticateToken, requireAdmin, async (req, res) => {
-  const { username, password, role, full_name } = req.body;
+  const { username, password, role, full_name, phone_number, line_id, notes } = req.body;
   if (!username || !password || !full_name) return res.status(400).json({ error: 'Username, password, and full_name required' });
   if (!['user', 'admin'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
 
   const hashedPassword = await bcrypt.hash(password, 10);
-  db.query('INSERT INTO accounts (username, password, role, full_name) VALUES (?, ?, ?, ?)', [username, hashedPassword, role, full_name], (err) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json({ message: 'User added successfully' });
-  });
+  db.query(
+    'INSERT INTO accounts (username, password, role, full_name, phone_number, line_id, notes) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [username, hashedPassword, role, full_name, phone_number || null, line_id || null, notes || null],
+    (err) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ message: 'User added successfully' });
+    }
+  );
 });
 
 // Route สำหรับดึงรายชื่อ users (สำหรับ admin)
 app.get('/api/users', authenticateToken, requireAdmin, (req, res) => {
-  db.query('SELECT user_id, username, role, full_name, created_at FROM accounts', (err, results) => {
+  db.query('SELECT user_id, username, role, full_name, phone_number, line_id, notes, created_at FROM accounts', (err, results) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(results);
   });

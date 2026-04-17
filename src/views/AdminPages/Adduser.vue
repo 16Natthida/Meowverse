@@ -33,6 +33,21 @@
           </select>
         </div>
 
+        <div class="field-group">
+          <label>เบอร์โทรศัพท์</label>
+          <input v-model="form.phone_number" type="text" placeholder="Phone number" />
+        </div>
+
+        <div class="field-group">
+          <label>LINE ID</label>
+          <input v-model="form.line_id" type="text" placeholder="LINE ID" />
+        </div>
+
+        <div class="field-group">
+          <label>หมายเหตุเพิ่มเติม</label>
+          <textarea v-model="form.notes" placeholder="Notes" rows="4"></textarea>
+        </div>
+
         <div class="form-actions">
           <button type="submit" class="btn-primary" :disabled="loading">บันทึก</button>
           <button type="button" class="btn-secondary" @click="resetForm">รีเซ็ต</button>
@@ -55,7 +70,15 @@ import axios from 'axios'
 
 const router = useRouter()
 const { logout } = useAuth()
-const form = ref({ username: '', password: '', full_name: '', role: 'user' })
+const form = ref({
+  username: '',
+  password: '',
+  full_name: '',
+  role: 'user',
+  phone_number: '',
+  line_id: '',
+  notes: '',
+})
 const loading = ref(false)
 const error = ref('')
 const success = ref('')
@@ -65,7 +88,15 @@ function goBack() {
 }
 
 function resetForm() {
-  form.value = { username: '', password: '', full_name: '', role: 'user' }
+  form.value = {
+    username: '',
+    password: '',
+    full_name: '',
+    role: 'user',
+    phone_number: '',
+    line_id: '',
+    notes: '',
+  }
   error.value = ''
   success.value = ''
 }
@@ -173,13 +204,19 @@ async function onSubmit() {
 }
 
 .field-group input,
-.field-group select {
+.field-group select,
+.field-group textarea {
   width: 100%;
   padding: 14px 16px;
   border: 1px solid #ece8f5;
   border-radius: 16px;
   background: #faf7ff;
   font-size: 1rem;
+}
+
+.field-group textarea {
+  resize: vertical;
+  min-height: 110px;
 }
 
 .form-actions {
