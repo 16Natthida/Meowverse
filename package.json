@@ -7,12 +7,17 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "server": "node server/index.js",
     "lint": "run-s lint:*",
     "lint:oxlint": "oxlint . --fix",
     "lint:eslint": "eslint . --fix --cache",
     "format": "prettier --write --experimental-cli src/"
   },
   "dependencies": {
+    "body-parser": "^2.2.2",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "mysql2": "^3.22.0",
     "vue": "^3.5.31",
     "vue-router": "^5.0.4"
   },
@@ -32,5 +37,18 @@
   },
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
-  }
+  },
+  "description": "- ❌ ห้ามทำงานบน `main` - ❌ ห้าม push ลง `main` ตรง ๆ - ✅ ทุกคนต้องทำงานใน branch ของตัวเอง - ✅ ก่อนเริ่มงานต้อง `pull` ทุกครั้ง",
+  "main": "eslint.config.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/16Natthida/Meowverse.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/16Natthida/Meowverse/issues"
+  },
+  "homepage": "https://github.com/16Natthida/Meowverse#readme"
 }

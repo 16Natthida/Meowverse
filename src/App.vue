@@ -1,10 +1,22 @@
 <script setup>
-import { RouterLink, RouterView } from 'vue-router'
+import { computed } from 'vue'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import HelloWorld from './components/HelloWorld.vue'
+import { useAuth } from './composables/useAuth'
+
+const route = useRoute()
+const router = useRouter()
+const { isLoggedIn, logout } = useAuth()
+const showHeader = computed(() => route.name !== 'login')
+
+function handleLogout() {
+  logout()
+  router.push('/login')
+}
 </script>
 
 <template>
-  <header>
+  <header v-if="showHeader">
     <img alt="Vue logo" class="logo" src="@/assets/logo.svg" width="125" height="125" />
 
     <div class="wrapper">
@@ -13,6 +25,8 @@ import HelloWorld from './components/HelloWorld.vue'
       <nav>
         <RouterLink to="/">Home</RouterLink>
         <RouterLink to="/about">About</RouterLink>
+        <RouterLink v-if="!isLoggedIn" to="/login">Login</RouterLink>
+        <button v-else class="logout-button" @click="handleLogout">Logout</button>
       </nav>
     </div>
   </header>
