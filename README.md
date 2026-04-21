@@ -1,6 +1,7 @@
 # 🌿 Git Workflow (ทำงาน 3 คน แบบแยก Branch)
 
 ## 📌 กฎหลัก
+
 - ❌ ห้ามทำงานบน `main`
 - ❌ ห้าม push ลง `main` ตรง ๆ
 - ✅ ทุกคนต้องทำงานใน branch ของตัวเอง
@@ -34,6 +35,7 @@ git checkout -b feature/ชื่อฟีเจอร์
 ```
 
 ตัวอย่าง:
+
 ```bash
 git checkout -b feature/login
 ```
@@ -60,6 +62,7 @@ git merge main
 ---
 
 ## 💻 เขียนโค้ด
+
 👉 ทำงานใน branch ของตัวเองเท่านั้น
 
 ---
@@ -80,6 +83,7 @@ git push origin feature/ชื่อฟีเจอร์
 ```
 
 ตัวอย่าง:
+
 ```bash
 git push origin feature/login
 ```
@@ -115,3 +119,8 @@ git push origin main
 - ❌ ห้ามลืม pull ก่อนทำงาน
 - ❌ ห้าม merge พร้อมกันหลายคน
 
+---
+
+## 🔌 เชื่อมฐานข้อมูล (MariaDB / MySQL)
+
+รายละเอียดการตั้งค่าฐานข้อมูลและการรัน API ย้ายไปที่ไฟล์ `docs/DB_SETUP.md`
