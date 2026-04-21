@@ -26,6 +26,7 @@ const form = reactive({
   name: '',
   sku: '',
   categoryId: '',
+  basePrice: 0,
   stock: 0,
   imageUrls: [],
   preorderEnabled: false,
@@ -170,6 +171,7 @@ async function submitForm() {
       name: form.name.trim(),
       sku: form.sku.trim(),
       categoryId: form.categoryId,
+      basePrice: Number(form.basePrice) || 0,
       stock: Number(form.stock) || 0,
       imageUrls: [...form.imageUrls],
       preorderEnabled: form.preorderEnabled,
@@ -261,6 +263,7 @@ function editProduct(product) {
   form.name = product.name
   form.sku = product.sku
   form.categoryId = product.categoryId
+  form.basePrice = Number(product.basePrice) || 0
   form.stock = Number(product.stock) || 0
   form.imageUrls = [...(product.imageUrls || [])]
   form.preorderEnabled = Boolean(product.preorderEnabled)
@@ -271,6 +274,7 @@ function resetForm() {
   form.name = ''
   form.sku = ''
   form.categoryId = ''
+  form.basePrice = 0
   form.stock = 0
   form.imageUrls = []
   form.preorderEnabled = false
@@ -345,27 +349,6 @@ function getStockLevelText(stock) {
     return 'ใกล้หมด'
   }
   return 'ปกติ'
-}
-
-function isUpdatingStatus(productId) {
-  return store.statusUpdatingProductIds.has(productId)
-}
-
-async function toggleProductStatus(product, key, event) {
-  if (isUpdatingStatus(product.id)) {
-    event.preventDefault()
-    return
-  }
-
-  const checked = event.target.checked
-
-  try {
-    await store.toggleProductFlag(product.id, key, checked)
-    setNotice('success', 'อัปเดตสถานะสินค้าเรียบร้อยแล้ว')
-  } catch {
-    setNotice('error', 'อัปเดตสถานะไม่สำเร็จ กำลังโหลดข้อมูลสินค้าใหม่...')
-    await store.reloadProducts()
-  }
 }
 
 onMounted(async () => {
@@ -484,6 +467,11 @@ onMounted(async () => {
         </label>
 
         <label>
+          ราคา *
+          <input v-model.number="form.basePrice" min="0" step="1" type="number" />
+        </label>
+
+        <label>
           จำนวนคงเหลือ
           <input v-model.number="form.stock" min="0" type="number" />
         </label>
@@ -508,18 +496,6 @@ onMounted(async () => {
             <img :src="resolveImageUrl(imageUrl)" alt="product" />
             <button class="ghost" type="button" @click="clearImage(imageIndex)">ลบรูป</button>
           </div>
-        </div>
-
-        <div class="switch-row">
-          <label class="toggle-field">
-            <input v-model="form.preorderEnabled" type="checkbox" />
-            <span>เปิดพรีออเดอร์</span>
-          </label>
-
-          <label class="toggle-field">
-            <input v-model="form.readyToShipEnabled" type="checkbox" />
-            <span>พร้อมส่ง</span>
-          </label>
         </div>
 
         <div class="form-actions">
@@ -555,30 +531,18 @@ onMounted(async () => {
           {{ getCategoryName(product.categoryId) }} • {{ getAvailabilityText(product) }}
         </p>
         <p class="meta">รหัส SKU: {{ product.sku }}</p>
+        <p class="meta">
+          ราคา:
+          {{
+            new Intl.NumberFormat('th-TH', {
+              style: 'currency',
+              currency: 'THB',
+              maximumFractionDigits: 0,
+            }).format(Number(product.basePrice) || 0)
+          }}
+        </p>
         <p class="meta">คงเหลือ: {{ product.stock }} ชิ้น</p>
         <p class="meta">รูปภาพทั้งหมด: {{ getImageCount(product) }}</p>
-
-        <div class="status-row">
-          <label class="toggle-field compact">
-            <input
-              :checked="product.preorderEnabled"
-              :disabled="isUpdatingStatus(product.id)"
-              type="checkbox"
-              @change="toggleProductStatus(product, 'preorderEnabled', $event)"
-            />
-            <span>เปิดพรีออเดอร์</span>
-          </label>
-
-          <label class="toggle-field compact">
-            <input
-              :checked="product.readyToShipEnabled"
-              :disabled="isUpdatingStatus(product.id)"
-              type="checkbox"
-              @change="toggleProductStatus(product, 'readyToShipEnabled', $event)"
-            />
-            <span>พร้อมส่ง</span>
-          </label>
-        </div>
 
         <div class="card-actions">
           <button class="ghost" type="button" @click="editProduct(product)">แก้ไข</button>
@@ -939,7 +903,6 @@ onMounted(async () => {
   text-overflow: ellipsis;
 }
 
-.status-row,
 .card-actions {
   margin-top: 0.38rem;
   display: flex;
@@ -1102,7 +1065,6 @@ select:focus {
 @media (max-width: 900px) {
   .toolbar,
   .toolbar-actions,
-  .status-row,
   .card-actions,
   .form-actions {
     flex-direction: column;
