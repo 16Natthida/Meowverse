@@ -220,7 +220,7 @@ onBeforeUnmount(() => {
       <article class="kpi-card">
         <p class="kpi-label">สินค้าใกล้หมด</p>
         <p class="kpi-value">{{ formatNumber(kpi.lowStockCount) }} รายการ</p>
-        <p class="kpi-footnote">สินค้าที่เหลือ <= {{ thresholds.lowStock }} ชิ้น</p>
+        <p class="kpi-footnote">สินค้าที่เหลือ &lt;= {{ thresholds.lowStock }} ชิ้น</p>
       </article>
     </section>
 
@@ -281,7 +281,7 @@ onBeforeUnmount(() => {
             <strong>{{ kpi.lowStockCount }}</strong>
           </div>
           <div class="summary-card summary-card--critical">
-            <p>เสี่ยงหมดสต็อก (<= {{ thresholds.severeLowStock }})</p>
+            <p>เสี่ยงหมดสต็อก (&lt;= {{ thresholds.severeLowStock }})</p>
             <strong>{{ kpi.severeLowStockCount }}</strong>
           </div>
         </div>
