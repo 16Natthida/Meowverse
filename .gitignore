@@ -1,5 +1,7 @@
+# ----------------------
 # Logs
-logs
+# ----------------------
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -7,33 +9,62 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-.DS_Store
-dist
-dist-ssr
-coverage
-*.local
+# ----------------------
+# Dependencies
+# ----------------------
+node_modules/
 
-# Editor directories and files
-.vscode/*
+# ----------------------
+# Build
+# ----------------------
+dist/
+dist-ssr/
+coverage/
+
+# ----------------------
+# Environment
+# ----------------------
+.env
+.env.*
+!.env.example
+
+# ----------------------
+# Uploads (สำคัญมาก)
+# ----------------------
+server/uploads/
+
+# ----------------------
+# OS
+# ----------------------
+.DS_Store
+
+# ----------------------
+# Editor
+# ----------------------
+.vscode/
 !.vscode/extensions.json
-.idea
+.idea/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
 
+# ----------------------
+# Cache / Temp
+# ----------------------
+*.local
 *.tsbuildinfo
-
 .eslintcache
 
-# Cypress
+# ----------------------
+# Testing
+# ----------------------
 /cypress/videos/
 /cypress/screenshots/
-
-# Vitest
 __screenshots__/
 
+# ----------------------
 # Vite
+# ----------------------
 *.timestamp-*-*.mjs

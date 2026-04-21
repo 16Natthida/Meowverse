@@ -13,15 +13,15 @@ const password = ref('')
 const remember = ref(true)
 const error = ref('')
 
-const BACKEND_URL = import.meta.env.VITE_API_BASE || 'http://localhost:3000'
+const BACKEND_URL = import.meta.env.VITE_API_BASE || 'http://localhost:3001'
 
 async function onSubmit() {
   error.value = ''
-  
+
   console.log('🔐 Attempting to login...')
   console.log('Username:', memberId.value)
   console.log('Backend URL:', BACKEND_URL)
-  
+
   if (!memberId.value.trim() || !password.value.trim()) {
     error.value = 'กรุณากรอกชื่อผู้ใช้และรหัสผ่าน'
     console.warn('⚠️ Missing username or password')
@@ -53,18 +53,18 @@ async function onSubmit() {
 
     // ส่ง role ไปยัง login function
     const userData = {
-      id: data.user.user_id,  // ✅ Backend ส่ง user_id
+      id: data.user.user_id, // ✅ Backend ส่ง user_id
       username: data.user.username,
-      role: data.user.role || 'user' // ค่าเริ่มต้นคือ 'user'
+      role: data.user.role || 'user', // ค่าเริ่มต้นคือ 'user'
     }
-    
+
     console.log('👤 User data:', userData)
     login(userData, remember.value)
-    
+
     // redirect ตามแต่ละ role
     if (userData.role === 'admin' || userData.role === 'Admin') {
       console.log('👨‍💼 Redirecting to admin dashboard...')
-      router.push('/admin')
+      router.push('/admin/home')
     } else {
       console.log('👥 Redirecting to user dashboard...')
       router.push('/dashboard')

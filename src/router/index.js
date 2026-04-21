@@ -1,8 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import LoginView from '../views/LoginView.vue'
 import UserDashboard from '../views/UserDashboard.vue'
-import AdminDashboard from '../views/AdminDashboard.vue'
-import { useAuth } from '../composables/useAuth'
+import AdminDashboard from '../views/Admin/AdminDashboard.vue'
+import AdminHomeView from '../views/Admin/HomeView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -12,25 +12,26 @@ const router = createRouter({
       redirect: () => {
         // Check if user is logged in
         const isAuthenticated = Boolean(
-          localStorage.getItem('meowverse-auth') || sessionStorage.getItem('meowverse-auth')
+          localStorage.getItem('meowverse-auth') || sessionStorage.getItem('meowverse-auth'),
         )
-        
+
         if (!isAuthenticated) {
           return '/login'
         }
-        
+
         // Get user role and redirect accordingly
-        const user = localStorage.getItem('meowverse-user') || sessionStorage.getItem('meowverse-user')
+        const user =
+          localStorage.getItem('meowverse-user') || sessionStorage.getItem('meowverse-user')
         if (user) {
           try {
             const userData = JSON.parse(user)
-            return userData.role === 'admin' ? '/admin' : '/dashboard'
+            return userData.role === 'admin' ? '/admin/home' : '/dashboard'
           } catch {
             return '/dashboard'
           }
         }
         return '/dashboard'
-      }
+      },
     },
     {
       path: '/login',
@@ -41,22 +42,50 @@ const router = createRouter({
       path: '/dashboard',
       name: 'userDashboard',
       component: UserDashboard,
-      meta: { requiresAuth: true, roles: ['user'] }
+      meta: { requiresAuth: true, roles: ['user'] },
     },
     {
       path: '/admin',
+      redirect: '/admin/home',
+    },
+    {
+      path: '/admin/home',
+      name: 'admin-home',
+      component: AdminHomeView,
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/admin/dashboard',
       name: 'adminDashboard',
       component: AdminDashboard,
-      meta: { requiresAuth: true, roles: ['admin'] }
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/products',
+      redirect: '/admin/products',
+    },
+    {
+      path: '/admin/products',
+      name: 'admin-products',
+      component: () => import('../views/Admin/AdminProductCategoryView.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/admin/adduser',
+      name: 'admin-add-user',
+      component: () => import('../views/Admin/Adduser.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/:pathMatch(.*)*',
+      redirect: '/',
     },
   ],
 })
 
-const publicPages = ['/login']
-
 router.beforeEach((to, from, next) => {
   const isAuthenticated = Boolean(
-    localStorage.getItem('meowverse-auth') || sessionStorage.getItem('meowverse-auth')
+    localStorage.getItem('meowverse-auth') || sessionStorage.getItem('meowverse-auth'),
   )
 
   // ดึงข้อมูล role ของผู้ใช้
@@ -81,7 +110,7 @@ router.beforeEach((to, from, next) => {
   if (to.path === '/login' && isAuthenticated) {
     // redirect ตามแต่ละ role
     if (userRole === 'admin') {
-      next('/admin')
+      next('/admin/home')
     } else {
       next('/dashboard')
     }
@@ -93,7 +122,7 @@ router.beforeEach((to, from, next) => {
     if (!to.meta.roles.includes(userRole)) {
       // ถ้า role ไม่ตรงกัน ให้ไปหน้า dashboard ตามแต่ละ role
       if (userRole === 'admin') {
-        next('/admin')
+        next('/admin/home')
       } else {
         next('/dashboard')
       }
