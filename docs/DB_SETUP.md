@@ -84,16 +84,3 @@ npm run dev:full
 - Frontend: http://localhost:5173
 - API health: http://localhost:3001/api/health
 
-## 7) ถ้าเอาโค้ดไปแชร์ให้เพื่อน
-
-ให้ส่งไฟล์เหล่านี้ไป:
-
-- โค้ดทั้งหมดใน repo
-- ไฟล์ `.env.example`
-- ไฟล์ฐานข้อมูลหรือ migration ที่จำเป็น เช่น `meowverse.sql` และ `database/migrations/2026-04-16-admin-products.sql`
-
-ไม่ควรส่ง:
-
-- ไฟล์ `.env`
-- รหัสผ่านฐานข้อมูลจริง
-- ข้อมูลเครื่องส่วนตัวที่ไม่ต้องแชร์
