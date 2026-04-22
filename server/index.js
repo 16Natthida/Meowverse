@@ -8,6 +8,7 @@ import mysql from 'mysql2/promise'
 import path from 'node:path'
 import { mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import cartRouter from './cart.js'
 
 dotenv.config()
 
@@ -36,6 +37,8 @@ const pool = mysql.createPool({
   queueLimit: 0,
 })
 
+app.locals.db = pool
+
 const uploadStorage = multer.diskStorage({
   destination: (_req, _file, callback) => {
     callback(null, uploadsDir)
@@ -55,6 +58,7 @@ const upload = multer({
 app.use(cors({ origin: frontendOrigin }))
 app.use(express.json({ limit: '2mb' }))
 app.use('/uploads', express.static(uploadsDir))
+app.use('/api/cart', cartRouter)
 
 function authenticateToken(req, res, next) {
   const roleHeader = String(req.headers['x-user-role'] || '')
@@ -316,6 +320,23 @@ async function ensureAdminSchema() {
       PRIMARY KEY (img_id),
       KEY idx_product_images_prod_id (prod_id),
       CONSTRAINT fk_product_images_prod
+        FOREIGN KEY (prod_id) REFERENCES products (prod_id)
+        ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cart (
+      cart_id INT NOT NULL AUTO_INCREMENT,
+      user_id INT NOT NULL,
+      prod_id INT NOT NULL,
+      qty INT NOT NULL DEFAULT 1,
+      PRIMARY KEY (cart_id),
+      KEY idx_cart_user_id (user_id),
+      CONSTRAINT fk_cart_user
+        FOREIGN KEY (user_id) REFERENCES accounts (id)
+        ON DELETE CASCADE,
+      CONSTRAINT fk_cart_prod
         FOREIGN KEY (prod_id) REFERENCES products (prod_id)
         ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
@@ -589,6 +610,148 @@ app.get('/api/products/public', async (req, res) => {
       FROM products p
       LEFT JOIN categories c ON c.cat_id = p.cat_id
       WHERE (p.ready_to_ship_enabled = 1 OR p.preorder_enabled = 1)
+    `
+    const params = []
+
+    if (categoryId) {
+      sql += ' AND p.cat_id = ?'
+      params.push(Number(categoryId))
+    }
+
+    sql += ' ORDER BY p.prod_id DESC'
+
+    const [productRows] = await pool.query(sql, params)
+
+    // Get product IDs and fetch images
+    const productIds = productRows.map((row) => row.id)
+    let imageUrlMap = new Map()
+
+    if (productIds.length > 0) {
+      const [imageRows] = await pool.query(
+        `
+        SELECT prod_id AS productId, image_url AS imageUrl
+        FROM product_images
+        WHERE prod_id IN (?)
+        ORDER BY sort_order ASC, img_id ASC
+      `,
+        [productIds],
+      )
+
+      for (const row of imageRows) {
+        const list = imageUrlMap.get(row.productId) || []
+        list.push(row.imageUrl)
+        imageUrlMap.set(row.productId, list)
+      }
+    }
+
+    const products = productRows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      sku: row.sku || '',
+      categoryId: row.categoryId,
+      categoryName: row.categoryName || '',
+      stock: Number(row.stock) || 0,
+      basePrice: Number(row.basePrice) || 0,
+      imageUrls: imageUrlMap.get(row.id) || [],
+      preorderEnabled: Boolean(row.preorderEnabled),
+      readyToShipEnabled: Boolean(row.readyToShipEnabled),
+    }))
+
+    res.json(products)
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
+
+// Get ready-to-ship products for users
+app.get('/api/products/ready-to-ship', async (req, res) => {
+  try {
+    const categoryId = req.query.categoryId
+    let sql = `
+      SELECT
+        p.prod_id AS id,
+        p.prod_name AS name,
+        p.sku AS sku,
+        p.cat_id AS categoryId,
+        c.cat_name AS categoryName,
+        p.stock_qty AS stock,
+        p.base_price AS basePrice,
+        p.preorder_enabled AS preorderEnabled,
+        p.ready_to_ship_enabled AS readyToShipEnabled
+      FROM products p
+      LEFT JOIN categories c ON c.cat_id = p.cat_id
+      WHERE p.ready_to_ship_enabled = 1
+    `
+    const params = []
+
+    if (categoryId) {
+      sql += ' AND p.cat_id = ?'
+      params.push(Number(categoryId))
+    }
+
+    sql += ' ORDER BY p.prod_id DESC'
+
+    const [productRows] = await pool.query(sql, params)
+
+    // Get product IDs and fetch images
+    const productIds = productRows.map((row) => row.id)
+    let imageUrlMap = new Map()
+
+    if (productIds.length > 0) {
+      const [imageRows] = await pool.query(
+        `
+        SELECT prod_id AS productId, image_url AS imageUrl
+        FROM product_images
+        WHERE prod_id IN (?)
+        ORDER BY sort_order ASC, img_id ASC
+      `,
+        [productIds],
+      )
+
+      for (const row of imageRows) {
+        const list = imageUrlMap.get(row.productId) || []
+        list.push(row.imageUrl)
+        imageUrlMap.set(row.productId, list)
+      }
+    }
+
+    const products = productRows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      sku: row.sku || '',
+      categoryId: row.categoryId,
+      categoryName: row.categoryName || '',
+      stock: Number(row.stock) || 0,
+      basePrice: Number(row.basePrice) || 0,
+      imageUrls: imageUrlMap.get(row.id) || [],
+      preorderEnabled: Boolean(row.preorderEnabled),
+      readyToShipEnabled: Boolean(row.readyToShipEnabled),
+    }))
+
+    res.json(products)
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
+
+// Get preorder products for users
+app.get('/api/products/preorder', async (req, res) => {
+  try {
+    const categoryId = req.query.categoryId
+    let sql = `
+      SELECT
+        p.prod_id AS id,
+        p.prod_name AS name,
+        p.sku AS sku,
+        p.cat_id AS categoryId,
+        c.cat_name AS categoryName,
+        p.stock_qty AS stock,
+        p.base_price AS basePrice,
+        p.preorder_enabled AS preorderEnabled,
+        p.ready_to_ship_enabled AS readyToShipEnabled
+      FROM products p
+      LEFT JOIN categories c ON c.cat_id = p.cat_id
+      WHERE p.preorder_enabled = 1
     `
     const params = []
 

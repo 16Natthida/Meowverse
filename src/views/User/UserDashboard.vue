@@ -1,0 +1,755 @@
+<script setup>
+import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { useAuth } from '../../composables/useAuth'
+
+const router = useRouter()
+const { logout, getUser } = useAuth()
+
+const currentUser = computed(() => getUser())
+const activeTab = ref('พร้อมส่ง')
+const activeCategory = ref(null)
+const products = ref([])
+const categories = ref([])
+const loading = ref(true)
+const error = ref(null)
+const currentPage = ref(1)
+const itemsPerPage = 8
+const searchQuery = ref('')
+const cartNotice = ref({ msg: '', type: '' })
+const cartLoading = ref({})
+const cartCount = ref(0)  // จำนวนสินค้าใน cart badge
+
+const tabs = ['หน้าหลัก', 'พร้อมส่ง', 'พรีออเดอร์', 'ติดตามคำสั่งซื้อ']
+
+const iconMap = [
+  { keyword: 'ขนม', icon: '🍬' },
+  { keyword: 'เตียง', icon: '🛏️' },
+  { keyword: 'บ้าน', icon: '🏠' },
+  { keyword: 'ของเล่น', icon: '🎮' },
+  { keyword: 'รูมมิ่ง', icon: '✂️' },
+  { keyword: 'อาหาร', icon: '🥫' },
+  { keyword: 'อุปกรณ์', icon: '🔧' },
+]
+
+function getCatIcon(name) {
+  const match = iconMap.find(i => name?.includes(i.keyword))
+  return match ? match.icon : '🐾'
+}
+
+// ── FETCH CATEGORIES ──
+const fetchCategories = async () => {
+  try {
+    const res = await fetch('http://localhost:3001/api/categories')
+    if (!res.ok) throw new Error(`categories API ${res.status}`)
+    const data = await res.json()
+    const arr = Array.isArray(data) ? data : (data.data ?? data.categories ?? [])
+    categories.value = arr.map(c => ({
+      id:   c.cat_id   ?? c.id   ?? c.categoryId,
+      name: c.cat_name ?? c.name ?? c.categoryName ?? '',
+      icon: getCatIcon(c.cat_name ?? c.name ?? ''),
+    }))
+  } catch (err) {
+    console.error('fetchCategories:', err)
+  }
+}
+
+// ── FETCH PRODUCTS ──
+const fetchProducts = async () => {
+  try {
+    loading.value = true
+    error.value = null
+    const res = await fetch('http://localhost:3001/api/products')
+    if (!res.ok) throw new Error('Failed to fetch products')
+    const data = await res.json()
+    const arr = Array.isArray(data) ? data : (data.data ?? data.products ?? [])
+    products.value = arr.map(p => ({
+      id:           p.id,
+      name:         p.name,
+      description:  p.description || '',
+      price:        p.basePrice ?? p.price ?? 0,
+      image:        p.imageUrls?.[0] ?? p.image ?? null,
+      categoryId:   p.categoryId != null ? Number(p.categoryId) : null,
+      categoryName: p.categoryName ?? '',
+      stock:        p.stock ?? 0,
+      isPreorder:   Boolean(p.preorderEnabled ?? p.isPreorder ?? false),
+    }))
+  } catch (err) {
+    error.value = err.message
+  } finally {
+    loading.value = false
+  }
+}
+
+// ── FETCH CART COUNT ──
+const fetchCartCount = async () => {
+  const user = currentUser.value
+  if (!user?.id) return
+  try {
+    const res = await fetch(`http://localhost:3001/api/cart?user_id=${user.id}`)
+    if (!res.ok) return
+    const data = await res.json()
+    const arr = Array.isArray(data) ? data : (data.items ?? [])
+    cartCount.value = arr.reduce((sum, item) => sum + (Number(item.qty) || 1), 0)
+  } catch (err) {
+    console.error('fetchCartCount:', err)
+  }
+}
+
+// ── ADD TO CART ──
+const addToCart = async (product) => {
+  const user = currentUser.value
+  if (!user?.id) {
+    showNotice('กรุณาเข้าสู่ระบบก่อนหยิบสินค้า', 'warn')
+    return
+  }
+
+  cartLoading.value = { ...cartLoading.value, [product.id]: true }
+
+  try {
+    const payload = {
+      user_id:     user.id,
+      prod_id:     product.id,
+      qty:         1,
+    }
+
+    const res = await fetch('http://localhost:3001/api/cart', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+    })
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`)
+    }
+
+    showNotice(`เพิ่ม "${product.name}" ลงตะกร้าแล้ว!`, 'success')
+    await fetchCartCount() // อัปเดต badge
+  } catch (err) {
+    showNotice(err.message, 'error')
+  } finally {
+    cartLoading.value = { ...cartLoading.value, [product.id]: false }
+  }
+}
+
+// ── GO TO CART ──
+function goToCart() {
+  router.push('/cart')
+}
+
+let noticeTimer = null
+function showNotice(msg, type = 'success') {
+  cartNotice.value = { msg, type }
+  clearTimeout(noticeTimer)
+  noticeTimer = setTimeout(() => { cartNotice.value = { msg: '', type: '' } }, 3500)
+}
+
+// ── FILTERING ──
+const filteredProducts = computed(() => {
+  let list = products.value
+
+  if (activeTab.value === 'พรีออเดอร์') {
+    list = list.filter(p => p.isPreorder)
+  } else if (activeTab.value === 'พร้อมส่ง') {
+    list = list.filter(p => !p.isPreorder)
+  }
+
+  if (activeCategory.value !== null) {
+    list = list.filter(p => Number(p.categoryId) === Number(activeCategory.value))
+  }
+
+  if (searchQuery.value.trim()) {
+    const q = searchQuery.value.toLowerCase()
+    list = list.filter(p =>
+      p.name.toLowerCase().includes(q) ||
+      p.categoryName.toLowerCase().includes(q)
+    )
+  }
+
+  return list
+})
+
+const totalPages = computed(() =>
+  Math.max(1, Math.ceil(filteredProducts.value.length / itemsPerPage))
+)
+
+const paginatedProducts = computed(() => {
+  const start = (currentPage.value - 1) * itemsPerPage
+  return filteredProducts.value.slice(start, start + itemsPerPage)
+})
+
+function goToPage(page) {
+  if (page >= 1 && page <= totalPages.value) currentPage.value = page
+}
+
+function handleTabClick(tab) {
+  activeTab.value = tab
+  currentPage.value = 1
+  if (tab === 'หน้าหลัก') activeCategory.value = null
+}
+
+function handleCategoryClick(id) {
+  activeCategory.value = id
+  currentPage.value = 1
+}
+
+function handleLogout() {
+  logout()
+  router.push('/login')
+}
+
+function getStockStatusClass(stock) {
+  const s = Number(stock) || 0
+  if (s === 0) return 'badge--out'
+  if (s <= 2) return 'badge--critical'
+  if (s <= 8) return 'badge--warning'
+  return 'badge--normal'
+}
+
+onMounted(async () => {
+  await Promise.all([fetchCategories(), fetchProducts(), fetchCartCount()])
+})
+</script>
+
+<template>
+  <div class="shop">
+    <!-- ───── NAVBAR ───── -->
+    <nav class="navbar">
+      <div class="navbar__logo">
+        <span class="logo-icon">🐱</span>
+        <span class="logo-text">Meowverse</span>
+      </div>
+
+      <ul class="navbar__tabs">
+        <li
+          v-for="tab in tabs"
+          :key="tab"
+          :class="['nav-tab', { 'nav-tab--active': activeTab === tab }]"
+          @click="handleTabClick(tab)"
+        >
+          {{ tab }}
+          <span v-if="activeTab === tab" class="nav-tab__underline" />
+        </li>
+      </ul>
+
+      <div class="navbar__right">
+        <div class="search-box">
+          <svg class="search-icon" viewBox="0 0 20 20" fill="none">
+            <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.7"/>
+            <path d="M13 13l3.5 3.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+          </svg>
+          <input v-model="searchQuery" type="text" placeholder="ค้นหาสินค้า" class="search-input" />
+        </div>
+
+        <!-- ── CART ICON BUTTON ── -->
+        <button class="cart-icon-btn" @click="goToCart" title="ตะกร้าสินค้า">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="cart-icon-svg">
+            <circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/>
+            <path d="M1 1h4l2.68 13.39a2 2 0 001.98 1.61h9.72a2 2 0 001.98-1.69l1.38-7.31H6"/>
+          </svg>
+          <span v-if="cartCount > 0" class="cart-badge">{{ cartCount > 99 ? '99+' : cartCount }}</span>
+        </button>
+
+        <div class="user-pill">
+          <svg viewBox="0 0 20 20" fill="currentColor" class="pill-icon">
+            <path d="M10 10a4 4 0 100-8 4 4 0 000 8zm-7 8a7 7 0 1114 0H3z"/>
+          </svg>
+          <span class="user-id">{{ currentUser?.username || 'MN0201' }}</span>
+        </div>
+        <button class="logout-btn" @click="handleLogout">
+          <svg viewBox="0 0 20 20" fill="currentColor" class="pill-icon">
+            <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h6a1 1 0 010 2H5v10h5a1 1 0 010 2H4a1 1 0 01-1-1V4zm11.293 2.293a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 01-1.414-1.414L16.586 11H9a1 1 0 010-2h7.586l-1.293-1.293a1 1 0 010-1.414z" clip-rule="evenodd"/>
+          </svg>
+          ออกจากระบบ
+        </button>
+      </div>
+    </nav>
+
+    <!-- ───── CART NOTICE ───── -->
+    <transition name="slide-down">
+      <div
+        v-if="cartNotice.msg"
+        :class="['cart-notice', `cart-notice--${cartNotice.type}`]"
+      >
+        <span v-if="cartNotice.type === 'success'">
+          <svg viewBox="0 0 20 20" fill="currentColor" class="notice-icon"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 00-1.414 0L8 12.586 4.707 9.293a1 1 0 00-1.414 1.414l4 4a1 1 0 001.414 0l8-8a1 1 0 000-1.414z" clip-rule="evenodd"/></svg>
+        </span>
+        <span v-else-if="cartNotice.type === 'error'">
+          <svg viewBox="0 0 20 20" fill="currentColor" class="notice-icon"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>
+        </span>
+        {{ cartNotice.msg }}
+      </div>
+    </transition>
+
+    <!-- ───── HERO BANNER ───── -->
+    <section class="hero">
+      <div class="hero__content">
+        <p class="hero__eyebrow">Meowverse Store</p>
+        <h1 class="hero__title">สวรรค์ของทาสแมวและเจ้าเหมียวตัวฟู ทุกสินค้า</h1>
+        <div class="hero__actions">
+          <button class="btn btn--primary" @click="handleTabClick('พร้อมส่ง')">พร้อมส่งสินค้า</button>
+          <button class="btn btn--outline" @click="handleTabClick('พรีออเดอร์')">สินค้าพรีออเดอร์</button>
+        </div>
+      </div>
+      <div class="hero__image">
+        <img src="/images/cat.jpg" alt="Meowverse cat" class="hero__cat-img" />
+      </div>
+    </section>
+
+    <!-- ───── CATEGORY ICON ROW ───── -->
+    <section class="categories">
+      <button
+        :class="['cat-btn', { 'cat-btn--active': activeCategory === null }]"
+        @click="handleCategoryClick(null)"
+      >
+        <span class="cat-btn__icon">🐾</span>
+        <span class="cat-btn__label">ทั้งหมด</span>
+      </button>
+
+      <button
+        v-for="cat in categories"
+        :key="cat.id"
+        :class="['cat-btn', { 'cat-btn--active': activeCategory === cat.id }]"
+        @click="handleCategoryClick(cat.id)"
+      >
+        <span class="cat-btn__icon">{{ cat.icon }}</span>
+        <span class="cat-btn__label">{{ cat.name }}</span>
+      </button>
+    </section>
+
+    <!-- ───── PRODUCTS SECTION ───── -->
+    <section class="products">
+      <div class="products__header">
+        <div>
+          <h2 class="products__title">สินค้า</h2>
+          <p class="products__sub">
+            {{
+              activeTab === 'พรีออเดอร์'
+                ? 'รวมสินค้าที่ต้องสั่งล่วงหน้า รับเมื่อสรุปรอบและสั่งซื้อผ่านเว็บไซต์'
+                : 'เลือกของดีๆ ให้กับทาสแมวและเจ้าเหมียวตัวฟู'
+            }}
+          </p>
+        </div>
+      </div>
+
+      <!-- Filter pills -->
+      <div class="filter-row">
+        <button
+          :class="['filter-pill', { 'filter-pill--active': activeCategory === null }]"
+          @click="handleCategoryClick(null)"
+        >ทั้งหมด</button>
+        <button
+          v-for="cat in categories"
+          :key="cat.id"
+          :class="['filter-pill', { 'filter-pill--active': activeCategory === cat.id }]"
+          @click="handleCategoryClick(cat.id)"
+        >{{ cat.name }}</button>
+      </div>
+
+      <div v-if="loading" class="state-msg">กำลังโหลดสินค้า...</div>
+      <div v-else-if="error" class="error-msg">{{ error }}</div>
+      <div v-else-if="paginatedProducts.length === 0" class="state-msg">ไม่พบสินค้าในหมวดหมู่นี้</div>
+
+      <div v-else class="product-grid">
+        <article
+          v-for="product in paginatedProducts"
+          :key="product.id"
+          class="product-card"
+        >
+          <span v-if="product.isPreorder" class="product-card__badge badge--preorder">พรีออเดอร์</span>
+
+          <div class="product-card__img">
+            <img v-if="product.image" :src="product.image" :alt="product.name" />
+            <span v-else class="product-card__emoji">🐾</span>
+          </div>
+
+          <div class="product-card__body">
+            <h3 class="product-card__name">{{ product.name }}</h3>
+            <p class="product-card__desc">{{ product.description || product.categoryName }}</p>
+
+            <div class="product-card__footer">
+              <div class="product-card__price">
+                <span class="price-currency">฿</span>
+                <span class="price-amount">{{ Number(product.price).toLocaleString() }}</span>
+              </div>
+              <span :class="['stock-badge', getStockStatusClass(product.stock)]">
+                สต็อก {{ product.stock }} ชิ้น
+              </span>
+            </div>
+
+            <button
+              class="btn-cart"
+              :disabled="cartLoading[product.id] || Number(product.stock) === 0"
+              @click="addToCart(product)"
+            >
+              <span v-if="cartLoading[product.id]" class="btn-cart__inner">
+                <svg class="spin cart-svg" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.3)" stroke-width="3"/>
+                  <path d="M12 2a10 10 0 0110 10" stroke="white" stroke-width="3" stroke-linecap="round"/>
+                </svg>
+                กำลังเพิ่ม...
+              </span>
+              <span v-else-if="Number(product.stock) === 0" class="btn-cart__inner">
+                สินค้าหมด
+              </span>
+              <span v-else class="btn-cart__inner">
+                <svg class="cart-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/>
+                  <path d="M1 1h4l2.68 13.39a2 2 0 001.98 1.61h9.72a2 2 0 001.98-1.69l1.38-7.31H6"/>
+                </svg>
+                หยิบใส่ตะกร้า
+              </span>
+            </button>
+          </div>
+        </article>
+      </div>
+
+      <!-- Pagination -->
+      <div v-if="totalPages > 1" class="pagination">
+        <button
+          v-for="page in totalPages"
+          :key="page"
+          :class="['page-btn', { 'page-btn--active': currentPage === page }]"
+          @click="goToPage(page)"
+        >{{ page }}</button>
+      </div>
+    </section>
+  </div>
+</template>
+
+<style scoped>
+.shop {
+  --primary: #6f50a0;
+  --primary-light: #cda2fb;
+  --primary-dark: #3f2f5d;
+  --surface: #ffffff;
+  --bg: #f8f5ff;
+  --border: #eadff5;
+  --text: #3f2f5d;
+  --muted: #75658f;
+  --radius: 14px;
+  --radius-sm: 10px;
+
+  font-family: inherit;
+  background: var(--bg);
+  min-height: 100vh;
+  color: var(--text);
+}
+
+/* ── NAVBAR ── */
+.navbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0 1.5rem;
+  height: 58px;
+  background: rgba(255,255,255,0.95);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: 0 2px 16px rgba(89,61,125,0.08);
+  backdrop-filter: blur(8px);
+}
+
+.navbar__logo { display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; }
+.logo-icon { font-size: 1.4rem; }
+.logo-text { font-weight: 900; font-size: 1.05rem; color: var(--primary); letter-spacing: -0.01em; }
+
+.navbar__tabs { display: flex; list-style: none; gap: 0.15rem; margin-left: 1.2rem; flex: 1; }
+
+.nav-tab {
+  position: relative;
+  padding: 0.42rem 0.78rem;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 8px;
+  transition: color 0.2s, background 0.2s;
+  white-space: nowrap;
+}
+.nav-tab:hover { color: var(--primary); background: #f4eaff; }
+.nav-tab--active { color: var(--primary); }
+.nav-tab__underline {
+  position: absolute;
+  bottom: -1px; left: 0.78rem; right: 0.78rem;
+  height: 2px;
+  background: linear-gradient(90deg, var(--primary-light), var(--primary));
+  border-radius: 2px;
+}
+
+.navbar__right { display: flex; align-items: center; gap: 0.6rem; margin-left: auto; flex-shrink: 0; }
+
+.search-box {
+  display: flex; align-items: center; gap: 0.38rem;
+  background: linear-gradient(160deg,#fff,#f8f2ff);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.32rem 0.8rem;
+  box-shadow: 0 2px 8px rgba(111,80,160,0.06);
+}
+.search-icon { width: 15px; height: 15px; color: var(--muted); flex-shrink: 0; }
+.search-input {
+  background: transparent; border: none; outline: none;
+  font-size: 0.82rem; color: var(--text); width: 140px; font-family: inherit;
+}
+
+.pill-icon { width: 14px; height: 14px; flex-shrink: 0; }
+
+/* ── CART ICON BUTTON ── */
+.cart-icon-btn {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px;
+  background: linear-gradient(160deg, #f8f2ff, #f0e6ff);
+  border: 1px solid #dcc8f5;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.22s;
+  box-shadow: 0 2px 8px rgba(111,80,160,0.1);
+  flex-shrink: 0;
+}
+.cart-icon-btn:hover {
+  background: linear-gradient(180deg,#cda2fb,#bc8aed);
+  border-color: #b788ea;
+  box-shadow: 0 6px 16px rgba(132,86,179,0.28);
+  transform: translateY(-1px);
+}
+.cart-icon-btn:hover .cart-icon-svg {
+  stroke: #fff;
+}
+.cart-icon-svg {
+  width: 18px; height: 18px;
+  stroke: var(--primary);
+  transition: stroke 0.22s;
+}
+.cart-badge {
+  position: absolute;
+  top: -5px; right: -5px;
+  min-width: 18px; height: 18px;
+  background: linear-gradient(135deg, #ff6b8a, #e8405c);
+  color: #fff;
+  font-size: 0.65rem; font-weight: 900;
+  border-radius: 999px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 4px;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 6px rgba(232,64,92,0.4);
+  animation: badge-pop 0.3s cubic-bezier(0.34,1.56,0.64,1);
+}
+@keyframes badge-pop {
+  from { transform: scale(0); }
+  to   { transform: scale(1); }
+}
+
+.user-pill {
+  display: flex; align-items: center; gap: 0.32rem;
+  background: linear-gradient(160deg,#f8f2ff,#f1e6ff);
+  border: 1px solid #e2cdf8; border-radius: 999px;
+  padding: 0.32rem 0.72rem;
+  font-size: 0.8rem; font-weight: 800; color: var(--primary);
+}
+
+.logout-btn {
+  display: flex; align-items: center; gap: 0.3rem;
+  background: linear-gradient(160deg,#fff0f0,#ffe8eb);
+  border: 1px solid #efbcc2; border-radius: 999px;
+  padding: 0.32rem 0.75rem;
+  font-size: 0.8rem; font-weight: 800; color: #a74553;
+  cursor: pointer; font-family: inherit;
+  transition: background 0.2s, box-shadow 0.2s;
+  white-space: nowrap;
+}
+.logout-btn:hover { background: #ffdfe4; box-shadow: 0 4px 12px rgba(167,69,83,0.18); }
+
+/* ── CART NOTICE ── */
+.cart-notice {
+  position: fixed;
+  top: 66px; right: 1.5rem;
+  z-index: 200;
+  display: flex; align-items: center; gap: 0.5rem;
+  border-radius: 12px;
+  padding: 0.65rem 1rem;
+  font-size: 0.86rem; font-weight: 700;
+  box-shadow: 0 8px 24px rgba(89,61,125,0.14);
+  border: 1px solid;
+}
+.cart-notice--success {
+  background: linear-gradient(160deg,#f0fdf5,#e4f8ef);
+  border-color: #bcebd8; color: #1f7a5a;
+}
+.cart-notice--error {
+  background: linear-gradient(160deg,#fef2f2,#fde9e9);
+  border-color: #f3cbcb; color: #8f3131;
+}
+.cart-notice--warn {
+  background: linear-gradient(160deg,#fffbeb,#fff8dd);
+  border-color: #f5e8ad; color: #7d5e23;
+}
+.notice-icon { width: 16px; height: 16px; flex-shrink: 0; }
+
+.slide-down-enter-active, .slide-down-leave-active { transition: all 0.3s ease; }
+.slide-down-enter-from, .slide-down-leave-to { opacity: 0; transform: translateY(-10px); }
+
+/* ── HERO ── */
+.hero {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 2rem 2rem 2rem 1.5rem;
+  background:
+    radial-gradient(circle at right top, rgba(255,194,211,0.36), transparent 48%),
+    linear-gradient(140deg, rgba(255,255,255,0.92), rgba(248,241,255,0.96));
+  border-bottom: 1px solid var(--border);
+  position: relative; overflow: hidden; min-height: 190px;
+  box-shadow: 0 4px 20px rgba(89,61,125,0.06);
+}
+.hero__content { max-width: 440px; z-index: 1; }
+.hero__eyebrow { font-size: 0.72rem; font-weight: 800; letter-spacing: 0.08em; color: #9a7dbf; margin-bottom: 0.4rem; }
+.hero__title { font-size: clamp(1.15rem,2.2vw,1.65rem); font-weight: 900; color: var(--primary-dark); line-height: 1.18; margin-bottom: 1rem; }
+.hero__actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+
+.btn { padding: 0.5rem 1.1rem; border-radius: 999px; font-family: inherit; font-weight: 800; font-size: 0.83rem; cursor: pointer; transition: all 0.22s; min-height: 38px; }
+.btn--primary { border: 1px solid #b788ea; background: linear-gradient(180deg,#cda2fb,#b97be8); color: #fff; box-shadow: 0 8px 18px rgba(132,86,179,0.28); }
+.btn--primary:hover { transform: translateY(-1px); box-shadow: 0 11px 22px rgba(132,86,179,0.32); }
+.btn--outline { border: 1px solid #d6b9f1; background: #f7efff; color: #6a4f89; }
+.btn--outline:hover { background: #f1e4ff; }
+
+.hero__image { position: absolute; right: 0; top: 0; bottom: 0; width: 260px; z-index: 0; overflow: hidden; }
+.hero__cat-img { width: 100%; height: 100%; object-fit: cover; object-position: center top; mask-image: linear-gradient(to left, rgba(0,0,0,0.9) 60%, transparent 100%); -webkit-mask-image: linear-gradient(to left, rgba(0,0,0,0.85) 60%, transparent 100%); }
+
+/* ── CATEGORIES ── */
+.categories {
+  display: flex; gap: 0.6rem;
+  padding: 1rem 1.5rem;
+  background: rgba(255,255,255,0.9);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  box-shadow: 0 2px 10px rgba(89,61,125,0.05);
+}
+
+.cat-btn { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; background: none; border: none; cursor: pointer; flex-shrink: 0; transition: transform 0.2s; padding: 0; }
+.cat-btn:hover { transform: translateY(-2px); }
+.cat-btn__icon {
+  width: 50px; height: 50px; border-radius: 50%;
+  background: linear-gradient(160deg,rgba(255,255,255,0.96),rgba(248,241,255,0.9));
+  border: 1px solid #eadff5;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.4rem;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+  box-shadow: 0 4px 10px rgba(89,61,125,0.08);
+}
+.cat-btn--active .cat-btn__icon { background: linear-gradient(180deg,#cda2fb,#bc8aed); border-color: #b788ea; box-shadow: 0 6px 16px rgba(132,86,179,0.25); }
+.cat-btn__label { font-size: 0.76rem; font-weight: 800; color: var(--muted); white-space: nowrap; }
+.cat-btn--active .cat-btn__label { color: var(--primary); }
+
+/* ── PRODUCTS ── */
+.products { padding: 1.2rem 1.5rem 3rem; }
+.products__header { margin-bottom: 0.8rem; }
+.products__title { font-size: 1.25rem; font-weight: 900; color: var(--primary-dark); }
+.products__sub { font-size: 0.83rem; color: var(--muted); margin-top: 0.18rem; }
+
+.filter-row { display: flex; gap: 0.45rem; flex-wrap: wrap; margin-bottom: 1.2rem; }
+.filter-pill {
+  padding: 0.35rem 0.85rem; border-radius: 999px;
+  border: 1px solid #decdf1;
+  background: linear-gradient(160deg,rgba(255,255,255,0.96),rgba(248,241,255,0.9));
+  color: var(--muted); font-size: 0.8rem; font-weight: 700;
+  cursor: pointer; font-family: inherit;
+  transition: all 0.2s; box-shadow: 0 2px 6px rgba(89,61,125,0.06);
+}
+.filter-pill:hover { border-color: #bf93eb; color: var(--primary); background: #f7efff; }
+.filter-pill--active { border-color: #b788ea; background: linear-gradient(180deg,#cda2fb,#bc8aed); color: #fff; box-shadow: 0 4px 12px rgba(132,86,179,0.24); }
+
+/* ── PRODUCT GRID ── */
+.product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.7rem; }
+
+.product-card {
+  border: 1px solid #eadff5; border-radius: var(--radius);
+  background: linear-gradient(165deg,rgba(255,255,255,0.94),rgba(251,246,255,0.9));
+  overflow: hidden; position: relative; display: flex; flex-direction: column;
+  box-shadow: 0 9px 24px rgba(79,62,108,0.1);
+  transition: transform 0.2s ease, box-shadow 0.25s ease;
+}
+.product-card:hover { transform: translateY(-3px); box-shadow: 0 14px 28px rgba(79,62,108,0.16); border-color: #d8c4f0; }
+
+.product-card__badge { position: absolute; top: 0.5rem; left: 0.5rem; z-index: 2; padding: 0.18rem 0.52rem; border-radius: 999px; font-size: 0.7rem; font-weight: 800; }
+.badge--preorder { background: #fff2d9; color: #9b6210; border: 1px solid #f7ddb0; }
+
+.product-card__img { width: 100%; aspect-ratio: 1/1; background: linear-gradient(135deg,#f3effa,#fde9f3); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.product-card__img img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.35s; }
+.product-card:hover .product-card__img img { transform: scale(1.04); }
+.product-card__emoji { font-size: 3rem; color: #c9a6f4; }
+
+.product-card__body { padding: 0.72rem; display: flex; flex-direction: column; flex: 1; }
+.product-card__name { font-size: 0.9rem; font-weight: 800; color: #45315f; line-height: 1.25; margin-bottom: 0.25rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.product-card__desc { font-size: 0.75rem; color: #8b7ba3; margin-bottom: 0.65rem; flex: 1; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.3; }
+
+.product-card__footer { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem; gap: 0.4rem; flex-wrap: wrap; }
+.product-card__price { display: flex; align-items: baseline; gap: 0.08rem; }
+.price-currency { font-size: 0.85rem; color: var(--muted); }
+.price-amount { font-size: 1.25rem; font-weight: 900; color: var(--primary-dark); }
+
+.stock-badge { font-size: 0.67rem; font-weight: 800; padding: 0.16rem 0.52rem; border-radius: 999px; border: 1px solid; flex-shrink: 0; white-space: nowrap; }
+.badge--normal  { color: #1f7a5a; background: #e4f8ef; border-color: #bcebd8; }
+.badge--warning { color: #9b6210; background: #fff2d9; border-color: #f7ddb0; }
+.badge--critical { color: #9c2f42; background: #ffe6ea; border-color: #f6bec8; }
+.badge--out     { color: #6b7280; background: #f3f4f6; border-color: #e5e7eb; }
+
+/* ── CART BUTTON ── */
+.btn-cart {
+  width: 100%;
+  border: 1px solid #b788ea;
+  background: linear-gradient(180deg,#cda2fb,#bc8aed);
+  color: #fff;
+  padding: 0.58rem;
+  border-radius: var(--radius-sm);
+  font-family: inherit; font-weight: 800; font-size: 0.84rem;
+  cursor: pointer; line-height: 1.15;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, opacity 0.2s;
+}
+.btn-cart:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(132,86,179,0.28); }
+.btn-cart:disabled { opacity: 0.55; cursor: not-allowed; background: linear-gradient(180deg,#d8c8ec,#c4b0de); border-color: #c9b6e0; }
+
+.btn-cart__inner { display: flex; align-items: center; justify-content: center; gap: 0.4rem; }
+.cart-svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 0.8s linear infinite; }
+
+/* ── PAGINATION ── */
+.pagination { display: flex; justify-content: center; gap: 0.45rem; margin-top: 2rem; }
+.page-btn {
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 1px solid #d8c4f0;
+  background: linear-gradient(160deg,rgba(255,255,255,0.96),rgba(248,241,255,0.9));
+  color: var(--muted); font-weight: 800; font-size: 0.86rem;
+  cursor: pointer; font-family: inherit;
+  transition: all 0.2s;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 6px rgba(89,61,125,0.08);
+}
+.page-btn:hover { border-color: #bf93eb; color: var(--primary); }
+.page-btn--active { border-color: #b788ea; background: linear-gradient(180deg,#cda2fb,#bc8aed); color: #fff; box-shadow: 0 4px 12px rgba(132,86,179,0.24); }
+
+/* ── STATES ── */
+.state-msg { text-align: center; padding: 3rem; color: var(--muted); font-size: 0.88rem; font-weight: 700; }
+.error-msg { border-radius: var(--radius-sm); padding: 0.58rem 0.72rem; border: 1px solid #f3cbcb; font-size: 0.84rem; color: #8f3131; background: #fde9e9; margin-bottom: 1rem; }
+
+/* ── RESPONSIVE ── */
+@media (max-width: 768px) {
+  .navbar { padding: 0 1rem; }
+  .navbar__tabs { display: none; }
+  .hero { padding: 1.2rem 1rem; min-height: 160px; }
+  .hero__image { width: 180px; }
+  .categories { padding: 0.8rem 1rem; gap: 0.5rem; }
+  .products { padding: 1rem 1rem 2rem; }
+  .product-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+  .search-input { width: 100px; }
+}
+@media (max-width: 480px) {
+  .product-grid { grid-template-columns: 1fr 1fr; gap: 0.55rem; }
+  .hero__title { font-size: 1.05rem; }
+  .hero__image { width: 130px; }
+}
+</style>

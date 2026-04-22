@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import LoginView from '../views/LoginView.vue'
-import UserDashboard from '../views/UserDashboard.vue'
+import UserDashboard from '../views/User/UserDashboard.vue'
 import AdminDashboard from '../views/Admin/AdminDashboard.vue'
 import AdminHomeView from '../views/Admin/HomeView.vue'
 
@@ -44,6 +44,8 @@ const router = createRouter({
       component: UserDashboard,
       meta: { requiresAuth: true, roles: ['user'] },
     },
+    // เปลี่ยนจาก ./ เป็น ../
+{ path: '/cart', component: () => import('../views/User/CartPage.vue') },
     {
       path: '/admin',
       redirect: '/admin/home',
