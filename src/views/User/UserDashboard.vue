@@ -19,6 +19,10 @@ const searchQuery = ref('')
 const cartNotice = ref({ msg: '', type: '' })
 const cartLoading = ref({})
 const cartCount = ref(0) // จำนวนสินค้าใน cart badge
+const selectedProduct = ref(null)
+const selectedFlavor = ref('')
+const selectedPreviewIndex = ref(0)
+const detailQty = ref(1)
 
 const tabs = ['หน้าหลัก', 'พร้อมส่ง', 'พรีออเดอร์', 'ติดตามคำสั่งซื้อ']
 
@@ -35,6 +39,31 @@ const iconMap = [
 function getCatIcon(name) {
   const match = iconMap.find((i) => name?.includes(i.keyword))
   return match ? match.icon : '🐾'
+}
+
+function parseFlavorList(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || '').trim()).filter(Boolean)
+  }
+
+  const text = String(value || '').trim()
+  if (!text) {
+    return []
+  }
+
+  try {
+    const parsed = JSON.parse(text)
+    if (Array.isArray(parsed)) {
+      return parsed.map((item) => String(item || '').trim()).filter(Boolean)
+    }
+  } catch {
+    // Fall back to line/comma separated input.
+  }
+
+  return text
+    .split(/\r?\n|,/)
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
 }
 
 // ── FETCH CATEGORIES ──
@@ -64,9 +93,14 @@ const fetchProducts = async () => {
     const data = await res.json()
     const arr = Array.isArray(data) ? data : (data.data ?? data.products ?? [])
     products.value = arr.map((p) => ({
+      imageUrls: [
+        ...(Array.isArray(p.imageUrls) ? p.imageUrls : []),
+        ...(Array.isArray(p.images) ? p.images : []),
+      ].filter(Boolean),
       id: p.id,
       name: p.name,
       description: p.description || '',
+      flavors: parseFlavorList(p.flavors),
       price: p.basePrice ?? p.price ?? 0,
       image: p.imageUrls?.[0] ?? p.image_url?.[0] ?? p.imageUrl ?? p.image ?? null,
       categoryId: p.categoryId != null ? Number(p.categoryId) : null,
@@ -97,7 +131,7 @@ const fetchCartCount = async () => {
 }
 
 // ── ADD TO CART ──
-const addToCart = async (product) => {
+const addToCart = async (product, flavor = '', qty = 1) => {
   const user = currentUser.value
   if (!user?.id) {
     showNotice('กรุณาเข้าสู่ระบบก่อนหยิบสินค้า', 'warn')
@@ -110,7 +144,9 @@ const addToCart = async (product) => {
     const payload = {
       user_id: user.id,
       prod_id: product.id,
-      qty: 1,
+      qty: Math.max(1, Number(qty) || 1),
+      item_type: product.isPreorder ? 'preorder' : 'ready-to-ship',
+      flavor: String(flavor || '').trim() || product.flavors?.[0] || '',
     }
 
     const res = await fetch('http://localhost:3001/api/cart', {
@@ -124,7 +160,10 @@ const addToCart = async (product) => {
       throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`)
     }
 
-    showNotice(`เพิ่ม "${product.name}" ลงตะกร้าแล้ว!`, 'success')
+    showNotice(
+      `เพิ่ม "${product.name}${payload.flavor ? ` (${payload.flavor})` : ''}" ลงตะกร้าแล้ว!`,
+      'success',
+    )
     await fetchCartCount() // อัปเดต badge
   } catch (err) {
     showNotice(err.message, 'error')
@@ -137,6 +176,53 @@ const addToCart = async (product) => {
 function goToCart() {
   router.push('/cart')
 }
+
+function openProductDetail(product) {
+  selectedProduct.value = product
+  selectedFlavor.value = product.flavors?.[0] || ''
+  selectedPreviewIndex.value = 0
+  detailQty.value = 1
+}
+
+function closeProductDetail() {
+  selectedProduct.value = null
+  selectedFlavor.value = ''
+  selectedPreviewIndex.value = 0
+  detailQty.value = 1
+}
+
+function increaseDetailQty() {
+  const stock = Number(selectedProduct.value?.stock) || 0
+  if (stock > 0) {
+    detailQty.value = Math.min(detailQty.value + 1, stock)
+  }
+}
+
+function decreaseDetailQty() {
+  detailQty.value = Math.max(1, detailQty.value - 1)
+}
+
+const detailImages = computed(() => {
+  const baseList = Array.isArray(selectedProduct.value?.imageUrls)
+    ? selectedProduct.value.imageUrls
+    : []
+  const list = [...baseList]
+
+  if (selectedProduct.value?.image && !list.includes(selectedProduct.value.image)) {
+    list.unshift(selectedProduct.value.image)
+  }
+
+  return list.filter(Boolean)
+})
+
+const activeDetailImage = computed(() => {
+  if (detailImages.value.length === 0) {
+    return ''
+  }
+
+  const safeIndex = Math.min(selectedPreviewIndex.value, detailImages.value.length - 1)
+  return detailImages.value[safeIndex] || detailImages.value[0]
+})
 
 let noticeTimer = null
 function showNotice(msg, type = 'success') {
@@ -392,7 +478,16 @@ onMounted(async () => {
       </div>
 
       <div v-else class="product-grid">
-        <article v-for="product in paginatedProducts" :key="product.id" class="product-card">
+        <article
+          v-for="product in paginatedProducts"
+          :key="product.id"
+          class="product-card"
+          role="button"
+          tabindex="0"
+          @click="openProductDetail(product)"
+          @keydown.enter.prevent="openProductDetail(product)"
+          @keydown.space.prevent="openProductDetail(product)"
+        >
           <span v-if="product.isPreorder" class="product-card__badge badge--preorder"
             >พรีออเดอร์</span
           >
@@ -419,7 +514,9 @@ onMounted(async () => {
             <button
               class="btn-cart"
               :disabled="cartLoading[product.id] || Number(product.stock) === 0"
-              @click="addToCart(product)"
+              @click.stop="
+                product.flavors?.length ? openProductDetail(product) : addToCart(product)
+              "
             >
               <span v-if="cartLoading[product.id]" class="btn-cart__inner">
                 <svg class="spin cart-svg" viewBox="0 0 24 24" fill="none">
@@ -452,7 +549,7 @@ onMounted(async () => {
                     d="M1 1h4l2.68 13.39a2 2 0 001.98 1.61h9.72a2 2 0 001.98-1.69l1.38-7.31H6"
                   />
                 </svg>
-                หยิบใส่ตะกร้า
+                {{ product.flavors?.length ? 'เลือกรสชาติ' : 'หยิบใส่ตะกร้า' }}
               </span>
             </button>
           </div>
@@ -471,6 +568,149 @@ onMounted(async () => {
         </button>
       </div>
     </section>
+
+    <!-- ───── PRODUCT DETAIL MODAL ───── -->
+    <transition name="fade-scale">
+      <div v-if="selectedProduct" class="detail-overlay" @click.self="closeProductDetail">
+        <section
+          class="detail-modal"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="selectedProduct.name"
+        >
+          <button
+            class="detail-close"
+            type="button"
+            @click="closeProductDetail"
+            aria-label="ปิดรายละเอียดสินค้า"
+          >
+            ×
+          </button>
+
+          <div class="detail-layout">
+            <div class="detail-media">
+              <div class="detail-media-main">
+                <img
+                  v-if="activeDetailImage"
+                  :src="activeDetailImage"
+                  :alt="selectedProduct.name"
+                />
+                <div v-else class="detail-media__fallback">🐾</div>
+              </div>
+
+              <div v-if="detailImages.length > 1" class="detail-thumb-row">
+                <button
+                  v-for="(image, index) in detailImages"
+                  :key="`${image}-${index}`"
+                  type="button"
+                  :class="[
+                    'detail-thumb',
+                    { 'detail-thumb--active': selectedPreviewIndex === index },
+                  ]"
+                  @click="selectedPreviewIndex = index"
+                >
+                  <img :src="image" :alt="`${selectedProduct.name} ${index + 1}`" />
+                </button>
+              </div>
+
+              <span v-if="selectedProduct.isPreorder" class="detail-badge">พรีออเดอร์</span>
+            </div>
+
+            <div class="detail-content">
+              <p class="detail-eyebrow">รายละเอียดสินค้า</p>
+              <h3 class="detail-title">{{ selectedProduct.name }}</h3>
+              <p class="detail-desc">
+                {{
+                  selectedProduct.description ||
+                  selectedProduct.categoryName ||
+                  'ไม่มีรายละเอียดเพิ่มเติม'
+                }}
+              </p>
+
+              <div class="detail-price-band">
+                ฿{{ Number(selectedProduct.price).toLocaleString() }}
+              </div>
+
+              <div v-if="selectedProduct.flavors?.length" class="detail-flavor-section">
+                <p class="detail-option-label">ตัวเลือกสินค้า</p>
+                <div class="flavor-chip-row">
+                  <button
+                    v-for="flavor in selectedProduct.flavors"
+                    :key="flavor"
+                    type="button"
+                    :class="['flavor-chip', { 'flavor-chip--active': selectedFlavor === flavor }]"
+                    @click="selectedFlavor = flavor"
+                  >
+                    {{ flavor }}
+                  </button>
+                </div>
+              </div>
+
+              <div class="detail-qty-row">
+                <p class="detail-option-label">จำนวน</p>
+                <div class="qty-picker">
+                  <button
+                    type="button"
+                    class="qty-picker__btn"
+                    :disabled="detailQty <= 1"
+                    @click="decreaseDetailQty"
+                  >
+                    -
+                  </button>
+                  <span class="qty-picker__value">{{ detailQty }}</span>
+                  <button
+                    type="button"
+                    class="qty-picker__btn"
+                    :disabled="
+                      Number(selectedProduct.stock) > 0 &&
+                      detailQty >= Number(selectedProduct.stock)
+                    "
+                    @click="increaseDetailQty"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+
+              <div class="detail-meta-grid">
+                <div class="detail-meta">
+                  <span class="detail-meta__label">หมวดหมู่</span>
+                  <strong class="detail-meta__value">{{
+                    selectedProduct.categoryName || '-'
+                  }}</strong>
+                </div>
+                <div class="detail-meta">
+                  <span class="detail-meta__label">สต็อก</span>
+                  <strong class="detail-meta__value">{{ selectedProduct.stock }} ชิ้น</strong>
+                </div>
+                <div class="detail-meta">
+                  <span class="detail-meta__label">ประเภท</span>
+                  <strong class="detail-meta__value">{{
+                    selectedProduct.isPreorder ? 'พรีออเดอร์' : 'พร้อมส่ง'
+                  }}</strong>
+                </div>
+              </div>
+
+              <div class="detail-actions">
+                <button
+                  class="btn btn--primary detail-action-btn"
+                  @click="addToCart(selectedProduct, selectedFlavor, detailQty)"
+                >
+                  {{
+                    selectedProduct.flavors?.length
+                      ? 'เพิ่มลงตะกร้า (ตัวเลือกนี้)'
+                      : 'เพิ่มลงตะกร้า'
+                  }}
+                </button>
+                <button class="btn btn--outline detail-action-btn" @click="closeProductDetail">
+                  ปิดหน้าต่าง
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -956,6 +1196,7 @@ onMounted(async () => {
   transition:
     transform 0.2s ease,
     box-shadow 0.25s ease;
+  cursor: pointer;
 }
 .product-card:hover {
   transform: translateY(-3px);
@@ -1171,6 +1412,310 @@ onMounted(async () => {
   box-shadow: 0 4px 12px rgba(132, 86, 179, 0.24);
 }
 
+/* ── PRODUCT DETAIL MODAL ── */
+.detail-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(63, 47, 93, 0.42);
+  backdrop-filter: blur(7px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.detail-modal {
+  position: relative;
+  width: min(1000px, 100%);
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.98), rgba(250, 246, 255, 0.98));
+  border: 1px solid #eadff5;
+  border-radius: 24px;
+  box-shadow: 0 24px 60px rgba(63, 47, 93, 0.22);
+  overflow: hidden;
+}
+
+.detail-close {
+  position: absolute;
+  top: 0.85rem;
+  right: 0.85rem;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--primary-dark);
+  font-size: 1.35rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(79, 62, 108, 0.12);
+}
+
+.detail-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 390px) minmax(360px, 1fr);
+}
+
+.detail-media {
+  position: relative;
+  padding: 1rem;
+  border-right: 1px solid #eadff5;
+  background: linear-gradient(180deg, #f8f2ff, #fefbff);
+}
+
+.detail-media-main {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border: 1px solid #e7dbf4;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.detail-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.detail-media__fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 5rem;
+  color: #b788ea;
+}
+
+.detail-thumb-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 0.45rem;
+  margin-top: 0.6rem;
+}
+
+.detail-thumb {
+  border: 1px solid #ddd2ed;
+  border-radius: 10px;
+  background: #fff;
+  padding: 0;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  cursor: pointer;
+  transition:
+    transform 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.detail-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.detail-thumb:hover {
+  transform: translateY(-1px);
+  border-color: #bf93eb;
+}
+
+.detail-thumb--active {
+  border-color: #b788ea;
+  box-shadow: 0 0 0 2px rgba(183, 136, 234, 0.22);
+}
+
+.detail-badge {
+  position: absolute;
+  left: 1rem;
+  bottom: 1rem;
+  background: #fff2d9;
+  color: #9b6210;
+  border: 1px solid #f7ddb0;
+  border-radius: 999px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.detail-content {
+  padding: 1.25rem 1.35rem 1.15rem;
+}
+
+.detail-eyebrow {
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #9a7dbf;
+  text-transform: uppercase;
+  margin-bottom: 0.35rem;
+}
+
+.detail-title {
+  font-size: 1.45rem;
+  font-weight: 900;
+  color: var(--primary-dark);
+  margin-bottom: 0.55rem;
+}
+
+.detail-desc {
+  font-size: 0.92rem;
+  line-height: 1.7;
+  color: var(--muted);
+  margin-bottom: 0.65rem;
+}
+
+.detail-price-band {
+  margin-bottom: 0.95rem;
+  padding: 0.62rem 0.82rem;
+  border-radius: 10px;
+  font-size: 1.35rem;
+  font-weight: 900;
+  color: #f05d23;
+  background: linear-gradient(180deg, #fff8f2, #fff5eb);
+  border: 1px solid #ffd9c8;
+}
+
+.detail-flavor-section {
+  margin-bottom: 0.85rem;
+}
+
+.detail-option-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #8a7aa3;
+  margin-bottom: 0.45rem;
+}
+
+.flavor-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.45rem;
+}
+
+.flavor-chip {
+  border: 1px solid #d8c9ec;
+  background: #fff;
+  color: var(--primary-dark);
+  border-radius: 8px;
+  padding: 0.42rem 0.88rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    transform 0.18s ease,
+    background 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.flavor-chip:hover {
+  transform: translateY(-1px);
+  border-color: #bf93eb;
+  background: #fdf8ff;
+  box-shadow: 0 4px 10px rgba(132, 86, 179, 0.1);
+}
+
+.flavor-chip--active {
+  border-color: #f1a17f;
+  background: #fff7f3;
+  color: #d56639;
+  box-shadow: 0 0 0 2px rgba(241, 161, 127, 0.2);
+}
+
+.detail-qty-row {
+  margin-bottom: 0.95rem;
+}
+
+.qty-picker {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #decdf1;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.qty-picker__btn {
+  width: 34px;
+  height: 34px;
+  border: none;
+  background: #fff;
+  color: #7e679f;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.qty-picker__btn:not(:disabled):hover {
+  background: #f7efff;
+}
+
+.qty-picker__btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.qty-picker__value {
+  min-width: 46px;
+  text-align: center;
+  font-size: 0.9rem;
+  font-weight: 800;
+  color: var(--primary-dark);
+  border-left: 1px solid #eadff5;
+  border-right: 1px solid #eadff5;
+  line-height: 34px;
+}
+
+.detail-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin-bottom: 1.1rem;
+}
+
+.detail-meta {
+  background: linear-gradient(160deg, #fff, #f8f2ff);
+  border: 1px solid #eadff5;
+  border-radius: 14px;
+  padding: 0.8rem 0.9rem;
+}
+
+.detail-meta__label {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+  font-weight: 700;
+}
+
+.detail-meta__value {
+  font-size: 0.95rem;
+  color: var(--primary-dark);
+}
+
+.detail-actions {
+  display: flex;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.detail-action-btn {
+  min-width: 160px;
+}
+
+.fade-scale-enter-active,
+.fade-scale-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.fade-scale-enter-from,
+.fade-scale-leave-to {
+  opacity: 0;
+}
+
 /* ── STATES ── */
 .state-msg {
   text-align: center;
@@ -1228,6 +1773,26 @@ onMounted(async () => {
   }
   .hero__image {
     width: 130px;
+  }
+}
+
+@media (max-width: 900px) {
+  .detail-modal {
+    max-height: calc(100vh - 1.5rem);
+    overflow: auto;
+  }
+
+  .detail-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-media {
+    border-right: none;
+    border-bottom: 1px solid #eadff5;
+  }
+
+  .detail-media-main {
+    max-height: 300px;
   }
 }
 </style>

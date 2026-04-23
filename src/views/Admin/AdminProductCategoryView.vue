@@ -16,6 +16,7 @@ const categoryPanelOpen = ref(false)
 const editingProductId = ref(null)
 const isSubmitting = ref(false)
 const isCategorySubmitting = ref(false)
+const flavorInput = ref('')
 
 const notice = reactive({
   type: '',
@@ -24,6 +25,8 @@ const notice = reactive({
 
 const form = reactive({
   name: '',
+  description: '',
+  flavorsText: '',
   sku: '',
   categoryId: '',
   basePrice: 0,
@@ -82,6 +85,8 @@ const filteredProducts = computed(() => {
   })
 })
 
+const flavorItems = computed(() => parseFlavorsText(form.flavorsText))
+
 function setNotice(type, message) {
   notice.type = type
   notice.message = message
@@ -109,6 +114,44 @@ function resolveImageUrl(url) {
   }
 
   return url
+}
+
+function parseFlavorsText(text) {
+  return String(text || '')
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function setFlavorItems(items) {
+  form.flavorsText = items.join('\n')
+}
+
+function addFlavorFromInput() {
+  const raw = flavorInput.value.trim()
+  if (!raw) {
+    return
+  }
+
+  const currentItems = parseFlavorsText(form.flavorsText)
+  const newItems = parseFlavorsText(raw)
+
+  for (const value of newItems) {
+    const alreadyExists = currentItems.some((item) => item.toLowerCase() === value.toLowerCase())
+    if (!alreadyExists) {
+      currentItems.push(value)
+    }
+  }
+
+  setFlavorItems(currentItems)
+
+  flavorInput.value = ''
+}
+
+function removeFlavor(index) {
+  const currentItems = parseFlavorsText(form.flavorsText)
+  currentItems.splice(index, 1)
+  setFlavorItems(currentItems)
 }
 
 async function handleImageSelected(event) {
@@ -154,6 +197,9 @@ function clearImage(index) {
 }
 
 async function submitForm() {
+  // Auto-commit any typed flavor before submit so user does not lose input.
+  addFlavorFromInput()
+
   if (!form.name.trim() || !form.sku.trim() || !form.categoryId) {
     setNotice('error', 'กรอกข้อมูลที่จำเป็นให้ครบก่อนบันทึกสินค้า')
     return
@@ -169,6 +215,8 @@ async function submitForm() {
   try {
     const payload = {
       name: form.name.trim(),
+      description: form.description.trim(),
+      flavors: parseFlavorsText(form.flavorsText),
       sku: form.sku.trim(),
       categoryId: form.categoryId,
       basePrice: Number(form.basePrice) || 0,
@@ -261,6 +309,8 @@ function editProduct(product) {
   editingProductId.value = product.id
 
   form.name = product.name
+  form.description = product.description || ''
+  form.flavorsText = Array.isArray(product.flavors) ? product.flavors.join('\n') : ''
   form.sku = product.sku
   form.categoryId = product.categoryId
   form.basePrice = Number(product.basePrice) || 0
@@ -268,10 +318,13 @@ function editProduct(product) {
   form.imageUrls = [...(product.imageUrls || [])]
   form.preorderEnabled = Boolean(product.preorderEnabled)
   form.readyToShipEnabled = Boolean(product.readyToShipEnabled)
+  flavorInput.value = ''
 }
 
 function resetForm() {
   form.name = ''
+  form.description = ''
+  form.flavorsText = ''
   form.sku = ''
   form.categoryId = ''
   form.basePrice = 0
@@ -279,6 +332,7 @@ function resetForm() {
   form.imageUrls = []
   form.preorderEnabled = false
   form.readyToShipEnabled = true
+  flavorInput.value = ''
 
   editingProductId.value = null
   productPanelOpen.value = false
@@ -457,6 +511,48 @@ onMounted(async () => {
         </label>
 
         <label>
+          รายละเอียดสินค้า / รสชาติ
+          <textarea
+            v-model="form.description"
+            rows="4"
+            placeholder="เช่น กลิ่น, รสชาติ, สเปก, จุดเด่น หรือรายละเอียดเพิ่มเติม"
+          ></textarea>
+        </label>
+
+        <label>
+          รสชาติ / ตัวเลือกสินค้า
+          <div class="flavor-builder">
+            <div class="flavor-input-row">
+              <input
+                v-model="flavorInput"
+                placeholder="พิมพ์รสชาติ (คั่นด้วย , ได้) แล้วกด Enter"
+                type="text"
+                @keydown.enter.prevent="addFlavorFromInput"
+                @blur="addFlavorFromInput"
+              />
+              <button class="ghost flavor-add-btn" type="button" @click="addFlavorFromInput">
+                + เพิ่ม
+              </button>
+            </div>
+
+            <p class="compact">ตัวอย่าง: ทูน่า, แซลมอน, ไก่ย่าง, ขนาด 6 ลิตร</p>
+
+            <div v-if="flavorItems.length" class="flavor-chip-list">
+              <button
+                v-for="(flavor, index) in flavorItems"
+                :key="`${flavor}-${index}`"
+                class="flavor-chip"
+                type="button"
+                @click="removeFlavor(index)"
+              >
+                {{ flavor }} <span aria-hidden="true">×</span>
+              </button>
+            </div>
+            <p v-else class="compact">ยังไม่มีรสชาติ (ถ้าไม่ใส่ ผู้ซื้อจะไม่เห็นตัวเลือก)</p>
+          </div>
+        </label>
+
+        <label>
           หมวดหมู่ *
           <select v-model="form.categoryId">
             <option disabled value="">เลือกหมวดหมู่</option>
@@ -531,6 +627,10 @@ onMounted(async () => {
           {{ getCategoryName(product.categoryId) }} • {{ getAvailabilityText(product) }}
         </p>
         <p class="meta">รหัส SKU: {{ product.sku }}</p>
+        <p class="meta">รายละเอียด: {{ product.description || '-' }}</p>
+        <p class="meta">
+          รสชาติ: {{ product.flavors?.length ? product.flavors.join(' • ') : '-' }}
+        </p>
         <p class="meta">
           ราคา:
           {{
@@ -1013,8 +1113,46 @@ button:disabled {
   background: #ffdfe4;
 }
 
+.flavor-builder {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.flavor-input-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.flavor-add-btn {
+  white-space: nowrap;
+}
+
+.flavor-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.flavor-chip {
+  border: 1px solid #e6d6f8;
+  background: #fdf8ff;
+  color: #5f3f92;
+  border-radius: 999px;
+  padding: 0.34rem 0.62rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.flavor-chip:hover {
+  border-color: #c89cf3;
+  background: #f5e8ff;
+}
+
 input,
-select {
+select,
+textarea {
   width: 100%;
   border: 1px solid #decdf1;
   border-radius: 10px;
@@ -1026,13 +1164,21 @@ select {
   outline: none;
 }
 
+textarea {
+  min-height: 110px;
+  resize: vertical;
+  line-height: 1.45;
+  font-family: inherit;
+}
+
 input[type='checkbox'] {
   width: auto;
   flex: 0 0 auto;
 }
 
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: #bf93eb;
   box-shadow: 0 0 0 3px rgba(191, 147, 235, 0.2);
 }

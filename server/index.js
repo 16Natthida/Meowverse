@@ -207,10 +207,42 @@ function mapProductRow(row, imageUrlMap) {
     categoryName: row.categoryName || '',
     stock: Number(row.stock) || 0,
     basePrice: Number(row.basePrice) || 0,
+    description: row.description || '',
+    flavors: parseFlavorList(row.flavors),
     imageUrls: imageUrlMap.get(row.id) || [],
     preorderEnabled: Boolean(row.preorderEnabled),
     readyToShipEnabled: Boolean(row.readyToShipEnabled),
   }
+}
+
+function parseFlavorList(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || '').trim()).filter(Boolean)
+  }
+
+  const text = String(value || '').trim()
+  if (!text) {
+    return []
+  }
+
+  try {
+    const parsed = JSON.parse(text)
+    if (Array.isArray(parsed)) {
+      return parsed.map((item) => String(item || '').trim()).filter(Boolean)
+    }
+  } catch {
+    // Fall back to line/comma separated input.
+  }
+
+  return text
+    .split(/\r?\n|,/)
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+}
+
+function serializeFlavorList(value) {
+  const flavors = parseFlavorList(value)
+  return flavors.length > 0 ? JSON.stringify(flavors) : null
 }
 
 async function queryProductsByIds(productIds, connection = pool) {
@@ -224,6 +256,8 @@ async function queryProductsByIds(productIds, connection = pool) {
         p.prod_id AS id,
         p.prod_name AS name,
         p.sku AS sku,
+        p.description AS description,
+        p.flavors AS flavors,
         p.cat_id AS categoryId,
         c.cat_name AS categoryName,
         p.stock_qty AS stock,
@@ -305,6 +339,8 @@ async function upsertProductImages(connection, productId, imageUrls = []) {
 async function ensureAdminSchema() {
   await pool.query(`
     ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS description TEXT DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS flavors TEXT DEFAULT NULL,
     ADD COLUMN IF NOT EXISTS sku VARCHAR(100) DEFAULT NULL,
     ADD COLUMN IF NOT EXISTS preorder_enabled TINYINT(1) NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS ready_to_ship_enabled TINYINT(1) NOT NULL DEFAULT 1
@@ -331,6 +367,8 @@ async function ensureAdminSchema() {
       user_id INT NOT NULL,
       prod_id INT NOT NULL,
       qty INT NOT NULL DEFAULT 1,
+      item_type VARCHAR(20) DEFAULT NULL,
+      flavor VARCHAR(120) DEFAULT NULL,
       PRIMARY KEY (cart_id),
       KEY idx_cart_user_id (user_id),
       CONSTRAINT fk_cart_user
@@ -340,6 +378,16 @@ async function ensureAdminSchema() {
         FOREIGN KEY (prod_id) REFERENCES products (prod_id)
         ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+  `)
+
+  await pool.query(`
+    ALTER TABLE cart
+    ADD COLUMN IF NOT EXISTS item_type VARCHAR(20) DEFAULT NULL
+  `)
+
+  await pool.query(`
+    ALTER TABLE cart
+    ADD COLUMN IF NOT EXISTS flavor VARCHAR(120) DEFAULT NULL
   `)
 }
 
@@ -452,13 +500,15 @@ app.post('/api/products', async (req, res) => {
     const [insertResult] = await connection.query(
       `
         INSERT INTO products
-          (cat_id, prod_name, stock_qty, base_price, sku, preorder_enabled, ready_to_ship_enabled)
+          (cat_id, prod_name, description, flavors, stock_qty, base_price, sku, preorder_enabled, ready_to_ship_enabled)
         VALUES
-          (?, ?, ?, ?, ?, ?, ?)
+          (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         Number(payload.categoryId),
         String(payload.name).trim(),
+        payload.description ? String(payload.description).trim() : null,
+        serializeFlavorList(payload.flavors),
         Number(payload.stock) || 0,
         Number(payload.basePrice) || 0,
         payload.sku ? String(payload.sku).trim() : null,
@@ -503,6 +553,8 @@ app.put('/api/products/:id', async (req, res) => {
         SET
           cat_id = ?,
           prod_name = ?,
+          description = ?,
+          flavors = ?,
           stock_qty = ?,
           base_price = ?,
           sku = ?,
@@ -513,6 +565,8 @@ app.put('/api/products/:id', async (req, res) => {
       [
         Number(payload.categoryId),
         String(payload.name).trim(),
+        payload.description ? String(payload.description).trim() : null,
+        serializeFlavorList(payload.flavors),
         Number(payload.stock) || 0,
         Number(payload.basePrice) || 0,
         payload.sku ? String(payload.sku).trim() : null,
@@ -600,6 +654,8 @@ app.get('/api/products/public', async (req, res) => {
       SELECT
         p.prod_id AS id,
         p.prod_name AS name,
+        p.description AS description,
+        p.flavors AS flavors,
         p.sku AS sku,
         p.cat_id AS categoryId,
         c.cat_name AS categoryName,
@@ -647,6 +703,8 @@ app.get('/api/products/public', async (req, res) => {
     const products = productRows.map((row) => ({
       id: row.id,
       name: row.name,
+      description: row.description || '',
+      flavors: parseFlavorList(row.flavors),
       sku: row.sku || '',
       categoryId: row.categoryId,
       categoryName: row.categoryName || '',
@@ -671,6 +729,7 @@ app.get('/api/products/ready-to-ship', async (req, res) => {
       SELECT
         p.prod_id AS id,
         p.prod_name AS name,
+        p.description AS description,
         p.sku AS sku,
         p.cat_id AS categoryId,
         c.cat_name AS categoryName,
@@ -718,6 +777,8 @@ app.get('/api/products/ready-to-ship', async (req, res) => {
     const products = productRows.map((row) => ({
       id: row.id,
       name: row.name,
+      description: row.description || '',
+      flavors: parseFlavorList(row.flavors),
       sku: row.sku || '',
       categoryId: row.categoryId,
       categoryName: row.categoryName || '',
@@ -742,6 +803,8 @@ app.get('/api/products/preorder', async (req, res) => {
       SELECT
         p.prod_id AS id,
         p.prod_name AS name,
+        p.description AS description,
+        p.flavors AS flavors,
         p.sku AS sku,
         p.cat_id AS categoryId,
         c.cat_name AS categoryName,
@@ -789,6 +852,8 @@ app.get('/api/products/preorder', async (req, res) => {
     const products = productRows.map((row) => ({
       id: row.id,
       name: row.name,
+      description: row.description || '',
+      flavors: parseFlavorList(row.flavors),
       sku: row.sku || '',
       categoryId: row.categoryId,
       categoryName: row.categoryName || '',

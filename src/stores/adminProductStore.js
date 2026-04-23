@@ -109,6 +109,8 @@ export function useAdminProductStore() {
   function getPayload(payload) {
     return {
       name: payload.name,
+      description: payload.description,
+      flavors: payload.flavors || [],
       sku: payload.sku,
       categoryId: Number(payload.categoryId),
       stock: Number(payload.stock) || 0,
