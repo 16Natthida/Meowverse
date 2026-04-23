@@ -36,13 +36,13 @@ router.get('/', async (req, res) => {
          c.qty,
          p.prod_name AS name,
          p.base_price AS price,
-         p.image AS image,
+         p.image_url AS image,
          p.stock_qty AS stock
        FROM cart c
        LEFT JOIN products p ON c.prod_id = p.prod_id
        WHERE c.user_id = ?
        ORDER BY c.cart_id DESC`,
-      [user_id]
+      [user_id],
     )
 
     res.json(rows)
@@ -73,24 +73,22 @@ router.post('/', async (req, res) => {
       `SELECT cart_id, qty FROM cart
        WHERE user_id = ? AND prod_id = ?
        LIMIT 1`,
-      [user_id, prod_id]
+      [user_id, prod_id],
     )
 
     if (existing.length > 0) {
       // มีอยู่แล้ว → เพิ่ม qty
       const newQty = existing[0].qty + Number(qty)
-      await db.query(
-        'UPDATE cart SET qty = ? WHERE cart_id = ?',
-        [newQty, existing[0].cart_id]
-      )
+      await db.query('UPDATE cart SET qty = ? WHERE cart_id = ?', [newQty, existing[0].cart_id])
       return res.json({ message: 'Updated qty', cart_id: existing[0].cart_id, qty: newQty })
     }
 
     // ไม่มี → insert ใหม่
-    const [result] = await db.query(
-      'INSERT INTO cart (user_id, prod_id, qty) VALUES (?, ?, ?)',
-      [user_id, prod_id, Number(qty)]
-    )
+    const [result] = await db.query('INSERT INTO cart (user_id, prod_id, qty) VALUES (?, ?, ?)', [
+      user_id,
+      prod_id,
+      Number(qty),
+    ])
 
     res.status(201).json({ message: 'Added to cart', cart_id: result.insertId })
   } catch (err) {
@@ -114,10 +112,10 @@ router.put('/:cart_id', async (req, res) => {
 
   try {
     const db = getDB(req)
-    const [result] = await db.query(
-      'UPDATE cart SET qty = ? WHERE cart_id = ?',
-      [Number(qty), cart_id]
-    )
+    const [result] = await db.query('UPDATE cart SET qty = ? WHERE cart_id = ?', [
+      Number(qty),
+      cart_id,
+    ])
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'Cart item not found' })
@@ -139,10 +137,7 @@ router.delete('/:cart_id', async (req, res) => {
 
   try {
     const db = getDB(req)
-    const [result] = await db.query(
-      'DELETE FROM cart WHERE cart_id = ?',
-      [cart_id]
-    )
+    const [result] = await db.query('DELETE FROM cart WHERE cart_id = ?', [cart_id])
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'Cart item not found' })
