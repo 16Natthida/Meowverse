@@ -9,6 +9,7 @@ import path from 'node:path'
 import { mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import cartRouter from './cart.js'
+import orderRouter from './order.js'
 
 dotenv.config()
 
@@ -59,6 +60,7 @@ app.use(cors({ origin: frontendOrigin }))
 app.use(express.json({ limit: '2mb' }))
 app.use('/uploads', express.static(uploadsDir))
 app.use('/api/cart', cartRouter)
+app.use('/api/orders', orderRouter);
 
 function authenticateToken(req, res, next) {
   const roleHeader = String(req.headers['x-user-role'] || '')
@@ -389,6 +391,9 @@ async function ensureAdminSchema() {
     ALTER TABLE cart
     ADD COLUMN IF NOT EXISTS flavor VARCHAR(120) DEFAULT NULL
   `)
+
+  // Orders and order_details tables already exist in the database
+  // No need to create them here
 }
 
 app.get('/api/health', async (_req, res) => {
@@ -1163,6 +1168,63 @@ app.get('/api/dashboard/overview', async (_req, res) => {
   }
 })
 
+// POST /api/orders/:order_id/payment
+app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res) => {
+  const { order_id } = req.params;
+  const { payment_method, shipping_name, shipping_phone, shipping_address, notes } = req.body;
+  const slip_url = req.file ? `/uploads/${req.file.filename}` : null;
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    // 1. ตรวจสอบข้อมูล Order เดิมเพื่อยอดเงินและประเภท
+    const [orderRows] = await connection.query(
+      'SELECT total_amount, Order_type FROM orders WHERE order_id = ?',
+      [order_id]
+    );
+
+    if (orderRows.length === 0) {
+      throw new Error('ไม่พบข้อมูลออเดอร์');
+    }
+
+    const orderData = orderRows[0];
+
+    // 2. บันทึกข้อมูลสลิปลงตาราง payment
+    const paymentType = orderData.Order_type === 'Ready' ? 'Ready pay' : 'Order_fee';
+    await connection.query(
+      `INSERT INTO payment (order_id, type, amount, slip_img, Slip_date, status) 
+       VALUES (?, ?, ?, ?, NOW(), 'Pending')`,
+      [order_id, paymentType, orderData.total_amount, slip_url]
+    );
+
+    // 3. บันทึกที่อยู่ลงตาราง shipping
+    // รวมชื่อ เบอร์โทร และหมายเหตุเข้ากับที่อยู่ เพื่อเก็บในคอลัมน์ address ตามโครงสร้างตาราง
+    const fullAddress = `ชื่อผู้รับ: ${shipping_name}\nโทร: ${shipping_phone}\nที่อยู่: ${shipping_address}\nหมายเหตุ: ${notes || '-'}`;
+    
+    await connection.query(
+      `INSERT INTO shipping (order_id, address) VALUES (?, ?)`,
+      [order_id, fullAddress]
+    );
+
+    // 4. อัปเดตสถานะในตาราง orders เป็น 'Pending'
+    // และเก็บ payment_method ไว้ที่นี่ (ถ้าตาราง orders ของคุณมีคอลัมน์นี้)
+    await connection.query(
+      `UPDATE orders SET status = 'Pending', payment_method = ? WHERE order_id = ?`,
+      [payment_method, order_id]
+    );
+
+    await connection.commit();
+    res.json({ success: true, message: 'ส่งหลักฐานและบันทึกที่อยู่เรียบร้อยแล้ว' });
+
+  } catch (error) {
+    await connection.rollback();
+    console.error('Database Error:', error);
+    res.status(500).json({ error: error.message });
+  } finally {
+    connection.release();
+  }
+});
 app.use((error, _req, res, _next) => {
   res.status(500).json({ message: error.message })
 })

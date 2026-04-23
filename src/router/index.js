@@ -46,6 +46,7 @@ const router = createRouter({
     },
     // เปลี่ยนจาก ./ เป็น ../
 { path: '/cart', component: () => import('../views/User/CartPage.vue') },
+{ path: '/order/:orderId', component: () => import('../views/User/OrderSummary.vue'), meta: { requiresAuth: true, roles: ['user'] } },
     {
       path: '/admin',
       redirect: '/admin/home',

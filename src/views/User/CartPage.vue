@@ -113,6 +113,44 @@ function goBack() {
   router.push('/')
 }
 
+// ── CHECKOUT ──
+const checkout = async () => {
+  const user = currentUser.value
+  if (!user?.id) {
+    router.push('/login')
+    return
+  }
+
+  if (cartItems.value.length === 0) {
+    showNotice('ตะกร้าสินค้าว่างเปล่า', 'error')
+    return
+  }
+
+  try {
+    const res = await fetch('http://localhost:3001/api/orders/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: user.id }),
+    })
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.error ?? body.message ?? `HTTP ${res.status}`)
+    }
+
+    const data = await res.json()
+    showNotice('สร้างออเดอร์สำเร็จ! กำลังนำทาง...', 'success')
+
+    // นำทางไปยังหน้าสรุปออเดอร์
+    setTimeout(() => {
+      router.push(`/order/${data.order_id}`)
+    }, 1500)
+
+  } catch (err) {
+    showNotice(err.message, 'error')
+  }
+}
+
 onMounted(fetchCart)
 </script>
 
@@ -368,7 +406,7 @@ onMounted(fetchCart)
               </div>
             </div>
 
-            <button class="btn-checkout">
+            <button class="btn-checkout" @click="checkout">
               <svg
                 viewBox="0 0 24 24"
                 fill="none"
