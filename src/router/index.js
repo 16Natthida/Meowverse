@@ -77,6 +77,12 @@ const router = createRouter({
       meta: { requiresAuth: true, roles: ['admin'] },
     },
     {
+      path: '/admin/preorder-rounds',
+      name: 'admin-preorder-rounds',
+      component: () => import('../views/Admin/Preorder_lots.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
       path: '/:pathMatch(.*)*',
       redirect: '/',
     },
