@@ -16,7 +16,7 @@ async function requestJson(path, options = {}) {
   if (userDataStr) {
     try {
       const userData = JSON.parse(userDataStr)
-      userId = userData.user_id
+      userId = userData.user_id || userData.id
       userRole = userData.role || 'admin'
     } catch {
       // Default values used

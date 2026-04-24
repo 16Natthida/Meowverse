@@ -82,7 +82,7 @@ function requireAdmin(req, res, next) {
   next()
 }
 
-app.post('/login', async (req, res) => {
+async function handleLoginRequest(req, res) {
   const { username, password } = req.body || {}
 
   if (!username || !password) {
@@ -132,9 +132,32 @@ app.post('/login', async (req, res) => {
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message })
   }
-})
+}
+
+app.post('/login', handleLoginRequest)
+app.post('/api/login', handleLoginRequest)
 
 app.post('/register', async (req, res) => {
+  const { username, password, full_name } = req.body || {}
+
+  if (!username || !password || !full_name) {
+    return res.status(400).json({ success: false, error: 'กรุณากรอกข้อมูลให้ครบถ้วน' })
+  }
+
+  try {
+    const hashedPassword = await bcrypt.hash(String(password), 10)
+    await pool.query(
+      'INSERT INTO accounts (username, password, full_name, role) VALUES (?, ?, ?, "User")',
+      [String(username).trim(), hashedPassword, String(full_name).trim()],
+    )
+
+    return res.json({ success: true, message: 'ลงทะเบียนสำเร็จ' })
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+app.post('/api/register', async (req, res) => {
   const { username, password, full_name } = req.body || {}
 
   if (!username || !password || !full_name) {
@@ -686,6 +709,68 @@ app.get('/api/products/public', async (req, res) => {
   }
 })
 
+// Public API: Get preorder products in open rounds grouped for users
+app.get('/api/products/preorder', async (req, res) => {
+  try {
+    const [productRows] = await pool.query(`
+      SELECT DISTINCT
+        p.prod_id AS id,
+        p.prod_name AS name,
+        p.sku AS sku,
+        p.cat_id AS categoryId,
+        c.cat_name AS categoryName,
+        p.stock_qty AS stock,
+        p.base_price AS basePrice,
+        p.preorder_enabled AS preorderEnabled,
+        p.ready_to_ship_enabled AS readyToShipEnabled
+      FROM preorder_round_products prp
+      JOIN preorder_rounds r ON r.round_id = prp.round_id
+      JOIN products p ON p.prod_id = prp.prod_id
+      LEFT JOIN categories c ON c.cat_id = p.cat_id
+      WHERE LOWER(r.status) IN ('active', 'open')
+      ORDER BY c.cat_name ASC, p.prod_name ASC
+    `)
+
+    const productIds = productRows.map((row) => row.id)
+    let imageUrlMap = new Map()
+
+    if (productIds.length > 0) {
+      const [imageRows] = await pool.query(
+        `
+        SELECT prod_id AS productId, image_url AS imageUrl
+        FROM product_images
+        WHERE prod_id IN (?)
+        ORDER BY sort_order ASC, img_id ASC
+      `,
+        [productIds],
+      )
+
+      for (const row of imageRows) {
+        const list = imageUrlMap.get(row.productId) || []
+        list.push(row.imageUrl)
+        imageUrlMap.set(row.productId, list)
+      }
+    }
+
+    const products = productRows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      sku: row.sku || '',
+      categoryId: row.categoryId,
+      categoryName: row.categoryName || '',
+      stock: Number(row.stock) || 0,
+      basePrice: Number(row.basePrice) || 0,
+      imageUrls: imageUrlMap.get(row.id) || [],
+      preorderEnabled: Boolean(row.preorderEnabled),
+      readyToShipEnabled: Boolean(row.readyToShipEnabled),
+    }))
+
+    res.json(products)
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
+
 // Update product stock
 app.patch('/api/products/:id/stock', async (req, res) => {
   try {
@@ -952,7 +1037,8 @@ app.post('/api/preorder-rounds', authenticateToken, requireAdmin, async (req, re
     return
   }
 
-  const normalizedStatus = status && String(status).trim() ? String(status).trim() : 'active'
+  const statusValue = status && String(status).trim() ? String(status).trim().toLowerCase() : 'active'
+  const normalizedStatus = statusValue === 'open' ? 'active' : ['active', 'closed', 'archived'].includes(statusValue) ? statusValue : 'active'
 
   try {
     const [result] = await pool.query(`
@@ -992,6 +1078,9 @@ app.put('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
     return
   }
 
+  const statusValue = status && String(status).trim() ? String(status).trim().toLowerCase() : 'active'
+  const normalizedStatus = statusValue === 'open' ? 'active' : ['active', 'closed', 'archived'].includes(statusValue) ? statusValue : 'active'
+
   try {
     const [result] = await pool.query(`
       UPDATE preorder_rounds
@@ -1007,7 +1096,7 @@ app.put('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
       description ? String(description).trim() : null,
       new Date(startDate),
       new Date(endDate),
-      status || 'active',
+      normalizedStatus,
       roundId,
     ])
 
@@ -1084,6 +1173,11 @@ app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, a
       VALUES ?
       ON DUPLICATE KEY UPDATE quantity_available = VALUES(quantity_available)
     `, [values])
+
+    await pool.query(
+      `UPDATE products SET preorder_enabled = 1 WHERE prod_id IN (?)`,
+      [productIds.map((pid) => Number(pid))],
+    )
 
     res.json({ message: 'Products added to round successfully' })
   } catch (error) {

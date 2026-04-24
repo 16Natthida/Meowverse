@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 
@@ -7,73 +7,134 @@ const router = useRouter()
 const { logout, getUser } = useAuth()
 
 const currentUser = computed(() => getUser())
+const activeSection = ref('home')
 const activeCategory = ref('ทั้งหมด')
+const products = ref([])
+const preorderProducts = ref([])
+const isLoadingPublic = ref(false)
+const isLoadingPreorder = ref(false)
+const error = ref('')
+const searchQuery = ref('')
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 
-// สินค้าตัวอย่าง
-const products = ref([
-  {
-    id: 1,
-    name: 'MOJO ขนมแลบลิ้นรสทูน่า',
-    description: 'กลิ่มหวาน พอเพียงอยู่นี้จะให้รู้สึกสบายใจ',
-    price: 125,
-    image: '🐱',
-    category: 'ทั้งหมด',
-    stock: 24
-  },
-  {
-    id: 2,
-    name: 'บ้านเเมวซองนุ่ม',
-    description: 'เหมาะสำหรับใช้งาน ถอดเก็บได้ง่าย',
-    price: 820,
-    image: '🎁',
-    category: 'ทั้งหมด',
-    stock: 8
-  },
-  {
-    id: 3,
-    name: 'เต็นล์แมวลายขนมหวาน',
-    description: 'ผ้าพื้นฐานและทนทาน',
-    price: 1190,
-    image: '👕',
-    category: 'เสื้อ/ปัน',
-    stock: 5
-  },
-  {
-    id: 4,
-    name: 'ไม้ตกปลาแมวรุ้งพาสเทล',
-    description: 'เอื้อยมิชแสตกหมดปจัดทำกระด่หระยัยกาน',
-    price: 260,
-    image: '🍦',
-    category: 'อุปกรณ์อื่น',
-    stock: 32
-  },
-  {
-    id: 5,
-    name: 'ชามอาหารสองชั้นเอียงน้อย',
-    description: 'ช่วยลดการสำลัก ',
-    price: 390,
-    image: '🍜',
-    category: 'ทั้งหมด',
-    stock: 14
-  },
-  {
-    id: 6,
-    name: 'ทรายแมวกลิ้นมิวล์เชค',
-    description: 'ดูดซับกลิ่นดี',
-    price: 459,
-    image: '📦',
-    category: 'อุปกรณ์อื่น',
-    stock: 19
-  },
-])
+const isLoading = computed(() => isLoadingPublic.value || isLoadingPreorder.value)
 
-const categories = ['ทั้งหมด', 'ขนม', 'เตียง/บ้าน', 'ของเล่น', 'อุปกรณ์รูมมิ่ง']
+const currentProducts = computed(() => {
+  return activeSection.value === 'preorder' ? preorderProducts.value : products.value
+})
+
+const categories = computed(() => {
+  const categorySet = new Set(currentProducts.value.map((product) => product.categoryName || 'อื่นๆ'))
+  return ['ทั้งหมด', ...Array.from(categorySet)]
+})
 
 const filteredProducts = computed(() => {
-  if (activeCategory.value === 'ทั้งหมด') {
-    return products.value
+  let list = currentProducts.value
+
+  if (activeSection.value === 'ready') {
+    list = list.filter((p) => p.readyToShipEnabled)
   }
-  return products.value.filter(p => p.category === activeCategory.value)
+
+  if (activeCategory.value !== 'ทั้งหมด') {
+    list = list.filter((p) => p.categoryName === activeCategory.value)
+  }
+
+  const query = searchQuery.value.trim().toLowerCase()
+  if (query) {
+    list = list.filter(
+      (p) =>
+        p.name.toLowerCase().includes(query) ||
+        (p.categoryName || '').toLowerCase().includes(query),
+    )
+  }
+
+  return list
+})
+
+const groupedProducts = computed(() => {
+  const groups = {}
+  filteredProducts.value.forEach((product) => {
+    const category = product.categoryName || 'อื่นๆ'
+    if (!groups[category]) {
+      groups[category] = []
+    }
+    groups[category].push(product)
+  })
+  return groups
+})
+
+const sectionTitle = computed(() => {
+  switch (activeSection.value) {
+    case 'preorder':
+      return 'สินค้าพรีออเดอร์'
+    case 'ready':
+      return 'สินค้าพร้อมส่ง'
+    case 'orders':
+      return 'ติดตามคำสั่งซื้อ'
+    default:
+      return 'สินค้า'
+  }
+})
+
+const sectionDescription = computed(() => {
+  switch (activeSection.value) {
+    case 'preorder':
+      return 'สินค้าพรีออเดอร์จากรอบนำเข้าที่เปิดอยู่และจัดเรียงตามหมวดหมู่'
+    case 'ready':
+      return 'เลือกสินค้าพร้อมส่งทันที'
+    case 'orders':
+      return 'ตรวจสอบสถานะคำสั่งซื้อของคุณ'
+    default:
+      return 'เลือกของน่ารักให้ทาสแมวและเจ้านายตัวฟู'
+  }
+})
+
+async function fetchProducts() {
+  isLoadingPublic.value = true
+  error.value = ''
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/products/public`)
+    if (!response.ok) {
+      throw new Error('ไม่สามารถโหลดสินค้าได้')
+    }
+
+    products.value = await response.json()
+  } catch (fetchError) {
+    error.value = fetchError.message || 'เกิดข้อผิดพลาดเมื่อโหลดสินค้า'
+  } finally {
+    isLoadingPublic.value = false
+  }
+}
+
+async function fetchPreorderProducts() {
+  isLoadingPreorder.value = true
+  error.value = ''
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/products/preorder`)
+    if (!response.ok) {
+      throw new Error('ไม่สามารถโหลดสินค้าพรีออเดอร์ได้')
+    }
+
+    preorderProducts.value = await response.json()
+  } catch (fetchError) {
+    error.value = fetchError.message || 'เกิดข้อผิดพลาดเมื่อโหลดสินค้าพรีออเดอร์'
+  } finally {
+    isLoadingPreorder.value = false
+  }
+}
+
+onMounted(() => {
+  fetchProducts()
+  fetchPreorderProducts()
+})
+
+watch(activeSection, (newSection) => {
+  activeCategory.value = 'ทั้งหมด'
+  if (newSection === 'preorder') {
+    fetchPreorderProducts()
+  }
 })
 
 function handleLogout() {
@@ -97,16 +158,49 @@ function addToCart(product) {
         </div>
 
         <nav class="header-nav">
-          <a href="#" class="nav-link active">หน้าแรก</a>
-          <a href="#" class="nav-link">พร้อมส่ง</a>
-          <a href="#" class="nav-link">พรีออเดอร์</a>
-          <a href="#" class="nav-link">ติดตามคำสั่งซื้อ</a>
+          <a
+            href="#"
+            class="nav-link"
+            :class="{ active: activeSection === 'home' }"
+            @click.prevent="activeSection = 'home'"
+          >
+            หน้าแรก
+          </a>
+          <a
+            href="#"
+            class="nav-link"
+            :class="{ active: activeSection === 'ready' }"
+            @click.prevent="activeSection = 'ready'"
+          >
+            พร้อมส่ง
+          </a>
+          <a
+            href="#"
+            class="nav-link"
+            :class="{ active: activeSection === 'preorder' }"
+            @click.prevent="activeSection = 'preorder'"
+          >
+            พรีออเดอร์
+          </a>
+          <a
+            href="#"
+            class="nav-link"
+            :class="{ active: activeSection === 'orders' }"
+            @click.prevent="activeSection = 'orders'"
+          >
+            ติดตามคำสั่งซื้อ
+          </a>
         </nav>
 
         <div class="header-right">
           <div class="search-box">
             <span class="search-icon">🔍</span>
-            <input type="text" placeholder="ค้นหา" class="search-input" />
+            <input
+              v-model="searchQuery"
+              type="text"
+              placeholder="ค้นหา"
+              class="search-input"
+            />
           </div>
           <button class="btn-cart">🛒 ตะกร้า</button>
           <div class="user-info">
@@ -121,8 +215,8 @@ function addToCart(product) {
     <main class="dashboard-main">
       <!-- TITLE SECTION -->
       <section class="title-section">
-        <h2>สินค้า</h2>
-        <p>เลือกของน่ารักให้ทาสแมวและเจ้านายตัวฟู</p>
+        <h2>{{ sectionTitle }}</h2>
+        <p>{{ sectionDescription }}</p>
       </section>
 
       <!-- CATEGORY TABS -->
@@ -137,23 +231,72 @@ function addToCart(product) {
         </button>
       </div>
 
+      <div class="section-status">
+        <p v-if="isLoading">กำลังโหลดสินค้า...</p>
+        <p v-else-if="error" class="section-error">{{ error }}</p>
+        <p v-else-if="filteredProducts.length === 0">ไม่มีสินค้าที่ตรงกับเงื่อนไขในขณะนี้</p>
+      </div>
+
       <!-- PRODUCTS GRID -->
-      <section class="products-grid">
-        <div v-for="product in filteredProducts" :key="product.id" class="product-card">
-          <div class="product-image">{{ product.image }}</div>
-          
+      <section v-if="activeSection === 'preorder'" class="category-groups">
+        <div v-for="(items, category) in groupedProducts" :key="category" class="category-group">
+          <h3 class="category-heading">{{ category }}</h3>
+          <div class="products-grid">
+            <div v-for="product in items" :key="product.id" class="product-card">
+              <div class="product-image">
+                <img v-if="product.imageUrls && product.imageUrls[0]" :src="product.imageUrls[0]" :alt="product.name" />
+                <div v-else class="product-placeholder">🐾</div>
+              </div>
+
+              <div class="product-info">
+                <div class="product-labels">
+                  <span v-if="product.preorderEnabled" class="product-badge preorder">พรีออเดอร์</span>
+                  <span v-if="product.readyToShipEnabled" class="product-badge ready">พร้อมส่ง</span>
+                </div>
+                <h3 class="product-name">{{ product.name }}</h3>
+                <p class="product-description">{{ product.categoryName || 'สินค้าทั่วไป' }}</p>
+
+                <div class="product-footer">
+                  <div class="price-section">
+                    <span class="currency">฿</span>
+                    <span class="price">{{ product.basePrice }}</span>
+                  </div>
+                  <span class="stock">สต็อก: {{ product.stock }} ชิ้น</span>
+                </div>
+
+                <button class="btn-order" @click="addToCart(product)">หยิบใส่ตะกร้า</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section v-else class="products-grid">
+        <div
+          v-for="product in filteredProducts"
+          :key="product.id"
+          class="product-card"
+        >
+          <div class="product-image">
+            <img v-if="product.imageUrls && product.imageUrls[0]" :src="product.imageUrls[0]" :alt="product.name" />
+            <div v-else class="product-placeholder">🐾</div>
+          </div>
+
           <div class="product-info">
+            <div class="product-labels">
+              <span v-if="product.preorderEnabled" class="product-badge preorder">พรีออเดอร์</span>
+              <span v-if="product.readyToShipEnabled" class="product-badge ready">พร้อมส่ง</span>
+            </div>
             <h3 class="product-name">{{ product.name }}</h3>
-            <p class="product-description">{{ product.description }}</p>
-            
+            <p class="product-description">{{ product.categoryName || 'สินค้าทั่วไป' }}</p>
+
             <div class="product-footer">
               <div class="price-section">
                 <span class="currency">฿</span>
-                <span class="price">{{ product.price }}</span>
+                <span class="price">{{ product.basePrice }}</span>
               </div>
               <span class="stock">สต็อก: {{ product.stock }} ชิ้น</span>
             </div>
-            
+
             <button class="btn-order" @click="addToCart(product)">หยิบใส่ตะกร้า</button>
           </div>
         </div>
@@ -362,6 +505,16 @@ function addToCart(product) {
   max-width: 1400px;
 }
 
+.category-group {
+  margin-bottom: 2.5rem;
+}
+
+.category-heading {
+  font-size: 1.25rem;
+  color: #5d2c7f;
+  margin-bottom: 1rem;
+}
+
 .tab-btn {
   padding: 0.65rem 1.3rem;
   border: none;
@@ -421,6 +574,61 @@ function addToCart(product) {
   justify-content: center;
   font-size: 3.5rem;
   overflow: hidden;
+}
+
+.product-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.product-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 3rem;
+}
+
+.product-labels {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.product-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.product-badge.preorder {
+  background: #ffe0b2;
+  color: #9c5c00;
+}
+
+.product-badge.ready {
+  background: #c8e6c9;
+  color: #2e7d32;
+}
+
+.section-status {
+  max-width: 1400px;
+  margin-bottom: 1.5rem;
+  color: #666;
+  font-size: 0.95rem;
+}
+
+.section-error {
+  color: #d32f2f;
 }
 
 .product-info {

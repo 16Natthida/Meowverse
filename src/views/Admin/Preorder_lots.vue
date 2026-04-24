@@ -110,9 +110,9 @@
             <div class="form-group">
               <label for="round-status">สถานะ</label>
               <select id="round-status" v-model="roundForm.status">
-                <option value="Open">เปิด</option>
-                <option value="Closed">ปิด</option>
-                <option value="Archived">เก็บถาวร</option>
+                <option value="active">เปิด</option>
+                <option value="closed">ปิด</option>
+                <option value="archived">เก็บถาวร</option>
               </select>
             </div>
 
@@ -320,6 +320,23 @@
               <p><strong>หมวดหมู่:</strong> {{ selectedProduct.categoryName || '-' }}</p>
               <p><strong>ราคาพื้นฐาน:</strong> {{ formatPrice(selectedProduct.basePrice) }} บาท</p>
               <p><strong>จำนวนคงเหลือ:</strong> {{ selectedProduct.quantityAvailable }}</p>
+              <div class="quantity-detail-edit">
+                <label>แก้ไขจำนวน:</label>
+                <input
+                  type="number"
+                  min="0"
+                  :value="productQuantityChanges[selectedProduct.id] ?? selectedProduct.quantityAvailable"
+                  @input="updateProductQuantity(selectedProduct.id, $event.target.value)"
+                  class="quantity-input-field"
+                />
+                <button
+                  class="btn-save-detail"
+                  @click="saveProductQuantity(selectedProduct.id)"
+                  :disabled="!hasQuantityChanged(selectedProduct.id)"
+                >
+                  บันทึก
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1243,6 +1260,48 @@ onMounted(async () => {
 
 .btn-detail:hover {
   background-color: #9d6cb8;
+}
+
+.quantity-detail-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.quantity-detail-edit label {
+  font-size: 13px;
+  color: #5e3b77;
+  min-width: 84px;
+}
+
+.product-detail .quantity-input-field {
+  width: 110px;
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 12px;
+  font-size: 13px;
+}
+
+.btn-save-detail {
+  background: linear-gradient(135deg, #b388d4 0%, #9d6cb8 100%);
+  color: white;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.btn-save-detail:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-save-detail:hover:not(:disabled) {
+  background-color: #8c5ca8;
 }
 
 .product-detail {
