@@ -1225,6 +1225,49 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     connection.release();
   }
 });
+
+// ─────────────────────────────────────────────
+// GET /api/payments
+// ดึงรายการ payment ทั้งหมด (admin)
+// ─────────────────────────────────────────────
+app.get('/api/payments', async (_req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT p.*, o.user_id, a.username
+       FROM payment p
+       LEFT JOIN orders o ON p.order_id = o.order_id
+       LEFT JOIN accounts a ON o.user_id = a.user_id
+       ORDER BY p.Slip_date DESC`
+    )
+    res.json(rows)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─────────────────────────────────────────────
+// PATCH /api/payments/:pay_id/status
+// อัปเดตสถานะสลิป (admin)
+// ─────────────────────────────────────────────
+app.patch('/api/payments/:pay_id/status', async (req, res) => {
+  const { pay_id } = req.params
+  const { status } = req.body
+
+  if (!['Approved', 'Rejected', 'Pending'].includes(status)) {
+    return res.status(400).json({ error: 'invalid status' })
+  }
+
+  try {
+    await pool.query(
+      'UPDATE payment SET status = ? WHERE pay_id = ?',
+      [status, pay_id]
+    )
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 app.use((error, _req, res, _next) => {
   res.status(500).json({ message: error.message })
 })

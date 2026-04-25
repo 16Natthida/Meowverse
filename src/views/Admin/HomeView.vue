@@ -159,8 +159,67 @@ async function loadDashboardData() {
   }
 }
 
+
+// ── SLIP MANAGEMENT ──
+const payments = ref([])
+const slipLoading = ref(false)
+const slipError = ref('')
+const selectedSlip = ref(null)
+
+const statusLabel = {
+  Pending: { text: 'รอตรวจสอบ', color: '#f59e0b', bg: '#fffbeb' },
+  Approved: { text: 'อนุมัติแล้ว', color: '#10b981', bg: '#ecfdf5' },
+  Rejected: { text: 'ปฏิเสธ', color: '#ef4444', bg: '#fef2f2' },
+}
+
+async function fetchPayments() {
+  slipLoading.value = true
+  slipError.value = ''
+  try {
+    const res = await fetch(`${API_BASE_URL}/payments`)
+    if (!res.ok) throw new Error('โหลดข้อมูลสลิปไม่สำเร็จ')
+    payments.value = await res.json()
+  } catch (err) {
+    slipError.value = err.message
+  } finally {
+    slipLoading.value = false
+  }
+}
+
+async function updatePaymentStatus(payId, status) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/payments/${payId}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    })
+    if (!res.ok) throw new Error('อัปเดตสถานะไม่สำเร็จ')
+    await fetchPayments()
+    selectedSlip.value = null
+  } catch (err) {
+    slipError.value = err.message
+  }
+}
+
+function openSlip(payment) {
+  selectedSlip.value = payment
+}
+
+function closeSlip() {
+  selectedSlip.value = null
+}
+
+function formatDate(d) {
+  if (!d) return '-'
+  return new Date(d).toLocaleString('th-TH', {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  })
+}
+
 onMounted(() => {
   loadDashboardData()
+  fetchPayments()
   refreshTimerId = window.setInterval(loadDashboardData, 5 * 60 * 1000)
 })
 
@@ -371,6 +430,92 @@ onBeforeUnmount(() => {
         </table>
       </div>
     </section>
+
+    <!-- ───── SLIP MANAGEMENT ───── -->
+    <section class="panel table-panel slip-section">
+      <header class="panel-head panel-head--stack">
+        <h3>💳 จัดการสลิปการชำระเงิน</h3>
+        <p>ตรวจสอบและอนุมัติหลักฐานการโอนเงินจากลูกค้า</p>
+      </header>
+
+      <div v-if="slipError" class="error-banner">{{ slipError }}</div>
+      <p v-if="slipLoading" class="loading-message">กำลังโหลดข้อมูล...</p>
+
+      <div v-else-if="payments.length === 0" class="empty-state">
+        <p>ยังไม่มีรายการสลิปที่ต้องตรวจสอบ</p>
+      </div>
+
+      <div v-else class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>รหัสชำระ</th>
+              <th>ออเดอร์</th>
+              <th>ประเภท</th>
+              <th>ยอดเงิน</th>
+              <th>วิธีชำระ</th>
+              <th>วันที่</th>
+              <th>สถานะ</th>
+              <th>สลิป</th>
+              <th>จัดการ</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="pay in payments" :key="pay.pay_id">
+              <td>#{{ pay.pay_id }}</td>
+              <td>#{{ pay.order_id }}</td>
+              <td>{{ pay.type }}</td>
+              <td>฿{{ Number(pay.amount).toLocaleString('th-TH', { minimumFractionDigits: 2 }) }}</td>
+              <td>{{ pay.payment_method || '-' }}</td>
+              <td>{{ formatDate(pay.Slip_date) }}</td>
+              <td>
+                <span class="status-pill" :style="{ color: (statusLabel[pay.status] || {}).color || '#888', background: (statusLabel[pay.status] || {}).bg || '#f5f5f5' }">
+                  {{ (statusLabel[pay.status] || {}).text || pay.status }}
+                </span>
+              </td>
+              <td>
+                <button v-if="pay.slip_img" class="slip-view-btn" @click="openSlip(pay)">
+                  ดูสลิป 🖼️
+                </button>
+                <span v-else class="no-slip">ไม่มีไฟล์</span>
+              </td>
+              <td>
+                <div class="action-btns" v-if="pay.status === 'Pending'">
+                  <button class="btn-approve" @click="updatePaymentStatus(pay.pay_id, 'Approved')">✓ อนุมัติ</button>
+                  <button class="btn-reject" @click="updatePaymentStatus(pay.pay_id, 'Rejected')">✕ ปฏิเสธ</button>
+                </div>
+                <span v-else class="done-text">ดำเนินการแล้ว</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- SLIP MODAL -->
+    <transition name="fade">
+      <div v-if="selectedSlip" class="slip-modal-overlay" @click.self="closeSlip">
+        <div class="slip-modal">
+          <div class="slip-modal-head">
+            <h3>สลิปออเดอร์ #{{ selectedSlip.order_id }}</h3>
+            <button class="close-btn" @click="closeSlip">✕</button>
+          </div>
+          <div class="slip-modal-body">
+            <img :src="`http://localhost:3001${selectedSlip.slip_img}`" class="slip-img-full" alt="slip" />
+          </div>
+          <div class="slip-modal-foot" v-if="selectedSlip.status === 'Pending'">
+            <button class="btn-approve" @click="updatePaymentStatus(selectedSlip.pay_id, 'Approved')">✓ อนุมัติ</button>
+            <button class="btn-reject" @click="updatePaymentStatus(selectedSlip.pay_id, 'Rejected')">✕ ปฏิเสธ</button>
+          </div>
+          <div class="slip-modal-foot" v-else>
+            <span class="status-pill" :style="{ color: (statusLabel[selectedSlip.status] || {}).color, background: (statusLabel[selectedSlip.status] || {}).bg }">
+              {{ (statusLabel[selectedSlip.status] || {}).text }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </transition>
+
   </div>
 </template>
 
@@ -793,4 +938,76 @@ td {
     height: 180px;
   }
 }
+
+/* ── SLIP SECTION ── */
+.slip-section { overflow: visible; }
+
+.status-pill {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 800;
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+.slip-view-btn {
+  border: 1px solid #dbc8f4;
+  background: #f8f2ff;
+  color: #6f50a0;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.slip-view-btn:hover { background: #ede0ff; }
+
+.no-slip { color: #bbb; font-size: 0.78rem; }
+
+.action-btns { display: flex; gap: 6px; }
+
+.btn-approve {
+  background: #ecfdf5; color: #059669; border: 1px solid #6ee7b7;
+  border-radius: 8px; padding: 4px 10px; font-size: 0.78rem;
+  font-weight: 700; cursor: pointer;
+}
+.btn-approve:hover { background: #d1fae5; }
+
+.btn-reject {
+  background: #fef2f2; color: #dc2626; border: 1px solid #fca5a5;
+  border-radius: 8px; padding: 4px 10px; font-size: 0.78rem;
+  font-weight: 700; cursor: pointer;
+}
+.btn-reject:hover { background: #fee2e2; }
+
+.done-text { font-size: 0.78rem; color: #aaa; }
+
+/* SLIP MODAL */
+.slip-modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+  z-index: 1000; display: flex; align-items: center; justify-content: center;
+}
+.slip-modal {
+  background: #fff; border-radius: 18px; width: 480px; max-width: 95vw;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.2); overflow: hidden;
+}
+.slip-modal-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 1rem 1.25rem; border-bottom: 1px solid #eadff5;
+}
+.slip-modal-head h3 { font-weight: 900; color: #3f2f5d; }
+.close-btn {
+  background: #f5f0ff; border: none; border-radius: 50%;
+  width: 30px; height: 30px; cursor: pointer; font-size: 0.9rem; color: #6f50a0;
+}
+.slip-modal-body { padding: 1rem; background: #fafafa; text-align: center; }
+.slip-img-full { max-width: 100%; max-height: 420px; border-radius: 10px; object-fit: contain; }
+.slip-modal-foot {
+  padding: 1rem 1.25rem; border-top: 1px solid #eadff5;
+  display: flex; gap: 0.75rem; justify-content: flex-end;
+}
+
+.fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
 </style>

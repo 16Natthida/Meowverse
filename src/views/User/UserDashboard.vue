@@ -24,7 +24,7 @@ const selectedFlavor = ref('')
 const selectedPreviewIndex = ref(0)
 const detailQty = ref(1)
 
-const tabs = ['หน้าหลัก', 'พร้อมส่ง', 'พรีออเดอร์', 'ติดตามคำสั่งซื้อ']
+const tabs = ['หน้าหลัก', 'พร้อมส่ง', 'พรีออเดอร์', 'ติดตามคำสั่งซื้อ', 'รายการออเดอร์']
 
 const iconMap = [
   { keyword: 'ขนม', icon: '🍬' },
@@ -177,6 +177,11 @@ function goToCart() {
   router.push('/cart')
 }
 
+// ── GO TO ORDERS ──
+function goToOrders() {
+  router.push('/order-list')
+}
+
 function openProductDetail(product) {
   selectedProduct.value = product
   selectedFlavor.value = product.flavors?.[0] || ''
@@ -271,6 +276,10 @@ function goToPage(page) {
 }
 
 function handleTabClick(tab) {
+  if (tab === 'รายการออเดอร์') {
+    goToOrders()
+    return
+  }
   activeTab.value = tab
   currentPage.value = 1
   if (tab === 'หน้าหลัก') activeCategory.value = null

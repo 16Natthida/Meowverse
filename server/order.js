@@ -122,6 +122,42 @@ for (const item of cartItems) {
 // GET /api/orders/:order_id
 // ดึงข้อมูลออเดอร์พร้อมรายละเอียด
 // ─────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// GET /api/orders?user_id=xxx
+// ดึงรายการออเดอร์ทั้งหมดของ user
+// ─────────────────────────────────────────────
+router.get('/', async (req, res) => {
+  const { user_id } = req.query
+
+  if (!user_id) {
+    return res.status(400).json({ error: 'user_id is required' })
+  }
+
+  try {
+    const db = getDB(req)
+
+    const [rows] = await db.query(
+      `SELECT
+         order_id,
+         user_id,
+         total_amount,
+         status,
+         deadline,
+         Order_type,
+         Order_date
+       FROM orders
+       WHERE user_id = ?
+       ORDER BY Order_date DESC`,
+      [user_id]
+    )
+
+    res.json(rows)
+  } catch (err) {
+    console.error('[GET /api/orders]', err)
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' })
+  }
+})
+
 router.get('/:order_id', async (req, res) => {
   const { order_id } = req.params
 
