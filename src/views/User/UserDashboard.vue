@@ -93,6 +93,11 @@ const fetchProducts = async () => {
     const data = await res.json()
     const arr = Array.isArray(data) ? data : (data.data ?? data.products ?? [])
     products.value = arr.map((p) => ({
+      preorderEnabled: Boolean(p.preorderEnabled ?? p.isPreorder ?? false),
+      readyToShipEnabled:
+        p.readyToShipEnabled != null || p.isReadyToShip != null
+          ? Boolean(p.readyToShipEnabled ?? p.isReadyToShip)
+          : !(p.preorderEnabled ?? p.isPreorder ?? false),
       imageUrls: [
         ...(Array.isArray(p.imageUrls) ? p.imageUrls : []),
         ...(Array.isArray(p.images) ? p.images : []),
@@ -107,6 +112,10 @@ const fetchProducts = async () => {
       categoryName: p.categoryName ?? '',
       stock: p.stock ?? 0,
       isPreorder: Boolean(p.preorderEnabled ?? p.isPreorder ?? false),
+      isReadyToShip:
+        p.readyToShipEnabled != null || p.isReadyToShip != null
+          ? Boolean(p.readyToShipEnabled ?? p.isReadyToShip)
+          : !(p.preorderEnabled ?? p.isPreorder ?? false),
     }))
   } catch (err) {
     error.value = err.message
@@ -138,6 +147,12 @@ const addToCart = async (product, flavor = '', qty = 1) => {
     return
   }
 
+  const itemType = getEffectiveItemType(product)
+  if (!itemType) {
+    showNotice('สินค้านี้ยังไม่เปิดขาย', 'warn')
+    return
+  }
+
   cartLoading.value = { ...cartLoading.value, [product.id]: true }
 
   try {
@@ -145,7 +160,7 @@ const addToCart = async (product, flavor = '', qty = 1) => {
       user_id: user.id,
       prod_id: product.id,
       qty: Math.max(1, Number(qty) || 1),
-      item_type: product.isPreorder ? 'preorder' : 'ready-to-ship',
+      item_type: itemType,
       flavor: String(flavor || '').trim() || product.flavors?.[0] || '',
     }
 
@@ -238,6 +253,56 @@ function showNotice(msg, type = 'success') {
   }, 3500)
 }
 
+function getEffectiveItemType(product) {
+  const supportsPreorder = Boolean(product?.isPreorder)
+  const supportsReadyToShip = Boolean(product?.isReadyToShip)
+
+  if (activeTab.value === 'พรีออเดอร์' && supportsPreorder) {
+    return 'preorder'
+  }
+
+  if (activeTab.value === 'พร้อมส่ง' && supportsReadyToShip) {
+    return 'ready-to-ship'
+  }
+
+  if (supportsReadyToShip && !supportsPreorder) {
+    return 'ready-to-ship'
+  }
+
+  if (supportsPreorder && !supportsReadyToShip) {
+    return 'preorder'
+  }
+
+  if (supportsReadyToShip) {
+    return 'ready-to-ship'
+  }
+
+  if (supportsPreorder) {
+    return 'preorder'
+  }
+
+  return ''
+}
+
+function getProductTypeLabel(product) {
+  const supportsPreorder = Boolean(product?.isPreorder)
+  const supportsReadyToShip = Boolean(product?.isReadyToShip)
+
+  if (supportsReadyToShip && supportsPreorder) {
+    return 'พร้อมส่ง / พรีออเดอร์'
+  }
+
+  if (supportsReadyToShip) {
+    return 'พร้อมส่ง'
+  }
+
+  if (supportsPreorder) {
+    return 'พรีออเดอร์'
+  }
+
+  return 'ไม่ระบุ'
+}
+
 // ── FILTERING ──
 const filteredProducts = computed(() => {
   let list = products.value
@@ -245,7 +310,7 @@ const filteredProducts = computed(() => {
   if (activeTab.value === 'พรีออเดอร์') {
     list = list.filter((p) => p.isPreorder)
   } else if (activeTab.value === 'พร้อมส่ง') {
-    list = list.filter((p) => !p.isPreorder)
+    list = list.filter((p) => p.isReadyToShip)
   }
 
   if (activeCategory.value !== null) {
@@ -695,7 +760,7 @@ onMounted(async () => {
                 <div class="detail-meta">
                   <span class="detail-meta__label">ประเภท</span>
                   <strong class="detail-meta__value">{{
-                    selectedProduct.isPreorder ? 'พรีออเดอร์' : 'พร้อมส่ง'
+                    getProductTypeLabel(selectedProduct)
                   }}</strong>
                 </div>
               </div>

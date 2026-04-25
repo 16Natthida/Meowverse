@@ -9,8 +9,20 @@
 import express from 'express'
 const router = express.Router()
 
+let orderDetailsSupportsFlavor = null
+
 function getDB(req) {
   return req.app.locals.db
+}
+
+async function canUseOrderDetailFlavor(connection) {
+  if (orderDetailsSupportsFlavor !== null) {
+    return orderDetailsSupportsFlavor
+  }
+
+  const [rows] = await connection.query("SHOW COLUMNS FROM order_details LIKE 'flavor'")
+  orderDetailsSupportsFlavor = rows.length > 0
+  return orderDetailsSupportsFlavor
 }
 
 // ─────────────────────────────────────────────
@@ -47,7 +59,7 @@ router.post('/checkout', async (req, res) => {
        LEFT JOIN products p ON c.prod_id = p.prod_id
        WHERE c.user_id = ?
        ORDER BY c.cart_id`,
-      [user_id]
+      [user_id],
     )
 
     if (cartItems.length === 0) {
@@ -60,32 +72,39 @@ router.post('/checkout', async (req, res) => {
       if (item.item_type === 'ready-to-ship' && item.qty > item.stock) {
         await connection.rollback()
         return res.status(400).json({
-          error: `สินค้า "${item.name}" มีสต็อกไม่เพียงพอ (เหลือ ${item.stock} ชิ้น)`
+          error: `สินค้า "${item.name}" มีสต็อกไม่เพียงพอ (เหลือ ${item.stock} ชิ้น)`,
         })
       }
     }
 
     // 3. คำนวณราคารวมและกำหนดประเภทออเดอร์
-    const totalAmount = cartItems.reduce((sum, item) => sum + (item.price * item.qty), 0)
-    const hasPreorder = cartItems.some(item => item.item_type === 'preorder')
+    const totalAmount = cartItems.reduce((sum, item) => sum + item.price * item.qty, 0)
+    const hasPreorder = cartItems.some((item) => item.item_type === 'preorder')
     const orderType = hasPreorder ? 'Preorder' : 'Ready'
 
     // 4. สร้างออเดอร์
     const [orderResult] = await connection.query(
       'INSERT INTO orders (user_id, total_amount, status, Order_type) VALUES (?, ?, ?, ?)',
-      [user_id, totalAmount, 'Pending', orderType]
+      [user_id, totalAmount, 'Pending', orderType],
     )
 
     const orderId = orderResult.insertId
 
-    // 5. สร้าง order_details
-   // ในไฟล์ order.js ส่วนการวนลูป INSERT order_details
-for (const item of cartItems) {
-  await connection.query(
-    'INSERT INTO order_details (order_id, prod_id, flavor, Price, qty, received_qty, arrival_status, Import_fee) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [orderId, item.prod_id, item.flavor, item.price, item.qty, 0, 'Pending', 0.00]
-  );
-}
+    // 5. สร้าง order_details (รองรับ schema เก่าที่ไม่มีคอลัมน์ flavor)
+    const supportsFlavor = await canUseOrderDetailFlavor(connection)
+    for (const item of cartItems) {
+      if (supportsFlavor) {
+        await connection.query(
+          'INSERT INTO order_details (order_id, prod_id, flavor, Price, qty, received_qty, arrival_status, Import_fee) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          [orderId, item.prod_id, item.flavor || null, item.price, item.qty, 0, 'Pending', 0.0],
+        )
+      } else {
+        await connection.query(
+          'INSERT INTO order_details (order_id, prod_id, Price, qty, received_qty, arrival_status, Import_fee) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [orderId, item.prod_id, item.price, item.qty, 0, 'Pending', 0.0],
+        )
+      }
+    }
 
     // 6. ลบรายการในตะกร้า
     await connection.query('DELETE FROM cart WHERE user_id = ?', [user_id])
@@ -93,10 +112,10 @@ for (const item of cartItems) {
     // 7. ลดสต็อกสำหรับสินค้าที่พร้อมส่ง
     for (const item of cartItems) {
       if (item.item_type === 'ready-to-ship') {
-        await connection.query(
-          'UPDATE products SET stock_qty = stock_qty - ? WHERE prod_id = ?',
-          [item.qty, item.prod_id]
-        )
+        await connection.query('UPDATE products SET stock_qty = stock_qty - ? WHERE prod_id = ?', [
+          item.qty,
+          item.prod_id,
+        ])
       }
     }
 
@@ -106,9 +125,8 @@ for (const item of cartItems) {
       message: 'สร้างออเดอร์สำเร็จ',
       order_id: orderId,
       total_amount: totalAmount,
-      item_count: cartItems.length
+      item_count: cartItems.length,
     })
-
   } catch (err) {
     await connection.rollback()
     console.error('[POST /api/orders/checkout]', err)
@@ -148,7 +166,7 @@ router.get('/', async (req, res) => {
        FROM orders
        WHERE user_id = ?
        ORDER BY Order_date DESC`,
-      [user_id]
+      [user_id],
     )
 
     res.json(rows)
@@ -180,7 +198,7 @@ router.get('/:order_id', async (req, res) => {
        LEFT JOIN accounts a ON o.user_id = a.user_id
        WHERE o.order_id = ?
        LIMIT 1`,
-      [order_id]
+      [order_id],
     )
 
     if (orderRows.length === 0) {
@@ -214,14 +232,13 @@ router.get('/:order_id', async (req, res) => {
        LEFT JOIN products p ON od.prod_id = p.prod_id
        WHERE od.order_id = ?
        ORDER BY od.detail_id`,
-      [order_id]
+      [order_id],
     )
 
     res.json({
       ...order,
-      items: detailRows
+      items: detailRows,
     })
-
   } catch (err) {
     console.error('[GET /api/orders/:order_id]', err)
     res.status(500).json({ error: 'เกิดข้อผิดพลาดในการดึงข้อมูลออเดอร์' })
