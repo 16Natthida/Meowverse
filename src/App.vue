@@ -32,6 +32,10 @@ const pageTitle = computed(() => {
     return 'จัดการสต็อกสินค้า'
   }
 
+  if (route.path === '/admin/preorder-rounds') {
+    return 'รอบนำเข้าสินค้า'
+  }
+
   return 'แดชบอร์ด'
 })
 
@@ -179,6 +183,7 @@ onMounted(() => {
         <nav class="menu-list" aria-label="เมนูหลัก">
           <RouterLink to="/admin/home">แดชบอร์ด</RouterLink>
           <RouterLink to="/admin/products">สินค้า</RouterLink>
+          <RouterLink to="/admin/preorder-rounds">รอบนำเข้าสินค้า</RouterLink>
           <RouterLink to="/admin/adduser">เพิ่ม User</RouterLink>
         </nav>
       </div>

@@ -6,6 +6,7 @@ import { useAuth } from '../../composables/useAuth'
 const router = useRouter()
 const { getUser } = useAuth()
 const currentUser = computed(() => getUser())
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 
 const cartItems = ref([])
 const loading = ref(true)
@@ -14,17 +15,22 @@ const notice = ref({ msg: '', type: '' })
 const updatingId = ref(null)
 const deletingId = ref(null)
 
+function resolveUserId(user) {
+  return user?.id ?? user?.user_id ?? null
+}
+
 // ── FETCH CART ──
 const fetchCart = async () => {
   const user = currentUser.value
-  if (!user?.id) {
+  const userId = resolveUserId(user)
+  if (!userId) {
     router.push('/login')
     return
   }
   try {
     loading.value = true
     error.value = null
-    const res = await fetch(`http://localhost:3001/api/cart?user_id=${user.id}`)
+    const res = await fetch(`${API_BASE_URL}/cart?user_id=${userId}`)
     if (!res.ok) throw new Error(`ดึงข้อมูลตะกร้าไม่สำเร็จ (${res.status})`)
     const data = await res.json()
     // รองรับทั้ง array และ { items: [...] }
@@ -59,7 +65,7 @@ const updateQty = async (item, newQty) => {
   }
   updatingId.value = item.cart_id
   try {
-    const res = await fetch(`http://localhost:3001/api/cart/${item.cart_id}`, {
+    const res = await fetch(`${API_BASE_URL}/cart/${item.cart_id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ qty: newQty }),
@@ -80,7 +86,7 @@ const updateQty = async (item, newQty) => {
 const removeItem = async (item) => {
   deletingId.value = item.cart_id
   try {
-    const res = await fetch(`http://localhost:3001/api/cart/${item.cart_id}`, {
+    const res = await fetch(`${API_BASE_URL}/cart/${item.cart_id}`, {
       method: 'DELETE',
     })
     if (!res.ok) {
@@ -116,7 +122,8 @@ function goBack() {
 // ── CHECKOUT ──
 const checkout = async () => {
   const user = currentUser.value
-  if (!user?.id) {
+  const userId = resolveUserId(user)
+  if (!userId) {
     router.push('/login')
     return
   }
@@ -127,10 +134,10 @@ const checkout = async () => {
   }
 
   try {
-    const res = await fetch('http://localhost:3001/api/orders/checkout', {
+    const res = await fetch(`${API_BASE_URL}/orders/checkout`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: user.id }),
+      body: JSON.stringify({ user_id: userId }),
     })
 
     if (!res.ok) {
@@ -145,7 +152,6 @@ const checkout = async () => {
     setTimeout(() => {
       router.push(`/order/${data.order_id}`)
     }, 1500)
-
   } catch (err) {
     showNotice(err.message, 'error')
   }

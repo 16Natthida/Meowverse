@@ -159,7 +159,6 @@ async function loadDashboardData() {
   }
 }
 
-
 // ── SLIP MANAGEMENT ──
 const payments = ref([])
 const slipLoading = ref(false)
@@ -209,11 +208,21 @@ function closeSlip() {
   selectedSlip.value = null
 }
 
+function resolveSlipUrl(value) {
+  const url = String(value || '').trim()
+  if (!url) return ''
+  if (/^https?:\/\//i.test(url)) return url
+  return url.startsWith('/') ? url : `/${url}`
+}
+
 function formatDate(d) {
   if (!d) return '-'
   return new Date(d).toLocaleString('th-TH', {
-    year: 'numeric', month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
   })
 }
 
@@ -246,6 +255,9 @@ onBeforeUnmount(() => {
       <div class="hero-actions">
         <RouterLink class="hero-btn hero-btn--primary" to="/admin/products"
           >จัดการสินค้า</RouterLink
+        >
+        <RouterLink class="hero-btn hero-btn--primary" to="/admin/preorder-rounds"
+          >รอบนำเข้าสินค้า</RouterLink
         >
         <a class="hero-btn hero-btn--ghost" href="#stock-alerts">ดูสต็อกใกล้หมด</a>
       </div>
@@ -465,11 +477,19 @@ onBeforeUnmount(() => {
               <td>#{{ pay.pay_id }}</td>
               <td>#{{ pay.order_id }}</td>
               <td>{{ pay.type }}</td>
-              <td>฿{{ Number(pay.amount).toLocaleString('th-TH', { minimumFractionDigits: 2 }) }}</td>
+              <td>
+                ฿{{ Number(pay.amount).toLocaleString('th-TH', { minimumFractionDigits: 2 }) }}
+              </td>
               <td>{{ pay.payment_method || '-' }}</td>
               <td>{{ formatDate(pay.Slip_date) }}</td>
               <td>
-                <span class="status-pill" :style="{ color: (statusLabel[pay.status] || {}).color || '#888', background: (statusLabel[pay.status] || {}).bg || '#f5f5f5' }">
+                <span
+                  class="status-pill"
+                  :style="{
+                    color: (statusLabel[pay.status] || {}).color || '#888',
+                    background: (statusLabel[pay.status] || {}).bg || '#f5f5f5',
+                  }"
+                >
                   {{ (statusLabel[pay.status] || {}).text || pay.status }}
                 </span>
               </td>
@@ -481,8 +501,12 @@ onBeforeUnmount(() => {
               </td>
               <td>
                 <div class="action-btns" v-if="pay.status === 'Pending'">
-                  <button class="btn-approve" @click="updatePaymentStatus(pay.pay_id, 'Approved')">✓ อนุมัติ</button>
-                  <button class="btn-reject" @click="updatePaymentStatus(pay.pay_id, 'Rejected')">✕ ปฏิเสธ</button>
+                  <button class="btn-approve" @click="updatePaymentStatus(pay.pay_id, 'Approved')">
+                    ✓ อนุมัติ
+                  </button>
+                  <button class="btn-reject" @click="updatePaymentStatus(pay.pay_id, 'Rejected')">
+                    ✕ ปฏิเสธ
+                  </button>
                 </div>
                 <span v-else class="done-text">ดำเนินการแล้ว</span>
               </td>
@@ -501,21 +525,36 @@ onBeforeUnmount(() => {
             <button class="close-btn" @click="closeSlip">✕</button>
           </div>
           <div class="slip-modal-body">
-            <img :src="`http://localhost:3001${selectedSlip.slip_img}`" class="slip-img-full" alt="slip" />
+            <img :src="resolveSlipUrl(selectedSlip.slip_img)" class="slip-img-full" alt="slip" />
           </div>
           <div class="slip-modal-foot" v-if="selectedSlip.status === 'Pending'">
-            <button class="btn-approve" @click="updatePaymentStatus(selectedSlip.pay_id, 'Approved')">✓ อนุมัติ</button>
-            <button class="btn-reject" @click="updatePaymentStatus(selectedSlip.pay_id, 'Rejected')">✕ ปฏิเสธ</button>
+            <button
+              class="btn-approve"
+              @click="updatePaymentStatus(selectedSlip.pay_id, 'Approved')"
+            >
+              ✓ อนุมัติ
+            </button>
+            <button
+              class="btn-reject"
+              @click="updatePaymentStatus(selectedSlip.pay_id, 'Rejected')"
+            >
+              ✕ ปฏิเสธ
+            </button>
           </div>
           <div class="slip-modal-foot" v-else>
-            <span class="status-pill" :style="{ color: (statusLabel[selectedSlip.status] || {}).color, background: (statusLabel[selectedSlip.status] || {}).bg }">
+            <span
+              class="status-pill"
+              :style="{
+                color: (statusLabel[selectedSlip.status] || {}).color,
+                background: (statusLabel[selectedSlip.status] || {}).bg,
+              }"
+            >
               {{ (statusLabel[selectedSlip.status] || {}).text }}
             </span>
           </div>
         </div>
       </div>
     </transition>
-
   </div>
 </template>
 
@@ -940,7 +979,9 @@ td {
 }
 
 /* ── SLIP SECTION ── */
-.slip-section { overflow: visible; }
+.slip-section {
+  overflow: visible;
+}
 
 .status-pill {
   display: inline-block;
@@ -960,54 +1001,117 @@ td {
   font-weight: 700;
   cursor: pointer;
 }
-.slip-view-btn:hover { background: #ede0ff; }
+.slip-view-btn:hover {
+  background: #ede0ff;
+}
 
-.no-slip { color: #bbb; font-size: 0.78rem; }
+.no-slip {
+  color: #bbb;
+  font-size: 0.78rem;
+}
 
-.action-btns { display: flex; gap: 6px; }
+.action-btns {
+  display: flex;
+  gap: 6px;
+}
 
 .btn-approve {
-  background: #ecfdf5; color: #059669; border: 1px solid #6ee7b7;
-  border-radius: 8px; padding: 4px 10px; font-size: 0.78rem;
-  font-weight: 700; cursor: pointer;
+  background: #ecfdf5;
+  color: #059669;
+  border: 1px solid #6ee7b7;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
 }
-.btn-approve:hover { background: #d1fae5; }
+.btn-approve:hover {
+  background: #d1fae5;
+}
 
 .btn-reject {
-  background: #fef2f2; color: #dc2626; border: 1px solid #fca5a5;
-  border-radius: 8px; padding: 4px 10px; font-size: 0.78rem;
-  font-weight: 700; cursor: pointer;
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fca5a5;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
 }
-.btn-reject:hover { background: #fee2e2; }
+.btn-reject:hover {
+  background: #fee2e2;
+}
 
-.done-text { font-size: 0.78rem; color: #aaa; }
+.done-text {
+  font-size: 0.78rem;
+  color: #aaa;
+}
 
 /* SLIP MODAL */
 .slip-modal-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.55);
-  z-index: 1000; display: flex; align-items: center; justify-content: center;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .slip-modal {
-  background: #fff; border-radius: 18px; width: 480px; max-width: 95vw;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.2); overflow: hidden;
+  background: #fff;
+  border-radius: 18px;
+  width: 480px;
+  max-width: 95vw;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
 }
 .slip-modal-head {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 1rem 1.25rem; border-bottom: 1px solid #eadff5;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #eadff5;
 }
-.slip-modal-head h3 { font-weight: 900; color: #3f2f5d; }
+.slip-modal-head h3 {
+  font-weight: 900;
+  color: #3f2f5d;
+}
 .close-btn {
-  background: #f5f0ff; border: none; border-radius: 50%;
-  width: 30px; height: 30px; cursor: pointer; font-size: 0.9rem; color: #6f50a0;
+  background: #f5f0ff;
+  border: none;
+  border-radius: 50%;
+  width: 30px;
+  height: 30px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: #6f50a0;
 }
-.slip-modal-body { padding: 1rem; background: #fafafa; text-align: center; }
-.slip-img-full { max-width: 100%; max-height: 420px; border-radius: 10px; object-fit: contain; }
+.slip-modal-body {
+  padding: 1rem;
+  background: #fafafa;
+  text-align: center;
+}
+.slip-img-full {
+  max-width: 100%;
+  max-height: 420px;
+  border-radius: 10px;
+  object-fit: contain;
+}
 .slip-modal-foot {
-  padding: 1rem 1.25rem; border-top: 1px solid #eadff5;
-  display: flex; gap: 0.75rem; justify-content: flex-end;
+  padding: 1rem 1.25rem;
+  border-top: 1px solid #eadff5;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
 }
 
-.fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
-.fade-enter-from, .fade-leave-to { opacity: 0; }
-
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
 </style>

@@ -47,7 +47,7 @@ const router = createRouter({
     // เปลี่ยนจาก ./ เป็น ../
 { path: '/cart', component: () => import('../views/User/CartPage.vue') },
 { path: '/order/:orderId', component: () => import('../views/User/OrderSummary.vue'), meta: { requiresAuth: true, roles: ['user'] } },
-{ path: '/order-list', component: () => import('../views/User/OrderList.vue'), meta: { requiresAuth: true, roles: ['user'] } },
+{ path: '/order-list', component: () => import('../views/User/Orderlist.vue'), meta: { requiresAuth: true, roles: ['user'] } },
     {
       path: '/admin',
       redirect: '/admin/home',
@@ -78,6 +78,12 @@ const router = createRouter({
       path: '/admin/adduser',
       name: 'admin-add-user',
       component: () => import('../views/Admin/Adduser.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/admin/preorder-rounds',
+      name: 'admin-preorder-rounds',
+      component: () => import('../views/Admin/Preorder_lots.vue'),
       meta: { requiresAuth: true, roles: ['admin'] },
     },
     {

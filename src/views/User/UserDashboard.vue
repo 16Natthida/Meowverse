@@ -5,6 +5,7 @@ import { useAuth } from '../../composables/useAuth'
 
 const router = useRouter()
 const { logout, getUser } = useAuth()
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 
 const currentUser = computed(() => getUser())
 const activeTab = ref('พร้อมส่ง')
@@ -69,7 +70,7 @@ function parseFlavorList(value) {
 // ── FETCH CATEGORIES ──
 const fetchCategories = async () => {
   try {
-    const res = await fetch('http://localhost:3001/api/categories')
+    const res = await fetch(`${API_BASE_URL}/categories`)
     if (!res.ok) throw new Error(`categories API ${res.status}`)
     const data = await res.json()
     const arr = Array.isArray(data) ? data : (data.data ?? data.categories ?? [])
@@ -88,7 +89,7 @@ const fetchProducts = async () => {
   try {
     loading.value = true
     error.value = null
-    const res = await fetch('http://localhost:3001/api/products')
+    const res = await fetch(`${API_BASE_URL}/products`)
     if (!res.ok) throw new Error('Failed to fetch products')
     const data = await res.json()
     const arr = Array.isArray(data) ? data : (data.data ?? data.products ?? [])
@@ -129,7 +130,7 @@ const fetchCartCount = async () => {
   const user = currentUser.value
   if (!user?.id) return
   try {
-    const res = await fetch(`http://localhost:3001/api/cart?user_id=${user.id}`)
+    const res = await fetch(`${API_BASE_URL}/cart?user_id=${user.id}`)
     if (!res.ok) return
     const data = await res.json()
     const arr = Array.isArray(data) ? data : (data.items ?? [])
@@ -164,7 +165,7 @@ const addToCart = async (product, flavor = '', qty = 1) => {
       flavor: String(flavor || '').trim() || product.flavors?.[0] || '',
     }
 
-    const res = await fetch('http://localhost:3001/api/cart', {
+    const res = await fetch(`${API_BASE_URL}/cart`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

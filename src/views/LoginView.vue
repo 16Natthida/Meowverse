@@ -13,7 +13,7 @@ const password = ref('')
 const remember = ref(true)
 const error = ref('')
 
-const BACKEND_URL = import.meta.env.VITE_API_BASE || 'http://localhost:3001'
+const BACKEND_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 
 async function onSubmit() {
   error.value = ''
