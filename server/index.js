@@ -20,6 +20,12 @@ const port = Number(process.env.API_PORT) || 3001
 const frontendOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:5173'
 const CATEGORY_NAME_MAX_LENGTH = 100
 const CATEGORY_DETAIL_MAX_LENGTH = 255
+const CATEGORY_MIN_COUNT = 4
+const CATEGORY_MAX_COUNT = 5
+const DEFAULT_BANNER_IMAGE_URL = '/images/cat.jpg'
+const DEFAULT_BRAND_LOGO_URL = ''
+const DEFAULT_THEME_PRIMARY = '#b673ee'
+const DEFAULT_THEME_ACCENT = '#ff93b8'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -219,11 +225,47 @@ app.post('/api/users', authenticateToken, requireAdmin, async (req, res) => {
   }
 })
 
+app.delete('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res) => {
+  const targetUserId = Number(req.params.id)
+
+  if (!Number.isFinite(targetUserId) || targetUserId <= 0) {
+    return res.status(400).json({ error: 'Invalid user id' })
+  }
+
+  if (req.user?.id && Number(req.user.id) === targetUserId) {
+    return res.status(400).json({ error: 'You cannot delete your own account' })
+  }
+
+  try {
+    const [result] = await pool.query('DELETE FROM accounts WHERE user_id = ?', [targetUserId])
+
+    if (!result.affectedRows) {
+      return res.status(404).json({ error: 'User not found' })
+    }
+
+    return res.json({ message: 'User deleted successfully' })
+  } catch (error) {
+    return res.status(500).json({ error: error.message })
+  }
+})
+
 function toBooleanNumber(value) {
   return value ? 1 : 0
 }
 
 function mapProductRow(row, imageUrlMap) {
+  // Parse flavor_stock JSON (e.g., {"Lavender 6L": 1, "Apple 6L": 1})
+  let flavorStockMap = {}
+  try {
+    if (row.flavorStock) {
+      flavorStockMap =
+        typeof row.flavorStock === 'string' ? JSON.parse(row.flavorStock) : row.flavorStock
+    }
+  } catch (error) {
+    console.warn('Failed to parse flavorStock for product', row.id, error)
+    flavorStockMap = {}
+  }
+
   return {
     id: row.id,
     name: row.name,
@@ -231,6 +273,7 @@ function mapProductRow(row, imageUrlMap) {
     categoryId: row.categoryId,
     categoryName: row.categoryName || '',
     stock: Number(row.stock) || 0,
+    flavorStock: flavorStockMap,
     basePrice: Number(row.basePrice) || 0,
     description: row.description || '',
     flavors: parseFlavorList(row.flavors),
@@ -283,6 +326,7 @@ async function queryProductsByIds(productIds, connection = pool) {
         p.sku AS sku,
         p.description AS description,
         p.flavors AS flavors,
+        p.flavor_stock AS flavorStock,
         p.cat_id AS categoryId,
         c.cat_name AS categoryName,
         p.stock_qty AS stock,
@@ -422,6 +466,15 @@ async function ensureAdminSchema() {
   `)
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS site_settings (
+      setting_key VARCHAR(100) NOT NULL,
+      setting_value TEXT NOT NULL,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (setting_key)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+  `)
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS preorder_round_products (
       link_id INT NOT NULL AUTO_INCREMENT,
       round_id INT NOT NULL,
@@ -515,6 +568,16 @@ app.post('/api/categories', async (req, res) => {
   }
 
   try {
+    const [countRows] = await pool.query('SELECT COUNT(*) AS total FROM categories')
+    const totalCategories = Number(countRows?.[0]?.total) || 0
+
+    if (totalCategories >= CATEGORY_MAX_COUNT) {
+      res.status(400).json({
+        message: `You can create up to ${CATEGORY_MAX_COUNT} categories only.`,
+      })
+      return
+    }
+
     const [existingRows] = await pool.query(
       'SELECT cat_id AS id FROM categories WHERE cat_name = ? LIMIT 1',
       [name],
@@ -535,6 +598,52 @@ app.post('/api/categories', async (req, res) => {
       name,
       detail,
     })
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
+
+app.delete('/api/categories/:id', async (req, res) => {
+  const categoryId = Number(req.params.id)
+  if (!Number.isInteger(categoryId) || categoryId <= 0) {
+    res.status(400).json({ message: 'Valid category id is required.' })
+    return
+  }
+
+  try {
+    const [categoryRows] = await pool.query(
+      'SELECT cat_id AS id FROM categories WHERE cat_id = ? LIMIT 1',
+      [categoryId],
+    )
+
+    if (categoryRows.length === 0) {
+      res.status(404).json({ message: 'Category not found.' })
+      return
+    }
+
+    const [countRows] = await pool.query('SELECT COUNT(*) AS total FROM categories')
+    const totalCategories = Number(countRows?.[0]?.total) || 0
+    if (totalCategories <= CATEGORY_MIN_COUNT) {
+      res.status(400).json({
+        message: `At least ${CATEGORY_MIN_COUNT} categories are required.`,
+      })
+      return
+    }
+
+    const [productRows] = await pool.query(
+      'SELECT COUNT(*) AS total FROM products WHERE cat_id = ?',
+      [categoryId],
+    )
+    const totalProducts = Number(productRows?.[0]?.total) || 0
+    if (totalProducts > 0) {
+      res.status(409).json({
+        message: 'Cannot delete category because products still exist in this category.',
+      })
+      return
+    }
+
+    await pool.query('DELETE FROM categories WHERE cat_id = ?', [categoryId])
+    res.status(204).send()
   } catch (error) {
     res.status(500).json({ message: error.message })
   }
@@ -561,6 +670,127 @@ app.post('/api/uploads/images', upload.single('image'), (req, res) => {
   })
 })
 
+app.get('/api/site-settings/banner', async (_req, res) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT setting_value AS imageUrl FROM site_settings WHERE setting_key = ? LIMIT 1',
+      ['homepage_banner_image'],
+    )
+
+    res.json({
+      imageUrl: rows[0]?.imageUrl || DEFAULT_BANNER_IMAGE_URL,
+    })
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
+
+app.get('/api/site-settings/logo', async (_req, res) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT setting_value AS imageUrl FROM site_settings WHERE setting_key = ? LIMIT 1',
+      ['brand_logo_image'],
+    )
+
+    res.json({
+      imageUrl: rows[0]?.imageUrl || DEFAULT_BRAND_LOGO_URL,
+    })
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
+
+app.get('/api/site-settings/theme', async (_req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `
+        SELECT setting_key, setting_value
+        FROM site_settings
+        WHERE setting_key IN (?, ?)
+      `,
+      ['theme_primary', 'theme_accent'],
+    )
+
+    const settingsMap = new Map(rows.map((row) => [row.setting_key, row.setting_value]))
+
+    res.json({
+      primary: settingsMap.get('theme_primary') || DEFAULT_THEME_PRIMARY,
+      accent: settingsMap.get('theme_accent') || DEFAULT_THEME_ACCENT,
+    })
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
+
+app.put('/api/site-settings/banner', authenticateToken, requireAdmin, async (req, res) => {
+  const imageUrl = String(req.body?.imageUrl || '').trim()
+
+  if (!imageUrl) {
+    res.status(400).json({ message: 'imageUrl is required.' })
+    return
+  }
+
+  try {
+    await pool.query(
+      `
+        INSERT INTO site_settings (setting_key, setting_value)
+        VALUES (?, ?)
+        ON DUPLICATE KEY UPDATE setting_value = ?, updated_at = CURRENT_TIMESTAMP
+      `,
+      ['homepage_banner_image', imageUrl, imageUrl],
+    )
+
+    res.json({ imageUrl })
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
+
+app.put('/api/site-settings/logo', authenticateToken, requireAdmin, async (req, res) => {
+  const imageUrl = String(req.body?.imageUrl || '').trim()
+
+  try {
+    await pool.query(
+      `
+        INSERT INTO site_settings (setting_key, setting_value)
+        VALUES (?, ?)
+        ON DUPLICATE KEY UPDATE setting_value = ?, updated_at = CURRENT_TIMESTAMP
+      `,
+      ['brand_logo_image', imageUrl, imageUrl],
+    )
+
+    res.json({ imageUrl })
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
+
+app.put('/api/site-settings/theme', authenticateToken, requireAdmin, async (req, res) => {
+  const primary = String(req.body?.primary || '').trim()
+  const accent = String(req.body?.accent || '').trim()
+  const hexColorPattern = /^#([0-9a-fA-F]{6})$/
+
+  if (!hexColorPattern.test(primary) || !hexColorPattern.test(accent)) {
+    res.status(400).json({ message: 'primary and accent must be 6-digit hex colors.' })
+    return
+  }
+
+  try {
+    await pool.query(
+      `
+        INSERT INTO site_settings (setting_key, setting_value)
+        VALUES (?, ?), (?, ?)
+        ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP
+      `,
+      ['theme_primary', primary, 'theme_accent', accent],
+    )
+
+    res.json({ primary, accent })
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
+
 app.post('/api/products', async (req, res) => {
   const payload = req.body || {}
 
@@ -577,15 +807,16 @@ app.post('/api/products', async (req, res) => {
     const [insertResult] = await connection.query(
       `
         INSERT INTO products
-          (cat_id, prod_name, description, flavors, stock_qty, base_price, sku, preorder_enabled, ready_to_ship_enabled)
+          (cat_id, prod_name, description, flavors, flavor_stock, stock_qty, base_price, sku, preorder_enabled, ready_to_ship_enabled)
         VALUES
-          (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         Number(payload.categoryId),
         String(payload.name).trim(),
         payload.description ? String(payload.description).trim() : null,
         serializeFlavorList(payload.flavors),
+        payload.flavorStock ? JSON.stringify(payload.flavorStock) : '{}',
         Number(payload.stock) || 0,
         Number(payload.basePrice) || 0,
         payload.sku ? String(payload.sku).trim() : null,
@@ -632,6 +863,7 @@ app.put('/api/products/:id', async (req, res) => {
           prod_name = ?,
           description = ?,
           flavors = ?,
+          flavor_stock = ?,
           stock_qty = ?,
           base_price = ?,
           sku = ?,
@@ -644,6 +876,7 @@ app.put('/api/products/:id', async (req, res) => {
         String(payload.name).trim(),
         payload.description ? String(payload.description).trim() : null,
         serializeFlavorList(payload.flavors),
+        payload.flavorStock ? JSON.stringify(payload.flavorStock) : '{}',
         Number(payload.stock) || 0,
         Number(payload.basePrice) || 0,
         payload.sku ? String(payload.sku).trim() : null,
@@ -1754,6 +1987,81 @@ app.patch('/api/payments/:pay_id/status', async (req, res) => {
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
+  }
+})
+
+// ─────────────────────────────────────────────
+// GET /api/admin/user-stats
+// ดึงจำนวน Users และ Admins ทั้งหมด
+// ─────────────────────────────────────────────
+app.get('/api/admin/user-stats', authenticateToken, requireAdmin, async (_req, res) => {
+  try {
+    const [userCountRows] = await pool.query(
+      'SELECT role, COUNT(*) AS count FROM accounts GROUP BY role',
+    )
+
+    let totalUsers = 0
+    let totalAdmins = 0
+
+    for (const row of userCountRows) {
+      if (row.role?.toLowerCase() === 'user') {
+        totalUsers = Number(row.count) || 0
+      } else if (row.role?.toLowerCase() === 'admin') {
+        totalAdmins = Number(row.count) || 0
+      }
+    }
+
+    res.json({
+      totalUsers,
+      totalAdmins,
+      totalAccounts: totalUsers + totalAdmins,
+    })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ─────────────────────────────────────────────
+// GET /api/admin/users
+// ดึงรายชื่อ users ทั้งหมด
+// ─────────────────────────────────────────────
+app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const searchQuery = String(req.query.search || '').trim()
+    const roleFilter = String(req.query.role || '').toLowerCase()
+
+    let query =
+      'SELECT user_id, username, full_name, role, phone_number, line_id, created_at FROM accounts WHERE 1=1'
+    const params = []
+
+    if (searchQuery) {
+      query += ' AND (username LIKE ? OR full_name LIKE ?)'
+      const searchPattern = `%${searchQuery}%`
+      params.push(searchPattern, searchPattern)
+    }
+
+    if (roleFilter && ['user', 'admin'].includes(roleFilter)) {
+      query += ' AND LOWER(role) = ?'
+      params.push(roleFilter)
+    }
+
+    query += ' ORDER BY created_at DESC'
+
+    const [rows] = await pool.query(query, params)
+
+    const users = rows.map((row) => ({
+      user_id: row.user_id,
+      username: row.username,
+      full_name: row.full_name,
+      role: row.role,
+      phone_number: row.phone_number || '',
+      line_id: row.line_id || '',
+      created_at: row.created_at ? new Date(row.created_at).toISOString().split('T')[0] : '-',
+    }))
+
+    res.json(users)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
   }
 })
 

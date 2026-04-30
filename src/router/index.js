@@ -3,6 +3,7 @@ import LoginView from '../views/LoginView.vue'
 import UserDashboard from '../views/User/UserDashboard.vue'
 import AdminDashboard from '../views/Admin/AdminDashboard.vue'
 import AdminHomeView from '../views/Admin/HomeView.vue'
+import SettingsView from '../views/Admin/SettingsView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -42,12 +43,20 @@ const router = createRouter({
       path: '/dashboard',
       name: 'userDashboard',
       component: UserDashboard,
-      meta: { requiresAuth: true, roles: ['user'] },
+      meta: { requiresAuth: true, roles: ['user', 'admin'] },
     },
     // เปลี่ยนจาก ./ เป็น ../
-{ path: '/cart', component: () => import('../views/User/CartPage.vue') },
-{ path: '/order/:orderId', component: () => import('../views/User/OrderSummary.vue'), meta: { requiresAuth: true, roles: ['user'] } },
-{ path: '/order-list', component: () => import('../views/User/Orderlist.vue'), meta: { requiresAuth: true, roles: ['user'] } },
+    { path: '/cart', component: () => import('../views/User/CartPage.vue') },
+    {
+      path: '/order/:orderId',
+      component: () => import('../views/User/OrderSummary.vue'),
+      meta: { requiresAuth: true, roles: ['user'] },
+    },
+    {
+      path: '/order-list',
+      component: () => import('../views/User/Orderlist.vue'),
+      meta: { requiresAuth: true, roles: ['user'] },
+    },
     {
       path: '/admin',
       redirect: '/admin/home',
@@ -56,6 +65,12 @@ const router = createRouter({
       path: '/admin/home',
       name: 'admin-home',
       component: AdminHomeView,
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/admin/settings',
+      name: 'admin-settings',
+      component: SettingsView,
       meta: { requiresAuth: true, roles: ['admin'] },
     },
     {
@@ -75,7 +90,13 @@ const router = createRouter({
       meta: { requiresAuth: true, roles: ['admin'] },
     },
     {
-      path: '/admin/adduser',
+      path: '/admin/users',
+      name: 'admin-users',
+      component: () => import('../views/Admin/UsersManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/admin/users/add',
       name: 'admin-add-user',
       component: () => import('../views/Admin/Adduser.vue'),
       meta: { requiresAuth: true, roles: ['admin'] },

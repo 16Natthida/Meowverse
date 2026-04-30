@@ -75,6 +75,14 @@ export function useAdminProductStore() {
     return newCategory
   }
 
+  async function deleteCategory(id) {
+    await requestJson(`/categories/${id}`, {
+      method: 'DELETE',
+    })
+
+    categories.value = categories.value.filter((category) => String(category.id) !== String(id))
+  }
+
   async function fetchProducts() {
     isLoadingProducts.value = true
 
@@ -107,6 +115,16 @@ export function useAdminProductStore() {
   }
 
   function getPayload(payload) {
+    const flavorStock =
+      payload.flavorStock && typeof payload.flavorStock === 'object'
+        ? Object.fromEntries(
+            Object.entries(payload.flavorStock).map(([flavor, qty]) => [
+              String(flavor || '').trim(),
+              Number(qty) || 0,
+            ]),
+          )
+        : {}
+
     return {
       name: payload.name,
       description: payload.description,
@@ -114,6 +132,7 @@ export function useAdminProductStore() {
       sku: payload.sku,
       categoryId: Number(payload.categoryId),
       stock: Number(payload.stock) || 0,
+      flavorStock,
       basePrice: Number(payload.basePrice) || 0,
       imageUrls: payload.imageUrls || [],
       preorderEnabled: Boolean(payload.preorderEnabled),
@@ -200,6 +219,7 @@ export function useAdminProductStore() {
     },
     fetchCategories,
     createCategory,
+    deleteCategory,
     fetchProducts,
     reloadProducts,
     uploadProductImage,

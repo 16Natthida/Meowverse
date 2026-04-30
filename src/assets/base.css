@@ -3,6 +3,8 @@
 :root {
   --app-bg: #f9f4fb;
   --app-text: #4b3b61;
+  --theme-primary: #b673ee;
+  --theme-accent: #ff93b8;
 }
 
 *,

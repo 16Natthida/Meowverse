@@ -24,6 +24,10 @@ const selectedProduct = ref(null)
 const selectedFlavor = ref('')
 const selectedPreviewIndex = ref(0)
 const detailQty = ref(1)
+const defaultBannerImageUrl = '/images/cat.jpg'
+const heroBannerImage = ref(defaultBannerImageUrl)
+const defaultLogoImageUrl = ''
+const logoImage = ref(defaultLogoImageUrl)
 
 const tabs = ['หน้าหลัก', 'พร้อมส่ง', 'พรีออเดอร์', 'ติดตามคำสั่งซื้อ', 'รายการออเดอร์']
 
@@ -67,6 +71,28 @@ function parseFlavorList(value) {
     .filter(Boolean)
 }
 
+function parseFlavorStock(value) {
+  if (!value) return {}
+
+  let data = value
+
+  if (typeof value === 'string') {
+    try {
+      data = JSON.parse(value)
+    } catch {
+      return {}
+    }
+  }
+
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return {}
+  }
+
+  return Object.fromEntries(
+    Object.entries(data).map(([flavor, qty]) => [String(flavor || '').trim(), Number(qty) || 0]),
+  )
+}
+
 // ── FETCH CATEGORIES ──
 const fetchCategories = async () => {
   try {
@@ -107,6 +133,7 @@ const fetchProducts = async () => {
       name: p.name,
       description: p.description || '',
       flavors: parseFlavorList(p.flavors),
+      flavorStock: parseFlavorStock(p.flavorStock ?? p.flavor_stock),
       price: p.basePrice ?? p.price ?? 0,
       image: p.imageUrls?.[0] ?? p.image_url?.[0] ?? p.imageUrl ?? p.image ?? null,
       categoryId: p.categoryId != null ? Number(p.categoryId) : null,
@@ -154,15 +181,29 @@ const addToCart = async (product, flavor = '', qty = 1) => {
     return
   }
 
+  // Check flavor stock
+  const flavorToAdd = String(flavor || '').trim() || product.flavors?.[0] || ''
+  const flavorStock = getFlavorStock(flavorToAdd)
+  if (flavorStock === 0) {
+    showNotice(`รสชาติ "${flavorToAdd}" หมดสต็อกแล้ว`, 'error')
+    return
+  }
+
+  const qtyToAdd = Math.max(1, Number(qty) || 1)
+  if (qtyToAdd > flavorStock) {
+    showNotice(`สต็อกของ "${flavorToAdd}" มีเพียง ${flavorStock} ชิ้นเท่านั้น`, 'error')
+    return
+  }
+
   cartLoading.value = { ...cartLoading.value, [product.id]: true }
 
   try {
     const payload = {
       user_id: user.id,
       prod_id: product.id,
-      qty: Math.max(1, Number(qty) || 1),
+      qty: qtyToAdd,
       item_type: itemType,
-      flavor: String(flavor || '').trim() || product.flavors?.[0] || '',
+      flavor: flavorToAdd,
     }
 
     const res = await fetch(`${API_BASE_URL}/cart`, {
@@ -213,7 +254,7 @@ function closeProductDetail() {
 }
 
 function increaseDetailQty() {
-  const stock = Number(selectedProduct.value?.stock) || 0
+  const stock = selectedFlavorStock.value || Number(selectedProduct.value?.stock) || 0
   if (stock > 0) {
     detailQty.value = Math.min(detailQty.value + 1, stock)
   }
@@ -243,6 +284,25 @@ const activeDetailImage = computed(() => {
 
   const safeIndex = Math.min(selectedPreviewIndex.value, detailImages.value.length - 1)
   return detailImages.value[safeIndex] || detailImages.value[0]
+})
+
+// ── GET FLAVOR STOCK ──
+const getFlavorStock = (flavor, product = selectedProduct.value) => {
+  if (!product) return 0
+
+  const key = String(flavor || '').trim()
+  const stockMap = product.flavorStock || {}
+
+  if (Object.prototype.hasOwnProperty.call(stockMap, key)) {
+    return Number(stockMap[key]) || 0
+  }
+
+  return 0
+}
+
+const selectedFlavorStock = computed(() => {
+  if (!selectedProduct.value) return 0
+  return getFlavorStock(selectedFlavor.value)
 })
 
 let noticeTimer = null
@@ -302,6 +362,20 @@ function getProductTypeLabel(product) {
   }
 
   return 'ไม่ระบุ'
+}
+
+function getCardBadge(product) {
+  const itemType = getEffectiveItemType(product)
+
+  if (itemType === 'ready-to-ship') {
+    return { label: 'พร้อมส่ง', className: 'badge--ready' }
+  }
+
+  if (itemType === 'preorder') {
+    return { label: 'พรีออเดอร์', className: 'badge--preorder' }
+  }
+
+  return null
 }
 
 // ── FILTERING ──
@@ -369,8 +443,78 @@ function getStockStatusClass(stock) {
   return 'badge--normal'
 }
 
+function resolveBannerImageUrl(value) {
+  const url = String(value || '').trim()
+  if (!url) {
+    return defaultBannerImageUrl
+  }
+
+  if (/^(https?:)?\/\//i.test(url) || url.startsWith('/') || url.startsWith('data:')) {
+    return url
+  }
+
+  return `/${url}`
+}
+
+function resolveLogoImageUrl(value) {
+  const url = String(value || '').trim()
+  if (!url) {
+    return defaultLogoImageUrl
+  }
+
+  if (/^(https?:)?\/\//i.test(url) || url.startsWith('/') || url.startsWith('data:')) {
+    return url
+  }
+
+  return `/${url}`
+}
+
+function appendCacheBuster(url) {
+  if (!url) {
+    return ''
+  }
+
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}v=${Date.now()}`
+}
+
+async function fetchBannerImage() {
+  try {
+    const res = await fetch(`${API_BASE_URL}/site-settings/banner`)
+    if (!res.ok) {
+      return
+    }
+
+    const data = await res.json()
+    heroBannerImage.value = resolveBannerImageUrl(data.imageUrl)
+  } catch (error) {
+    console.error('fetchBannerImage:', error)
+  }
+}
+
+async function fetchLogoImage() {
+  try {
+    const res = await fetch(`${API_BASE_URL}/site-settings/logo`)
+    if (!res.ok) {
+      return
+    }
+
+    const data = await res.json()
+    const resolved = resolveLogoImageUrl(data.imageUrl)
+    logoImage.value = resolved ? appendCacheBuster(resolved) : ''
+  } catch (error) {
+    console.error('fetchLogoImage:', error)
+  }
+}
+
 onMounted(async () => {
-  await Promise.all([fetchCategories(), fetchProducts(), fetchCartCount()])
+  await Promise.all([
+    fetchCategories(),
+    fetchProducts(),
+    fetchCartCount(),
+    fetchBannerImage(),
+    fetchLogoImage(),
+  ])
 })
 </script>
 
@@ -379,7 +523,8 @@ onMounted(async () => {
     <!-- ───── NAVBAR ───── -->
     <nav class="navbar">
       <div class="navbar__logo">
-        <span class="logo-icon">🐱</span>
+        <img v-if="logoImage" :src="logoImage" alt="Meowverse logo" class="logo-icon-img" />
+        <span v-else class="logo-icon">🐱</span>
         <span class="logo-text">Meowverse</span>
       </div>
 
@@ -488,29 +633,40 @@ onMounted(async () => {
         </div>
       </div>
       <div class="hero__image">
-        <img src="/images/cat.jpg" alt="Meowverse cat" class="hero__cat-img" />
+        <img :src="heroBannerImage" alt="Meowverse banner" class="hero__cat-img" />
       </div>
     </section>
 
     <!-- ───── CATEGORY ICON ROW ───── -->
     <section class="categories">
-      <button
-        :class="['cat-btn', { 'cat-btn--active': activeCategory === null }]"
-        @click="handleCategoryClick(null)"
-      >
-        <span class="cat-btn__icon">🐾</span>
-        <span class="cat-btn__label">ทั้งหมด</span>
-      </button>
+      <div class="categories__header">
+        <div>
+          <p class="categories__eyebrow">Browse by category</p>
+          <h2 class="categories__title">หมวดหมู่สินค้า</h2>
+          <p class="categories__subtitle">แตะเพื่อกรองสินค้าที่คุณต้องการได้เร็วขึ้น</p>
+        </div>
+        <div class="categories__badge">{{ categories.length }} หมวด</div>
+      </div>
 
-      <button
-        v-for="cat in categories"
-        :key="cat.id"
-        :class="['cat-btn', { 'cat-btn--active': activeCategory === cat.id }]"
-        @click="handleCategoryClick(cat.id)"
-      >
-        <span class="cat-btn__icon">{{ cat.icon }}</span>
-        <span class="cat-btn__label">{{ cat.name }}</span>
-      </button>
+      <div class="categories__track">
+        <button
+          :class="['cat-btn', { 'cat-btn--active': activeCategory === null }]"
+          @click="handleCategoryClick(null)"
+        >
+          <span class="cat-btn__icon">🐾</span>
+          <span class="cat-btn__label">ทั้งหมด</span>
+        </button>
+
+        <button
+          v-for="cat in categories"
+          :key="cat.id"
+          :class="['cat-btn', { 'cat-btn--active': activeCategory === cat.id }]"
+          @click="handleCategoryClick(cat.id)"
+        >
+          <span class="cat-btn__icon">{{ cat.icon }}</span>
+          <span class="cat-btn__label">{{ cat.name }}</span>
+        </button>
+      </div>
     </section>
 
     <!-- ───── PRODUCTS SECTION ───── -->
@@ -526,24 +682,6 @@ onMounted(async () => {
             }}
           </p>
         </div>
-      </div>
-
-      <!-- Filter pills -->
-      <div class="filter-row">
-        <button
-          :class="['filter-pill', { 'filter-pill--active': activeCategory === null }]"
-          @click="handleCategoryClick(null)"
-        >
-          ทั้งหมด
-        </button>
-        <button
-          v-for="cat in categories"
-          :key="cat.id"
-          :class="['filter-pill', { 'filter-pill--active': activeCategory === cat.id }]"
-          @click="handleCategoryClick(cat.id)"
-        >
-          {{ cat.name }}
-        </button>
       </div>
 
       <div v-if="loading" class="state-msg">กำลังโหลดสินค้า...</div>
@@ -563,8 +701,10 @@ onMounted(async () => {
           @keydown.enter.prevent="openProductDetail(product)"
           @keydown.space.prevent="openProductDetail(product)"
         >
-          <span v-if="product.isPreorder" class="product-card__badge badge--preorder"
-            >พรีออเดอร์</span
+          <span
+            v-if="getCardBadge(product)"
+            :class="['product-card__badge', getCardBadge(product).className]"
+            >{{ getCardBadge(product).label }}</span
           >
 
           <div class="product-card__img">
@@ -713,10 +853,16 @@ onMounted(async () => {
                     v-for="flavor in selectedProduct.flavors"
                     :key="flavor"
                     type="button"
-                    :class="['flavor-chip', { 'flavor-chip--active': selectedFlavor === flavor }]"
+                    :class="[
+                      'flavor-chip',
+                      { 'flavor-chip--active': selectedFlavor === flavor },
+                      { 'flavor-chip--out': getFlavorStock(flavor) === 0 },
+                    ]"
+                    :disabled="getFlavorStock(flavor) === 0"
                     @click="selectedFlavor = flavor"
                   >
-                    {{ flavor }}
+                    <span>{{ flavor }}</span>
+                    <span class="flavor-stock">{{ getFlavorStock(flavor) }}</span>
                   </button>
                 </div>
               </div>
@@ -736,10 +882,7 @@ onMounted(async () => {
                   <button
                     type="button"
                     class="qty-picker__btn"
-                    :disabled="
-                      Number(selectedProduct.stock) > 0 &&
-                      detailQty >= Number(selectedProduct.stock)
-                    "
+                    :disabled="detailQty >= selectedFlavorStock"
                     @click="increaseDetailQty"
                   >
                     +
@@ -755,8 +898,15 @@ onMounted(async () => {
                   }}</strong>
                 </div>
                 <div class="detail-meta">
-                  <span class="detail-meta__label">สต็อก</span>
-                  <strong class="detail-meta__value">{{ selectedProduct.stock }} ชิ้น</strong>
+                  <span class="detail-meta__label">
+                    {{ selectedProduct.flavors?.length ? 'สต็อกรสที่เลือก' : 'สต็อก' }}
+                  </span>
+                  <strong class="detail-meta__value">
+                    {{
+                      selectedProduct.flavors?.length ? selectedFlavorStock : selectedProduct.stock
+                    }}
+                    ชิ้น
+                  </strong>
                 </div>
                 <div class="detail-meta">
                   <span class="detail-meta__label">ประเภท</span>
@@ -801,11 +951,15 @@ onMounted(async () => {
   --muted: #75658f;
   --radius: 14px;
   --radius-sm: 10px;
+  --content-max: 1240px;
 
   font-family: inherit;
-  background: var(--bg);
+  background:
+    radial-gradient(circle at 0% 0%, rgba(220, 190, 255, 0.28), transparent 28%),
+    radial-gradient(circle at 100% 20%, rgba(255, 203, 217, 0.24), transparent 34%), var(--bg);
   min-height: 100vh;
   color: var(--text);
+  padding-bottom: 2rem;
 }
 
 /* ── NAVBAR ── */
@@ -813,8 +967,8 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 1rem;
-  padding: 0 1.5rem;
-  height: 58px;
+  padding: 0 clamp(1rem, 2.4vw, 2.25rem);
+  height: 62px;
   background: rgba(255, 255, 255, 0.95);
   border-bottom: 1px solid var(--border);
   position: sticky;
@@ -832,6 +986,13 @@ onMounted(async () => {
 }
 .logo-icon {
   font-size: 1.4rem;
+}
+.logo-icon-img {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  border-radius: 7px;
+  display: block;
 }
 .logo-text {
   font-weight: 900;
@@ -1065,11 +1226,14 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 2rem 2rem 2rem 1.5rem;
+  max-width: var(--content-max);
+  margin: 0.85rem auto 0;
+  border: 1px solid rgba(213, 195, 236, 0.75);
+  border-radius: 20px;
+  padding: 2rem clamp(1.1rem, 2.3vw, 2rem) 2rem;
   background:
     radial-gradient(circle at right top, rgba(255, 194, 211, 0.36), transparent 48%),
     linear-gradient(140deg, rgba(255, 255, 255, 0.92), rgba(248, 241, 255, 0.96));
-  border-bottom: 1px solid var(--border);
   position: relative;
   overflow: hidden;
   min-height: 190px;
@@ -1148,36 +1312,99 @@ onMounted(async () => {
 
 /* ── CATEGORIES ── */
 .categories {
+  display: grid;
+  gap: 0.85rem;
+  max-width: var(--content-max);
+  margin: 0.85rem auto 0;
+  border-radius: 20px;
+  padding: 1rem 1rem 1.05rem;
+  background:
+    radial-gradient(circle at right top, rgba(205, 162, 251, 0.16), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(249, 245, 255, 0.95));
+  border: 1px solid rgba(213, 195, 236, 0.85);
+  box-shadow: 0 10px 28px rgba(89, 61, 125, 0.06);
+}
+
+.categories__header {
   display: flex;
-  gap: 0.6rem;
-  padding: 1rem 1.5rem;
-  background: rgba(255, 255, 255, 0.9);
-  border-bottom: 1px solid var(--border);
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.categories__eyebrow {
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  color: #9a7dbf;
+  text-transform: uppercase;
+  margin-bottom: 0.25rem;
+}
+
+.categories__title {
+  font-size: 1rem;
+  font-weight: 900;
+  color: var(--primary-dark);
+  line-height: 1.2;
+}
+
+.categories__subtitle {
+  margin-top: 0.16rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.categories__badge {
+  align-self: center;
+  border: 1px solid #d8c4f0;
+  background: linear-gradient(180deg, #fff, #f7efff);
+  color: var(--primary);
+  border-radius: 999px;
+  padding: 0.38rem 0.7rem;
+  font-size: 0.8rem;
+  font-weight: 800;
+  white-space: nowrap;
+  box-shadow: 0 4px 10px rgba(89, 61, 125, 0.06);
+}
+
+.categories__track {
+  display: flex;
+  gap: 0.72rem;
   overflow-x: auto;
-  box-shadow: 0 2px 10px rgba(89, 61, 125, 0.05);
+  padding: 0.1rem 0.1rem 0.15rem;
 }
 
 .cat-btn {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.3rem;
-  background: none;
-  border: none;
+  gap: 0.38rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 241, 255, 0.92));
+  border: 1px solid #eadff5;
+  border-radius: 18px;
   cursor: pointer;
   flex-shrink: 0;
-  transition: transform 0.2s;
-  padding: 0;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease,
+    background 0.18s ease;
+  padding: 0.6rem 0.7rem 0.55rem;
+  min-width: 82px;
+  box-shadow: 0 4px 12px rgba(89, 61, 125, 0.06);
 }
 .cat-btn:hover {
   transform: translateY(-2px);
+  border-color: #bf93eb;
+  box-shadow: 0 10px 18px rgba(132, 86, 179, 0.12);
 }
 .cat-btn__icon {
-  width: 50px;
-  height: 50px;
+  width: 52px;
+  height: 52px;
   border-radius: 50%;
   background: linear-gradient(160deg, rgba(255, 255, 255, 0.96), rgba(248, 241, 255, 0.9));
-  border: 1px solid #eadff5;
+  border: 1px solid #e3d7f1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1194,10 +1421,13 @@ onMounted(async () => {
   box-shadow: 0 6px 16px rgba(132, 86, 179, 0.25);
 }
 .cat-btn__label {
-  font-size: 0.76rem;
-  font-weight: 800;
+  font-size: 0.77rem;
+  font-weight: 900;
   color: var(--muted);
   white-space: nowrap;
+  max-width: 76px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .cat-btn--active .cat-btn__label {
   color: var(--primary);
@@ -1205,7 +1435,13 @@ onMounted(async () => {
 
 /* ── PRODUCTS ── */
 .products {
-  padding: 1.2rem 1.5rem 3rem;
+  max-width: var(--content-max);
+  margin: 0.9rem auto 0;
+  border: 1px solid rgba(225, 212, 243, 0.92);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(250, 246, 255, 0.88));
+  padding: 1.15rem 1rem 1.35rem;
+  box-shadow: 0 10px 28px rgba(89, 61, 125, 0.08);
 }
 .products__header {
   margin-bottom: 0.8rem;
@@ -1255,8 +1491,8 @@ onMounted(async () => {
 /* ── PRODUCT GRID ── */
 .product-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 0.7rem;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 0.85rem;
 }
 
 .product-card {
@@ -1267,15 +1503,15 @@ onMounted(async () => {
   position: relative;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 9px 24px rgba(79, 62, 108, 0.1);
+  box-shadow: 0 7px 20px rgba(79, 62, 108, 0.11);
   transition:
     transform 0.2s ease,
     box-shadow 0.25s ease;
   cursor: pointer;
 }
 .product-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 14px 28px rgba(79, 62, 108, 0.16);
+  transform: translateY(-4px);
+  box-shadow: 0 16px 30px rgba(79, 62, 108, 0.17);
   border-color: #d8c4f0;
 }
 
@@ -1293,6 +1529,11 @@ onMounted(async () => {
   background: #fff2d9;
   color: #9b6210;
   border: 1px solid #f7ddb0;
+}
+.badge--ready {
+  background: #e8f9f2;
+  color: #187f5d;
+  border: 1px solid #bfead9;
 }
 
 .product-card__img {
@@ -1702,6 +1943,30 @@ onMounted(async () => {
   box-shadow: 0 0 0 2px rgba(241, 161, 127, 0.2);
 }
 
+.flavor-chip--out {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: #f5f5f5;
+  color: #999;
+}
+
+.flavor-chip--out:hover {
+  transform: none;
+  border-color: #d8c9ec;
+  background: #f5f5f5;
+  box-shadow: none;
+}
+
+.flavor-stock {
+  margin-left: 0.4rem;
+  padding: 0.2rem 0.4rem;
+  background: rgba(111, 80, 160, 0.1);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: var(--primary);
+}
+
 .detail-qty-row {
   margin-bottom: 0.95rem;
 }
@@ -1818,6 +2083,7 @@ onMounted(async () => {
     display: none;
   }
   .hero {
+    margin-top: 0.65rem;
     padding: 1.2rem 1rem;
     min-height: 160px;
   }
@@ -1825,11 +2091,21 @@ onMounted(async () => {
     width: 180px;
   }
   .categories {
-    padding: 0.8rem 1rem;
-    gap: 0.5rem;
+    margin-top: 0.65rem;
+    padding: 0.9rem;
+  }
+  .categories__header {
+    flex-direction: column;
+  }
+  .categories__badge {
+    align-self: flex-start;
+  }
+  .categories__track {
+    gap: 0.55rem;
   }
   .products {
-    padding: 1rem 1rem 2rem;
+    margin-top: 0.65rem;
+    padding: 1rem 0.8rem 1.1rem;
   }
   .product-grid {
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
@@ -1839,6 +2115,14 @@ onMounted(async () => {
   }
 }
 @media (max-width: 480px) {
+  .cat-btn {
+    min-width: 72px;
+    padding-inline: 0.55rem;
+  }
+  .cat-btn__icon {
+    width: 46px;
+    height: 46px;
+  }
   .product-grid {
     grid-template-columns: 1fr 1fr;
     gap: 0.55rem;
@@ -1846,8 +2130,9 @@ onMounted(async () => {
   .hero__title {
     font-size: 1.05rem;
   }
-  .hero__image {
-    width: 130px;
+
+  .categories__title {
+    font-size: 0.95rem;
   }
 }
 

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { useAuth } from './composables/useAuth'
 
@@ -7,6 +7,9 @@ const route = useRoute()
 const router = useRouter()
 const { logout } = useAuth()
 const PROFILE_STORAGE_KEY = 'meowverse-admin-profile'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+const defaultLogoImageUrl = ''
+const logoImage = ref('')
 
 const profileEditorOpen = ref(false)
 const avatarInputRef = ref(null)
@@ -99,6 +102,47 @@ function loadProfile() {
   syncFormFromProfile()
 }
 
+function resolveImageUrl(value, fallback = '') {
+  const url = String(value || '').trim()
+  if (!url) {
+    return fallback
+  }
+
+  if (/^(https?:)?\/\//i.test(url) || url.startsWith('/') || url.startsWith('data:')) {
+    return url
+  }
+
+  return `/${url}`
+}
+
+function appendCacheBuster(url) {
+  if (!url) {
+    return ''
+  }
+
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}v=${Date.now()}`
+}
+
+async function fetchLogoSettings() {
+  try {
+    const response = await fetch(`${API_BASE_URL}/site-settings/logo`)
+    if (!response.ok) {
+      return
+    }
+
+    const data = await response.json()
+    const imageUrl = resolveImageUrl(data.imageUrl, defaultLogoImageUrl)
+    logoImage.value = appendCacheBuster(imageUrl)
+  } catch (error) {
+    console.error('fetchLogoSettings:', error)
+  }
+}
+
+function handleLogoUpdated() {
+  fetchLogoSettings()
+}
+
 function toggleProfileEditor() {
   profileEditorOpen.value = !profileEditorOpen.value
   if (profileEditorOpen.value) {
@@ -160,8 +204,18 @@ function handleAdminLogout() {
   router.push('/login')
 }
 
+function goToWebsite() {
+  router.push('/dashboard')
+}
+
 onMounted(() => {
   loadProfile()
+  fetchLogoSettings()
+  window.addEventListener('meowverse:logo-updated', handleLogoUpdated)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('meowverse:logo-updated', handleLogoUpdated)
 })
 </script>
 
@@ -171,7 +225,14 @@ onMounted(() => {
   <div v-else class="app-layout">
     <aside class="sidebar">
       <div class="brand-box">
-        <div class="brand-avatar" aria-hidden="true">🐱</div>
+        <div class="brand-avatar" aria-hidden="true">
+          <img
+            v-if="logoImage"
+            :src="resolveImageUrl(logoImage, defaultLogoImageUrl)"
+            :alt="'โลโก้ ' + 'Meowverse'"
+          />
+          <span v-else>🐱</span>
+        </div>
         <div>
           <p class="brand-name">Meowverse</p>
           <p class="brand-subtitle">ร้านสัตว์เลี้ยง</p>
@@ -184,17 +245,17 @@ onMounted(() => {
           <RouterLink to="/admin/home">แดชบอร์ด</RouterLink>
           <RouterLink to="/admin/products">สินค้า</RouterLink>
           <RouterLink to="/admin/preorder-rounds">รอบนำเข้าสินค้า</RouterLink>
-          <RouterLink to="/admin/adduser">เพิ่ม User</RouterLink>
+          <RouterLink to="/admin/settings">ตั้งค่าระบบ</RouterLink>
+          <RouterLink to="/admin/users">เพิ่ม User</RouterLink>
         </nav>
       </div>
 
-      <div class="menu-block">
+      <div class="menu-block menu-block--soft">
         <p class="menu-title">เครื่องมือ</p>
-        <div class="menu-list menu-list--static">
-          <span>ตั้งค่าระบบ</span>
+        <nav class="menu-list" aria-label="เครื่องมือ">
           <span>รายงาน</span>
           <span>วิธีใช้งาน</span>
-        </div>
+        </nav>
       </div>
     </aside>
 
@@ -205,7 +266,7 @@ onMounted(() => {
         </label>
 
         <div class="topbar-right">
-          <button class="notify" type="button">ดูกันบ้างไหมดี?</button>
+          <button class="notify" type="button" @click="goToWebsite">หน้าเว็บไซต์หลัก</button>
           <button class="notify logout-btn" type="button" @click="handleAdminLogout">
             ออกจากระบบ
           </button>
@@ -285,7 +346,12 @@ onMounted(() => {
   grid-template-columns: 230px minmax(0, 1fr);
   background:
     radial-gradient(circle at 15% -10%, #f7edf8 0%, #f7edf8 28%, transparent 52%),
-    linear-gradient(165deg, #fff8fb 0%, #f8f6ff 48%, #f9f2fc 100%);
+    linear-gradient(
+      165deg,
+      #fff8fb 0%,
+      color-mix(in srgb, var(--theme-primary) 8%, #fff) 48%,
+      color-mix(in srgb, var(--theme-accent) 8%, #fff) 100%
+    );
 }
 
 .sidebar {
@@ -311,6 +377,185 @@ onMounted(() => {
   background: #fff;
   border: 1px solid #e7dff1;
   box-shadow: 0 3px 8px rgba(92, 72, 117, 0.12);
+  overflow: hidden;
+  font-size: 1.2rem;
+}
+
+.brand-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 2px;
+}
+
+.sidebar-panel {
+  margin-top: 0.5rem;
+  padding: 0.85rem;
+  border: 1px solid #ede3f6;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 8px 18px rgba(90, 70, 115, 0.06);
+}
+
+.sidebar-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.sidebar-panel-link {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--theme-primary);
+}
+
+.sidebar-subsection + .sidebar-subsection {
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px dashed #e8ddf4;
+}
+
+.sidebar-subsection--card {
+  padding: 0.75rem;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid #ece0f5;
+}
+
+.sidebar-subtitle {
+  margin: 0 0 0.45rem;
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: #5f4a7f;
+}
+
+.sidebar-banner-preview {
+  width: 100%;
+  height: 108px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #f7effc 0%, #fff 100%);
+  border: 1px solid #eadff5;
+  margin-bottom: 0.75rem;
+}
+
+.sidebar-banner-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.sidebar-field {
+  display: grid;
+  gap: 0.35rem;
+  color: #7b66a0;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.sidebar-field input {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid #e2d2f3;
+  background: #fff;
+  color: #4a355e;
+  padding: 0.64rem 0.72rem;
+  font-size: 0.82rem;
+}
+
+.sidebar-field--compact input {
+  padding: 0.2rem;
+  height: 36px;
+}
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.sidebar-logo-preview {
+  width: 100%;
+  height: 78px;
+  border-radius: 12px;
+  border: 1px solid #eadff5;
+  background: linear-gradient(135deg, #f7effc 0%, #fff 100%);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  margin-bottom: 0.55rem;
+  color: #80649e;
+  font-size: 1.45rem;
+}
+
+.sidebar-logo-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 0.35rem;
+}
+
+.sidebar-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.7rem;
+}
+
+.sidebar-panel-actions--stack {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.sidebar-action-btn {
+  border: 1px solid #e2d2f3;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--theme-primary);
+  font-size: 0.76rem;
+  font-weight: 700;
+  padding: 0.5rem 0.45rem;
+}
+
+.sidebar-action-btn--primary {
+  border-color: transparent;
+  color: #fff;
+  background: linear-gradient(135deg, var(--theme-primary), var(--theme-accent));
+}
+
+.sidebar-action-btn--ghost {
+  background: #faf7ff;
+}
+
+.sidebar-text-action {
+  border: 0;
+  background: transparent;
+  color: var(--theme-primary);
+  font-size: 0.78rem;
+  font-weight: 800;
+  padding: 0;
+  text-align: left;
+}
+
+.sidebar-action-btn:disabled {
+  opacity: 0.6;
+}
+
+.sidebar-panel-note {
+  margin: 0.55rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: #8d7cad;
+}
+
+.sidebar-panel-note--error {
+  color: #b4452f;
+}
+
+.sidebar-panel-note--success {
+  color: #277a62;
 }
 
 .brand-name {
@@ -330,6 +575,10 @@ onMounted(() => {
   margin-top: 1rem;
 }
 
+.menu-block--soft {
+  padding-top: 0.25rem;
+}
+
 .menu-title {
   font-size: 0.68rem;
   letter-spacing: 0.05em;
@@ -344,7 +593,7 @@ onMounted(() => {
 }
 
 .menu-list a,
-.menu-list--static span {
+.menu-list span {
   border-radius: 10px;
   padding: 0.52rem 0.62rem;
   color: #5c4f70;
@@ -353,7 +602,7 @@ onMounted(() => {
 }
 
 .menu-list a.router-link-exact-active {
-  background: #d8bbf7;
+  background: color-mix(in srgb, var(--theme-primary) 30%, #fff);
   color: #583a78;
   font-weight: 700;
 }
@@ -395,8 +644,8 @@ onMounted(() => {
 .notify {
   border-radius: 999px;
   border: 1px solid #e7dff1;
-  background: #f6eafd;
-  color: #7b589f;
+  background: color-mix(in srgb, var(--theme-primary) 15%, #fff);
+  color: color-mix(in srgb, var(--theme-primary) 70%, #3f2e56);
   font-size: 0.77rem;
   font-weight: 700;
   padding: 0.38rem 0.7rem;

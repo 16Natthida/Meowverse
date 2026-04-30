@@ -1,30 +1,64 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
 
 const router = useRouter()
 const { logout, getUser } = useAuth()
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 
 const currentUser = computed(() => getUser())
 const activeMenu = ref('Dashboard')
+const userStats = ref({ totalUsers: 0, totalAdmins: 0 })
 
-const menuItems = [
+const totalMembers = computed(() => {
+  return userStats.value.totalUsers + userStats.value.totalAdmins
+})
+
+const menuItems = computed(() => [
   { name: 'Dashboard', icon: '📊' },
   { name: 'Orders', icon: '📦' },
   { name: 'Products', icon: '🛍️' },
   { name: 'Categories', icon: '🏷️' },
-  { name: 'Users', icon: '👥' },
+  { name: 'Users', icon: '👥', count: totalMembers.value },
   { name: 'Reports', icon: '📈' },
   { name: 'Settings', icon: '⚙️' },
-]
+])
 
-const stats = [
+const stats = computed(() => [
   { label: 'ยอดขายทั้งหมด', value: '฿55,320', change: '+12% จากเดือนที่แล้ว', color: '#c9a6ff' },
   { label: 'คำสั่งซื้อใหม่', value: '48 ออเดอร์', change: 'สัปดาห์นี้', color: '#ffb4d6' },
-  { label: 'ลูกค้าใหม่', value: '19 ราย', change: 'เพิ่มขึ้นวันนี้', color: '#8dd3c7' },
-  { label: 'สินค้าใกล้หมด', value: '7 รายการ', change: 'ควรเติมสต็อก', color: '#ffcc80' },
-]
+  {
+    label: 'จำนวน Users',
+    value: `${userStats.value.totalUsers} ราย`,
+    change: 'ผู้ใช้ทั่วไป',
+    color: '#8dd3c7',
+  },
+  {
+    label: 'จำนวน Admins',
+    value: `${userStats.value.totalAdmins} คน`,
+    change: 'ผู้ดูแลระบบ',
+    color: '#ffcc80',
+  },
+])
+
+async function fetchUserStats() {
+  try {
+    const user = getUser()
+    const response = await fetch(`${API_BASE_URL}/admin/user-stats`, {
+      headers: {
+        'x-user-role': String(user?.role || '').toLowerCase() || 'user',
+        'x-user-id': String(user?.user_id || user?.id || ''),
+      },
+    })
+    if (response.ok) {
+      const data = await response.json()
+      userStats.value = data
+    }
+  } catch (error) {
+    console.error('Error fetching user stats:', error)
+  }
+}
 
 function handleLogout() {
   if (confirm('คุณต้องการออกจากระบบใช่หรือไม่?')) {
@@ -32,6 +66,27 @@ function handleLogout() {
     router.push('/login')
   }
 }
+
+function handleMenuClick(itemName) {
+  activeMenu.value = itemName
+  const routeMap = {
+    Dashboard: '/admin/home',
+    Orders: '/admin/home',
+    Products: '/admin/products',
+    Categories: '/admin/products',
+    Users: '/admin/users',
+    Reports: '/admin/home',
+    Settings: '/admin/settings',
+  }
+  const route = routeMap[itemName]
+  if (route) {
+    router.push(route)
+  }
+}
+
+onMounted(() => {
+  fetchUserStats()
+})
 </script>
 
 <template>
@@ -52,10 +107,13 @@ function handleLogout() {
             v-for="item in menuItems"
             :key="item.name"
             :class="['menu-btn', { active: activeMenu === item.name }]"
-            @click="activeMenu = item.name"
+            @click="handleMenuClick(item.name)"
           >
             <span class="icon">{{ item.icon }}</span>
-            <span class="text">{{ item.name }}</span>
+            <span class="text">
+              {{ item.name }}
+              <span v-if="item.count" class="menu-count">({{ item.count }})</span>
+            </span>
           </button>
         </div>
       </nav>
@@ -242,6 +300,17 @@ function handleLogout() {
   background: #c9a6ff;
   color: white;
   box-shadow: 0 4px 12px rgba(201, 166, 255, 0.3);
+}
+
+.menu-count {
+  opacity: 0.8;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.menu-btn.active .menu-count {
+  opacity: 1;
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .logout-btn {

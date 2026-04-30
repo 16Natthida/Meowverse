@@ -1,0 +1,1 @@
+Applying replacements to SettingsView.vue: file->image, add theme state and functions, add template section.

@@ -10,7 +10,6 @@ const dashboardData = ref(null)
 const isLoading = ref(false)
 const error = ref('')
 const activeRange = ref('stock')
-
 let refreshTimerId = null
 
 const chartModes = {
@@ -631,6 +630,82 @@ onBeforeUnmount(() => {
   background: #fff;
 }
 
+.banner-panel {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.banner-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.95fr) minmax(260px, 1.05fr);
+  gap: 0.9rem;
+  align-items: stretch;
+}
+
+.banner-preview {
+  border-radius: 16px;
+  border: 1px solid #e8dcf3;
+  overflow: hidden;
+  background: linear-gradient(160deg, #fff, #f5edff);
+  min-height: 220px;
+}
+
+.banner-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 220px;
+  object-fit: cover;
+}
+
+.banner-controls {
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+}
+
+.field {
+  display: grid;
+  gap: 0.35rem;
+  color: #7b66a0;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.field input {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid #e2d2f3;
+  background: #fff;
+  color: #4a355e;
+  padding: 0.72rem 0.85rem;
+  font-size: 0.85rem;
+}
+
+.hidden-input {
+  display: none;
+}
+
+.banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.banner-note {
+  margin: 0;
+  color: #8d7cad;
+  font-size: 0.78rem;
+}
+
+.banner-note--error {
+  color: #b4452f;
+}
+
+.banner-note--success {
+  color: #277a62;
+}
+
 .kpi-grid {
   display: grid;
   gap: 0.8rem;
@@ -967,6 +1042,10 @@ td {
 @media (max-width: 720px) {
   .hero-panel {
     padding: 0.9rem;
+  }
+
+  .banner-layout {
+    grid-template-columns: 1fr;
   }
 
   .panel-kpi-row {

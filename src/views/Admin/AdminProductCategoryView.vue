@@ -7,6 +7,8 @@ const MAX_IMAGE_COUNT = 6
 const LOW_STOCK_THRESHOLD = 5
 const CATEGORY_NAME_MAX_LENGTH = 100
 const CATEGORY_DETAIL_MAX_LENGTH = 255
+const CATEGORY_MIN_COUNT = 4
+const CATEGORY_MAX_COUNT = 5
 
 const store = useAdminProductStore()
 
@@ -31,6 +33,7 @@ const form = reactive({
   categoryId: '',
   basePrice: 0,
   stock: 0,
+  flavorStock: {},
   imageUrls: [],
   preorderEnabled: false,
   readyToShipEnabled: true,
@@ -48,6 +51,8 @@ const categoryMap = computed(() => {
 const productCount = computed(() => store.products.length)
 
 const categoryCount = computed(() => store.categories.length)
+const canCreateCategory = computed(() => categoryCount.value < CATEGORY_MAX_COUNT)
+const canDeleteCategory = computed(() => categoryCount.value > CATEGORY_MIN_COUNT)
 
 const lowStockCount = computed(() => {
   return store.products.filter((product) => Number(product.stock) <= LOW_STOCK_THRESHOLD).length
@@ -87,6 +92,13 @@ const filteredProducts = computed(() => {
 
 const flavorItems = computed(() => parseFlavorsText(form.flavorsText))
 
+const totalFlavorStock = computed(() => {
+  if (!form.flavorStock || Object.keys(form.flavorStock).length === 0) {
+    return 0
+  }
+  return Object.values(form.flavorStock).reduce((sum, qty) => sum + Number(qty || 0), 0)
+})
+
 function setNotice(type, message) {
   notice.type = type
   notice.message = message
@@ -101,6 +113,12 @@ function toThaiApiMessage(message) {
   const lookup = {
     'Category already exists.': 'มีหมวดหมู่นี้อยู่แล้ว',
     'Category name is required.': 'กรุณากรอกชื่อหมวดหมู่',
+    [`You can create up to ${CATEGORY_MAX_COUNT} categories only.`]: `เพิ่มหมวดหมู่ได้สูงสุด ${CATEGORY_MAX_COUNT} หมวด`,
+    [`At least ${CATEGORY_MIN_COUNT} categories are required.`]: `ต้องมีหมวดหมู่อย่างน้อย ${CATEGORY_MIN_COUNT} หมวด`,
+    'Cannot delete category because products still exist in this category.':
+      'ไม่สามารถลบหมวดหมู่นี้ได้ เพราะยังมีสินค้าอยู่ในหมวด',
+    'Category not found.': 'ไม่พบหมวดหมู่ที่ต้องการลบ',
+    'Valid category id is required.': 'รหัสหมวดหมู่ไม่ถูกต้อง',
     [`Category name must be at most ${CATEGORY_NAME_MAX_LENGTH} characters.`]: `ชื่อหมวดหมู่ต้องไม่เกิน ${CATEGORY_NAME_MAX_LENGTH} ตัวอักษร`,
     [`Category detail must be at most ${CATEGORY_DETAIL_MAX_LENGTH} characters.`]: `รายละเอียดหมวดหมู่ต้องไม่เกิน ${CATEGORY_DETAIL_MAX_LENGTH} ตัวอักษร`,
   }
@@ -140,6 +158,10 @@ function addFlavorFromInput() {
     const alreadyExists = currentItems.some((item) => item.toLowerCase() === value.toLowerCase())
     if (!alreadyExists) {
       currentItems.push(value)
+      // Initialize flavor stock for new flavor
+      if (!(value in form.flavorStock)) {
+        form.flavorStock[value] = 0
+      }
     }
   }
 
@@ -150,7 +172,12 @@ function addFlavorFromInput() {
 
 function removeFlavor(index) {
   const currentItems = parseFlavorsText(form.flavorsText)
+  const removedFlavor = currentItems[index]
   currentItems.splice(index, 1)
+  // Remove flavor stock entry when flavor is removed
+  if (removedFlavor in form.flavorStock) {
+    delete form.flavorStock[removedFlavor]
+  }
   setFlavorItems(currentItems)
 }
 
@@ -220,7 +247,11 @@ async function submitForm() {
       sku: form.sku.trim(),
       categoryId: form.categoryId,
       basePrice: Number(form.basePrice) || 0,
-      stock: Number(form.stock) || 0,
+      stock:
+        parseFlavorsText(form.flavorsText).length > 0
+          ? totalFlavorStock.value
+          : Number(form.stock) || 0,
+      flavorStock: { ...form.flavorStock },
       imageUrls: [...form.imageUrls],
       preorderEnabled: form.preorderEnabled,
       readyToShipEnabled: form.readyToShipEnabled,
@@ -261,6 +292,11 @@ async function submitCategoryForm() {
     return
   }
 
+  if (!canCreateCategory.value) {
+    setNotice('warning', `เพิ่มหมวดหมู่ได้สูงสุด ${CATEGORY_MAX_COUNT} หมวด`)
+    return
+  }
+
   isCategorySubmitting.value = true
 
   try {
@@ -282,6 +318,33 @@ async function submitCategoryForm() {
     }
   } finally {
     isCategorySubmitting.value = false
+  }
+}
+
+async function deleteCategory(category) {
+  if (!canDeleteCategory.value) {
+    setNotice('warning', `ต้องมีหมวดหมู่อย่างน้อย ${CATEGORY_MIN_COUNT} หมวด`)
+    return
+  }
+
+  if (!window.confirm(`ยืนยันการลบหมวดหมู่ "${category.name}" ใช่หรือไม่`)) {
+    return
+  }
+
+  try {
+    await store.deleteCategory(category.id)
+
+    if (String(form.categoryId) === String(category.id)) {
+      form.categoryId = ''
+    }
+
+    setNotice('success', 'ลบหมวดหมู่เรียบร้อยแล้ว')
+  } catch (error) {
+    if (error instanceof Error && error.message) {
+      setNotice('error', toThaiApiMessage(error.message))
+    } else {
+      setNotice('error', 'ไม่สามารถลบหมวดหมู่ได้')
+    }
   }
 }
 
@@ -315,6 +378,7 @@ function editProduct(product) {
   form.categoryId = product.categoryId
   form.basePrice = Number(product.basePrice) || 0
   form.stock = Number(product.stock) || 0
+  form.flavorStock = typeof product.flavorStock === 'object' ? { ...product.flavorStock } : {}
   form.imageUrls = [...(product.imageUrls || [])]
   form.preorderEnabled = Boolean(product.preorderEnabled)
   form.readyToShipEnabled = Boolean(product.readyToShipEnabled)
@@ -329,6 +393,7 @@ function resetForm() {
   form.categoryId = ''
   form.basePrice = 0
   form.stock = 0
+  form.flavorStock = {}
   form.imageUrls = []
   form.preorderEnabled = false
   form.readyToShipEnabled = true
@@ -463,34 +528,86 @@ onMounted(async () => {
     <p v-if="isLoading" class="loading">กำลังโหลด...</p>
     <p v-if="notice.message" :class="['notice', notice.type]">{{ notice.message }}</p>
 
-    <section v-if="categoryPanelOpen" class="form-panel">
-      <div class="form-head">
-        <h2>เพิ่มหมวดหมู่</h2>
+    <section v-if="categoryPanelOpen" class="category-manager">
+      <div class="category-manager__header">
+        <div>
+          <p class="manager-eyebrow">Category Studio</p>
+          <h2>จัดการหมวดหมู่</h2>
+          <p class="compact category-limit-note">
+            แนะนำให้มี {{ CATEGORY_MIN_COUNT }}-{{ CATEGORY_MAX_COUNT }} หมวด (ตอนนี้มี
+            {{ categoryCount }} หมวด)
+          </p>
+        </div>
         <button class="ghost" type="button" @click="closeCategoryForm">ปิด</button>
       </div>
 
-      <form class="category-form" @submit.prevent="submitCategoryForm">
-        <label>
-          ชื่อหมวดหมู่ *
-          <input v-model="categoryForm.name" placeholder="ระบุชื่อหมวดหมู่" type="text" />
-        </label>
+      <div class="category-manager__grid">
+        <section class="category-card category-card--form">
+          <div class="section-head">
+            <h3>เพิ่มหมวดหมู่</h3>
+            <span class="section-badge"
+              >เพิ่มได้อีก {{ Math.max(0, CATEGORY_MAX_COUNT - categoryCount) }} หมวด</span
+            >
+          </div>
 
-        <label>
-          รายละเอียดหมวดหมู่
-          <input
-            v-model="categoryForm.detail"
-            placeholder="รายละเอียดเพิ่มเติม (ถ้ามี)"
-            type="text"
-          />
-        </label>
+          <form class="category-form" @submit.prevent="submitCategoryForm">
+            <label>
+              ชื่อหมวดหมู่ *
+              <input v-model="categoryForm.name" placeholder="ระบุชื่อหมวดหมู่" type="text" />
+            </label>
 
-        <div class="form-actions">
-          <button :disabled="isCategorySubmitting || isLoading" type="submit">
-            {{ isCategorySubmitting ? 'กำลังเพิ่ม...' : 'บันทึกหมวดหมู่' }}
-          </button>
-          <button class="ghost" type="button" @click="closeCategoryForm">ยกเลิก</button>
-        </div>
-      </form>
+            <label>
+              รายละเอียดหมวดหมู่
+              <input
+                v-model="categoryForm.detail"
+                placeholder="รายละเอียดเพิ่มเติม (ถ้ามี)"
+                type="text"
+              />
+            </label>
+
+            <div class="form-actions">
+              <button
+                :disabled="isCategorySubmitting || isLoading || !canCreateCategory"
+                type="submit"
+              >
+                {{ isCategorySubmitting ? 'กำลังเพิ่ม...' : 'บันทึกหมวดหมู่' }}
+              </button>
+              <button class="ghost" type="button" @click="closeCategoryForm">ยกเลิก</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="category-card category-card--list">
+          <div class="section-head">
+            <h3>หมวดหมู่ปัจจุบัน</h3>
+            <span class="section-badge section-badge--soft">
+              {{ canDeleteCategory ? 'ลบได้' : 'ต้องเหลืออย่างน้อย 4 หมวด' }}
+            </span>
+          </div>
+
+          <ul v-if="store.categories.length" class="category-list">
+            <li v-for="category in store.categories" :key="category.id" class="category-item">
+              <div class="category-item__content">
+                <p class="category-name">{{ category.name }}</p>
+                <p class="category-detail">{{ category.detail || 'ไม่มีรายละเอียด' }}</p>
+              </div>
+              <button
+                class="danger"
+                type="button"
+                :disabled="!canDeleteCategory || isCategorySubmitting || isLoading"
+                @click="deleteCategory(category)"
+              >
+                ลบ
+              </button>
+            </li>
+          </ul>
+
+          <div v-else class="category-empty">
+            <p>ยังไม่มีหมวดหมู่</p>
+            <span>เพิ่มหมวดแรกเพื่อเริ่มจัดโครงสร้างสินค้า</span>
+          </div>
+        </section>
+      </div>
     </section>
 
     <section v-if="productPanelOpen" class="form-panel">
@@ -569,7 +686,34 @@ onMounted(async () => {
 
         <label>
           จำนวนคงเหลือ
-          <input v-model.number="form.stock" min="0" type="number" />
+          <input
+            v-model.number="form.stock"
+            :disabled="flavorItems.length > 0"
+            :placeholder="
+              flavorItems.length > 0 ? `รวม: ${totalFlavorStock} ชิ้น (คำนวณจากรสชาติ)` : ''
+            "
+            min="0"
+            type="number"
+          />
+          <p v-if="flavorItems.length > 0" class="compact input-hint">
+            ✓ อัตโนมัติรวมจากสต็อกแต่ละรสชาติ = {{ totalFlavorStock }} ชิ้น
+          </p>
+        </label>
+
+        <label v-if="flavorItems.length > 0">
+          สต็อกแต่ละรสชาติ
+          <div class="flavor-stock-inputs">
+            <div v-for="flavor in flavorItems" :key="flavor" class="flavor-stock-row">
+              <span class="flavor-label">{{ flavor }}</span>
+              <input
+                v-model.number="form.flavorStock[flavor]"
+                min="0"
+                type="number"
+                placeholder="0"
+              />
+              <span class="flavor-unit">ชิ้น</span>
+            </div>
+          </div>
         </label>
 
         <label class="upload-field">
@@ -1017,8 +1161,172 @@ onMounted(async () => {
   line-height: 1.15;
 }
 
+.input-hint {
+  margin: 0.3rem 0 0 0;
+  color: #7db650;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
 .compact span {
   white-space: nowrap;
+}
+
+.category-limit-note {
+  color: #6f5c89;
+  margin: 0 0 0.65rem;
+}
+
+.category-manager {
+  border-radius: 20px;
+  border: 1px solid #eadff5;
+  background:
+    radial-gradient(circle at right top, rgba(255, 194, 211, 0.22), transparent 42%),
+    linear-gradient(140deg, rgba(255, 255, 255, 0.96), rgba(249, 245, 255, 0.96));
+  box-shadow: 0 14px 30px rgba(89, 61, 125, 0.08);
+  padding: 1rem;
+}
+
+.category-manager__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+.manager-eyebrow {
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  color: #9a7dbf;
+  text-transform: uppercase;
+  margin-bottom: 0.25rem;
+}
+
+.category-manager__header h2 {
+  font-size: 1.15rem;
+  color: #4e3b67;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.category-manager__grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(360px, 1.15fr);
+  gap: 0.9rem;
+}
+
+.category-card {
+  border: 1px solid #e9dff5;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 0.95rem;
+  box-shadow: 0 10px 24px rgba(79, 62, 108, 0.08);
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.8rem;
+}
+
+.section-head h3 {
+  font-size: 0.98rem;
+  color: #463362;
+  font-weight: 900;
+}
+
+.section-badge {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #6a4f89;
+  border: 1px solid #decdf1;
+  background: #f7efff;
+  border-radius: 999px;
+  padding: 0.22rem 0.55rem;
+  white-space: nowrap;
+}
+
+.section-badge--soft {
+  background: #fff;
+  border-color: #eadff5;
+  color: #7b678f;
+}
+
+.category-list-panel {
+  border-top: 1px dashed #e4d5f6;
+  margin-top: 0.8rem;
+  padding-top: 0.8rem;
+}
+
+.category-list-panel h3 {
+  font-size: 0.9rem;
+  color: #4e3b67;
+  margin: 0 0 0.55rem;
+}
+
+.category-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.category-item {
+  border: 1px solid #eadff5;
+  border-radius: 14px;
+  padding: 0.72rem 0.78rem;
+  background: linear-gradient(180deg, #fff, #fbf8ff);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.category-item__content {
+  min-width: 0;
+}
+
+.category-name {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 800;
+  color: #4f3d69;
+}
+
+.category-detail {
+  margin: 0.14rem 0 0;
+  font-size: 0.78rem;
+  color: #7a6996;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.category-empty {
+  border: 1px dashed #dcc8f0;
+  border-radius: 16px;
+  padding: 1rem;
+  text-align: center;
+  background: #fff;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.category-empty p {
+  color: #463362;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.category-empty span {
+  color: #75658f;
+  font-size: 0.82rem;
 }
 
 .stock-pill {
@@ -1150,6 +1458,43 @@ button:disabled {
   background: #f5e8ff;
 }
 
+.flavor-stock-inputs {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
+.flavor-stock-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  background: #fdf8ff;
+  border: 1px solid #e6d6f8;
+  border-radius: 8px;
+}
+
+.flavor-label {
+  font-weight: 600;
+  color: #5f3f92;
+  font-size: 0.85rem;
+}
+
+.flavor-stock-row input {
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #decdf1;
+  border-radius: 6px;
+  font-size: 0.8rem;
+}
+
+.flavor-unit {
+  color: #9a7dbf;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
 input,
 select,
 textarea {
@@ -1206,6 +1551,10 @@ textarea:focus {
   .product-grid {
     grid-template-columns: 1fr;
   }
+
+  .category-manager__grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 900px) {
@@ -1220,6 +1569,19 @@ textarea:focus {
   .summary-strip {
     width: 100%;
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  }
+
+  .category-manager__header {
+    flex-direction: column;
+  }
+
+  .category-item {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .category-item .danger {
+    width: 100%;
   }
 }
 </style>

@@ -81,11 +81,15 @@ async function onSubmit() {
     <section class="login-panel">
       <div class="brand-area">
         <div class="brand-mark"></div>
-        <h1>Meowverse</h1>
+        <div class="brand-copy">
+          <h1>Meowverse</h1>
+          <p>Pet Shop Portal</p>
+        </div>
       </div>
 
       <div class="login-card">
         <div class="card-header">
+          <span class="header-chip">ยินดีต้อนรับกลับ</span>
           <h2>เข้าสู่ระบบพรีออเดอร์สินค้าแมว</h2>
           <p>เข้าสู่ระบบเพื่อจัดการคำสั่งซื้อและติดตามสถานะสินค้า</p>
         </div>
@@ -95,7 +99,6 @@ async function onSubmit() {
             <label>รหัสสมาชิก</label>
             <div class="input-wrapper">
               <input v-model="memberId" type="text" placeholder="ชื่อผู้ใช้" />
-              <span class="icon">✉️</span>
             </div>
           </div>
 
@@ -103,7 +106,6 @@ async function onSubmit() {
             <label>Password</label>
             <div class="input-wrapper">
               <input v-model="password" type="password" placeholder="รหัสผ่าน" />
-              <span class="icon">🔒</span>
             </div>
           </div>
 
@@ -127,115 +129,153 @@ async function onSubmit() {
 </template>
 
 <style scoped>
-/* 🎨 Global & Layout */
 .login-page {
   display: grid;
-  grid-template-columns: 0.3fr 0.3fr;
-  min-height: 100vh;
-  width: 100vw;
+  grid-template-columns: minmax(340px, 500px) minmax(320px, 500px);
+  justify-content: center;
+  align-items: stretch;
+  gap: 0;
+  width: min(1020px, calc(100vw - 2rem));
+  margin: 1rem auto;
+  min-height: calc(100vh - 2rem);
   overflow-x: hidden;
-  background-color: #fffaf7;
+  background:
+    radial-gradient(circle at 8% 10%, rgba(255, 216, 233, 0.3), transparent 34%),
+    radial-gradient(circle at 100% 100%, rgba(196, 170, 250, 0.2), transparent 38%), #fff9fd;
   font-family: 'Kanit', sans-serif;
+  border-radius: 28px;
+  box-shadow: 0 14px 30px rgba(126, 96, 168, 0.12);
 }
 
-/* LEFT SIDE */
 .login-panel {
-  padding: 4rem 6%;
+  position: relative;
+  padding: clamp(2rem, 4vw, 3.3rem);
   display: flex;
   flex-direction: column;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(8px);
 }
 
 .brand-area {
   display: flex;
   align-items: center;
-  gap: 15px;
-  margin-bottom: 4rem;
+  gap: 0.75rem;
+  margin-bottom: 2.2rem;
 }
 
 .brand-mark {
-  width: 50px;
-  height: 50px;
+  width: 46px;
+  height: 46px;
   border-radius: 50%;
   background: url('/images/IMG_3644.JPG') center/cover no-repeat;
   background-color: #eee;
+  box-shadow: 0 8px 20px rgba(156, 120, 210, 0.24);
 }
 
-.brand-area h1 {
-  font-size: 1.5rem;
-  color: #333;
+.brand-copy h1 {
+  font-size: 1.9rem;
+  letter-spacing: -0.02em;
+  color: #2f2444;
   margin: 0;
 }
 
-/* CARD STYLE (Minimal) */
+.brand-copy p {
+  margin: 0;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #9876c0;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .login-card {
   width: 100%;
-  max-width: 520px;
+  max-width: 460px;
+  border-radius: 26px;
+  padding: 1.8rem;
+  background: linear-gradient(170deg, rgba(255, 255, 255, 0.96), rgba(250, 242, 255, 0.94));
+  box-shadow: 0 10px 24px rgba(133, 96, 182, 0.08);
+}
+
+.header-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #8554bf;
+  background: #f4e7ff;
+  border: 1px solid #e4cef8;
+  margin-bottom: 0.7rem;
 }
 
 .card-header h2 {
-  font-size: 1.8rem;
-  font-weight: 700;
-  margin-bottom: 0.5rem;
-  color: #1a1a1a;
+  font-size: clamp(1.55rem, 2.5vw, 2.05rem);
+  font-weight: 800;
+  line-height: 1.15;
+  margin-bottom: 0.6rem;
+  color: #2e2443;
 }
 
 .card-header p {
-  color: #888;
-  font-size: 0.9rem;
+  color: #8f7aa9;
+  font-size: 0.88rem;
+  line-height: 1.5;
   margin-bottom: 2rem;
 }
 
-/* INPUT FIELD (Border bottom only) */
 .field {
   margin-bottom: 1.5rem;
 }
 
 .field label {
   display: block;
-  font-size: 0.8rem;
-  color: #aaa;
-  margin-bottom: 5px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #9983b2;
+  margin-bottom: 0.35rem;
 }
 
 .input-wrapper {
   position: relative;
-  border-bottom: 1px solid #eee;
-  transition: 0.3s;
+  border: none;
+  border-radius: 14px;
+  background: #f4eefb;
+  box-shadow: inset 0 0 0 1px rgba(190, 164, 224, 0.45);
+  transition: box-shadow 0.25s ease;
 }
 
 .input-wrapper:focus-within {
-  border-bottom: 1px solid #c9a6ff;
+  box-shadow: inset 0 0 0 1px #bf97ee;
 }
 
 .input-wrapper input {
   width: 100%;
-  padding: 10px 30px 10px 0;
+  padding: 0.78rem 0.85rem;
   border: none;
   outline: none;
   background: transparent;
-  font-size: 1rem;
+  font-size: 0.95rem;
+  color: #35284f;
 }
 
-.input-wrapper .icon {
-  position: absolute;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  color: #ccc;
-  font-size: 0.9rem;
+.input-wrapper input::placeholder {
+  color: #c0b2d6;
 }
 
-/* CUSTOM CHECKBOX (Pink circle) */
 .form-footer {
-  margin: 1.5rem 0;
+  margin: 1.15rem 0 1.35rem;
 }
 
 .custom-remember {
   display: flex;
   align-items: center;
   cursor: pointer;
-  font-size: 0.9rem;
-  color: #444;
+  font-size: 0.85rem;
+  color: #6d597f;
+  font-weight: 700;
   gap: 10px;
 }
 
@@ -246,55 +286,96 @@ async function onSubmit() {
 .checkmark {
   width: 18px;
   height: 18px;
-  border: 2px solid #ffccd5;
+  border: 2px solid #dcbef7;
   border-radius: 50%;
   display: inline-block;
   position: relative;
+  transition: all 0.2s ease;
 }
 
 .custom-remember input:checked + .checkmark {
-  background-color: #ff8fa3;
-  border-color: #ff8fa3;
+  background-color: #bb84ee;
+  border-color: #bb84ee;
 }
 
-/* BUTTON */
 .btn-login {
   width: 100%;
-  padding: 1rem;
-  background: #e2c0ff;
+  padding: 0.9rem 1rem;
+  background: linear-gradient(180deg, #cda2fb, #b978eb);
   color: white;
   border: none;
-  border-radius: 12px;
-  font-weight: 600;
-  font-size: 1rem;
+  border-radius: 14px;
+  font-weight: 700;
+  font-size: 0.98rem;
   cursor: pointer;
-  transition: 0.3s;
-  box-shadow: 0 4px 15px rgba(226, 192, 255, 0.4);
+  transition: transform 0.2s ease;
+  box-shadow: 0 10px 22px rgba(169, 106, 225, 0.28);
 }
 
 .btn-login:hover {
-  background: #d1a1ff;
   transform: translateY(-2px);
 }
 
-/* RIGHT IMAGE */
-.login-image-side {
-  background: url('/images/IMG_3644.JPG') center/cover no-repeat;
-  min-height: 100vh;
-  height: auto;
-  width: 100%;
+.error-msg {
+  margin-bottom: 0.8rem;
+  border-radius: 10px;
+  border: 1px solid #f4d5d9;
+  background: #fff2f4;
+  color: #b14857;
+  padding: 0.58rem 0.72rem;
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
-/* RESPONSIVE */
-@media (max-width: 900px) {
+.login-image-side {
+  background: url('/images/IMG_3644.JPG') center/cover no-repeat;
+  min-height: 680px;
+  max-height: 860px;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+}
+
+.login-image-side::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.02)),
+    radial-gradient(circle at 8% 12%, rgba(255, 255, 255, 0.48), transparent 28%);
+}
+
+@media (max-width: 980px) {
   .login-page {
     grid-template-columns: 1fr;
+    width: min(640px, calc(100vw - 1.2rem));
+    margin: 0.6rem auto;
+    padding: 0.9rem;
+    min-height: auto;
+    border-radius: 22px;
   }
   .login-image-side {
-    display: none;
+    min-height: 200px;
+    height: 240px;
+    max-height: 240px;
+    order: -1;
   }
   .login-panel {
-    padding: 2rem;
+    border-right: none;
+    padding: 1.5rem 1rem 2rem;
+    background: transparent;
+    backdrop-filter: none;
+  }
+  .brand-area {
+    margin-bottom: 1rem;
+  }
+  .brand-copy h1 {
+    font-size: 1.55rem;
+  }
+  .login-card {
+    max-width: 100%;
+    padding: 1.25rem;
+    border-radius: 20px;
   }
 }
 </style>
