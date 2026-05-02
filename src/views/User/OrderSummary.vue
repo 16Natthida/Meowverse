@@ -21,7 +21,6 @@ const slipPreview = ref(null)
 const onFileChange = (e) => {
   const file = e.target.files[0]
   if (file) {
-    // ตรวจสอบขนาดไฟล์ (เช่น ไม่เกิน 5MB)
     if (file.size > 5 * 1024 * 1024) {
       showNotice('ขนาดไฟล์ต้องไม่เกิน 5MB', 'error')
       return
@@ -53,6 +52,9 @@ const fetchOrder = async () => {
   }
 }
 
+// เช็คประเภทออเดอร์ว่าเป็น Preorder หรือไม่
+const isPreorder = computed(() => order.value?.Order_type === 'Preorder')
+
 // ── PAYMENT METHODS ──
 const paymentMethods = [
   { id: 'bank_transfer', name: 'โอนเงินผ่านธนาคาร', icon: '🏦' },
@@ -72,10 +74,12 @@ const shippingInfo = ref({
 
 // ── CONFIRM PAYMENT ──
 const confirmPayment = async () => {
-  // 1. ตรวจสอบข้อมูลที่จำเป็น
-  if (!shippingInfo.value.name || !shippingInfo.value.phone || !shippingInfo.value.address) {
-    showNotice('กรุณากรอกข้อมูลการจัดส่งให้ครบถ้วน', 'error')
-    return
+  // 1. ตรวจสอบข้อมูลที่จำเป็น (เฉพาะเมื่อไม่ใช่ Preorder)
+  if (!isPreorder.value) {
+    if (!shippingInfo.value.name || !shippingInfo.value.phone || !shippingInfo.value.address) {
+      showNotice('กรุณากรอกข้อมูลการจัดส่งให้ครบถ้วน', 'error')
+      return
+    }
   }
 
   // 2. ตรวจสอบสลิป (ถ้าไม่ใช่ COD)
@@ -88,14 +92,20 @@ const confirmPayment = async () => {
     loading.value = true
     const formData = new FormData()
 
-    // ข้อมูลจัดส่ง
-    formData.append('shipping_name', shippingInfo.value.name)
-    formData.append('shipping_phone', shippingInfo.value.phone)
-    formData.append('shipping_address', shippingInfo.value.address)
+    // จัดการข้อมูลจัดส่งตามประเภท Order
+    if (isPreorder.value) {
+      formData.append('shipping_name', '-')
+      formData.append('shipping_phone', '-')
+      formData.append('shipping_address', '-')
+    } else {
+      formData.append('shipping_name', shippingInfo.value.name)
+      formData.append('shipping_phone', shippingInfo.value.phone)
+      formData.append('shipping_address', shippingInfo.value.address)
+    }
+    
     formData.append('notes', shippingInfo.value.notes)
     formData.append('payment_method', selectedPaymentMethod.value)
 
-    // แนบไฟล์สลิป
     if (slipFile.value) {
       formData.append('slip', slipFile.value)
     }
@@ -225,7 +235,8 @@ onMounted(() => {
             </div>
           </div>
 
-          <div class="section-card">
+          <!-- ตรวจสอบเงื่อนไขการแสดงผลข้อมูลจัดส่ง -->
+          <div v-if="!isPreorder" class="section-card">
             <h3 class="section-title">📍 ข้อมูลการจัดส่ง</h3>
             <div class="form-grid">
               <div class="form-group">
@@ -311,7 +322,8 @@ onMounted(() => {
             </div>
             <div class="summary-row">
               <span>ค่าจัดส่ง</span>
-              <span class="free-text">ฟรี</span>
+              <span class="free-text" v-if="!isPreorder">ฟรี</span>
+              <span v-else style="color: #f59e0b; font-weight: bold;">รอประเมินค่านำเข้า</span>
             </div>
             <hr class="divider" />
             <div class="summary-row total">
@@ -329,6 +341,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* รักษาสไตล์เดิมไว้ทั้งหมด[cite: 7] */
 .order-summary-page {
   --primary: #6f50a0;
   --primary-light: #cda2fb;

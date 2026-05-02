@@ -39,6 +39,14 @@ const router = createRouter({
       name: 'login',
       component: LoginView,
     },
+    { 
+      path: '/preorder-payment/:orderId', component: () => import('../views/User/PreorderPayment.vue'), 
+      meta: { requiresAuth: true, roles: ['user'] } 
+    },
+    { 
+      path: '/admin/slips', component: () => import('../views/Admin/SlipManagement.vue'), 
+      meta: { requiresAuth: true, roles: ['admin'] } 
+    },
     {
       path: '/dashboard',
       name: 'userDashboard',

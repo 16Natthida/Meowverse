@@ -1977,16 +1977,31 @@ app.get('/api/payments', async (_req, res) => {
 app.patch('/api/payments/:pay_id/status', async (req, res) => {
   const { pay_id } = req.params
   const { status } = req.body
-
   if (!['Approved', 'Rejected', 'Pending'].includes(status)) {
     return res.status(400).json({ error: 'invalid status' })
   }
-
+  const connection = await pool.getConnection()
   try {
-    await pool.query('UPDATE payment SET status = ? WHERE pay_id = ?', [status, pay_id])
+    await connection.beginTransaction()
+    await connection.query('UPDATE payment SET status = ? WHERE pay_id = ?', [status, pay_id])
+    if (status === 'Approved') {
+      const [payRows] = await connection.query(
+        `SELECT p.order_id, o.Order_type FROM payment p LEFT JOIN orders o ON p.order_id = o.order_id WHERE p.pay_id = ? LIMIT 1`,
+        [pay_id]
+      )
+      if (payRows.length > 0) {
+        const { order_id, Order_type } = payRows[0]
+        const newOrderStatus = Order_type === 'Preorder' ? 'Wait_for_Import_Fee' : 'Paid'
+        await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [newOrderStatus, order_id])
+      }
+    }
+    await connection.commit()
     res.json({ success: true })
   } catch (err) {
+    await connection.rollback()
     res.status(500).json({ error: err.message })
+  } finally {
+    connection.release()
   }
 })
 

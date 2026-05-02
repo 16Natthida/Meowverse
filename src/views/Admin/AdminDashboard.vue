@@ -22,6 +22,7 @@ const menuItems = computed(() => [
   { name: 'Categories', icon: '🏷️' },
   { name: 'Users', icon: '👥', count: totalMembers.value },
   { name: 'Reports', icon: '📈' },
+  { name: 'Slips', icon: '💳' },
   { name: 'Settings', icon: '⚙️' },
 ])
 
@@ -76,6 +77,7 @@ function handleMenuClick(itemName) {
     Categories: '/admin/products',
     Users: '/admin/users',
     Reports: '/admin/home',
+    Slips: '/admin/slips',
     Settings: '/admin/settings',
   }
   const route = routeMap[itemName]
