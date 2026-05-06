@@ -37,10 +37,10 @@ const pageTitle = computed(() => {
 
   if (route.path === '/admin/preorder-rounds') {
     return 'รอบนำเข้าสินค้า'
+  }
 
   if (route.path === '/admin/slips') {
     return 'จัดการสลิปการชำระเงิน'
-  }
   }
 
   return 'แดชบอร์ด'

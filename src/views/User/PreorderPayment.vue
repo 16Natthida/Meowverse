@@ -1,18 +1,23 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { useAuth } from '../../composables/useAuth'
 
 const router = useRouter()
 const route = useRoute()
-const { getUser } = useAuth()
-const currentUser = computed(() => getUser())
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || 'http://localhost:3001/api'
 
 const order = ref(null)
 const loading = ref(true)
 const error = ref(null)
 const notice = ref({ msg: '', type: '' })
+const readyItems = computed(() => order.value?.items?.filter((item) => item.item_type === 'ready-to-ship') || [])
+const preorderItems = computed(() => order.value?.items?.filter((item) => item.item_type === 'preorder') || [])
+const unspecifiedItems = computed(
+  () =>
+    order.value?.items?.filter(
+      (item) => item.item_type !== 'ready-to-ship' && item.item_type !== 'preorder',
+    ) || [],
+)
 
 const slipFile = ref(null)
 const slipPreview = ref(null)
@@ -77,7 +82,10 @@ const confirmPayment = async () => {
       method: 'POST',
       body: formData,
     })
-    if (!res.ok) throw new Error('เกิดข้อผิดพลาดในการส่งข้อมูล')
+    if (!res.ok) {
+      const errorBody = await res.json().catch(() => null)
+      throw new Error(errorBody?.error || errorBody?.message || 'เกิดข้อผิดพลาดในการส่งข้อมูล')
+    }
 
     showNotice('ส่งหลักฐานเรียบร้อย! รอการตรวจสอบจากทีมงาน', 'success')
     setTimeout(() => router.push('/order-list'), 2500)
@@ -156,18 +164,70 @@ onMounted(fetchOrder)
               </div>
             </div>
 
-            <div class="item-list">
-              <div v-for="item in order.items" :key="item.detail_id" class="order-item">
-                <div class="item-img">
-                  <img v-if="item.image" :src="item.image" />
-                  <span v-else>🐾</span>
+            <div v-if="readyItems.length > 0" class="order-category">
+              <h3 class="category-title">🟢 พร้อมส่ง</h3>
+              <div class="item-list">
+                <div v-for="item in readyItems" :key="item.detail_id" class="order-item">
+                  <div class="item-img">
+                    <img v-if="item.image" :src="item.image" />
+                    <span v-else>🐾</span>
+                  </div>
+                  <div class="item-info">
+                    <p class="item-name">{{ item.name }}</p>
+                    <p v-if="item.flavor" class="item-flavor">รส {{ item.flavor }}</p>
+                    <p v-if="item.preorder_round_id" class="item-round">รอบนำเข้า #{{ item.preorder_round_id }}</p>
+                    <p class="item-price-small">฿{{ Number(item.unit_price).toLocaleString() }}</p>
+                  </div>
+                  <div class="item-qty">x{{ item.qty }}</div>
+                  <div class="item-total">฿{{ (item.unit_price * item.qty).toLocaleString() }}</div>
                 </div>
+              </div>
+            </div>
+            <div v-if="preorderItems.length > 0" class="order-category">
+              <h3 class="category-title">🕐 พรีออเดอร์</h3>
+              <div class="item-list">
+                <div v-for="item in preorderItems" :key="item.detail_id" class="order-item">
+                  <div class="item-img">
+                    <img v-if="item.image" :src="item.image" />
+                    <span v-else>🐾</span>
+                  </div>
+                  <div class="item-info">
+                    <p class="item-name">{{ item.name }}</p>
+                    <p v-if="item.flavor" class="item-flavor">รส {{ item.flavor }}</p>
+                    <p v-if="item.preorder_round_id" class="item-round">รอบนำเข้า #{{ item.preorder_round_id }}</p>
+                    <p class="item-price-small">฿{{ Number(item.unit_price).toLocaleString() }}</p>
+                  </div>
+                  <div class="item-qty">x{{ item.qty }}</div>
+                  <div class="item-total">฿{{ (item.unit_price * item.qty).toLocaleString() }}</div>
+                </div>
+              </div>
+            </div>
+            <div v-if="unspecifiedItems.length > 0" class="order-category">
+              <h3 class="category-title">📦 รายการสินค้า</h3>
+              <div class="item-list">
+                <div v-for="item in unspecifiedItems" :key="item.detail_id" class="order-item">
+                  <div class="item-img">
+                    <img v-if="item.image" :src="item.image" />
+                    <span v-else>🐾</span>
+                  </div>
+                  <div class="item-info">
+                    <p class="item-name">{{ item.name }}</p>
+                    <p v-if="item.flavor" class="item-flavor">รส {{ item.flavor }}</p>
+                    <p class="item-price-small">฿{{ Number(item.unit_price).toLocaleString() }}</p>
+                  </div>
+                  <div class="item-qty">x{{ item.qty }}</div>
+                  <div class="item-total">฿{{ (item.unit_price * item.qty).toLocaleString() }}</div>
+                </div>
+              </div>
+            </div>
+            <div
+              v-if="readyItems.length === 0 && preorderItems.length === 0 && unspecifiedItems.length === 0"
+              class="item-list"
+            >
+              <div class="order-item">
                 <div class="item-info">
-                  <p class="item-name">{{ item.name }}</p>
-                  <p class="item-price-small">฿{{ Number(item.unit_price).toLocaleString() }}</p>
+                  <p class="item-name">ยังไม่มีสินค้าในออเดอร์</p>
                 </div>
-                <div class="item-qty">x{{ item.qty }}</div>
-                <div class="item-total">฿{{ (item.unit_price * item.qty).toLocaleString() }}</div>
               </div>
             </div>
           </div>

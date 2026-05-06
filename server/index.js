@@ -18,6 +18,7 @@ const app = express()
 const port = Number(process.env.API_PORT) || 3001
 
 const frontendOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:5173'
+const LOCAL_DEV_ORIGINS = [frontendOrigin, 'http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:5174', 'http://127.0.0.1:5174']
 const CATEGORY_NAME_MAX_LENGTH = 100
 const CATEGORY_DETAIL_MAX_LENGTH = 255
 const CATEGORY_MIN_COUNT = 4
@@ -46,6 +47,26 @@ const pool = mysql.createPool({
 
 app.locals.db = pool
 
+let hasPreorderQuantitySoldColumn = null
+async function ensurePreorderQuantitySoldColumn() {
+  if (hasPreorderQuantitySoldColumn !== null) {
+    return hasPreorderQuantitySoldColumn
+  }
+
+  try {
+    const [columns] = await pool.query(`SHOW COLUMNS FROM preorder_round_products LIKE 'quantity_sold'`)
+    if (columns.length === 0) {
+      await pool.query(`ALTER TABLE preorder_round_products ADD COLUMN quantity_sold INT NOT NULL DEFAULT 0`)
+    }
+    hasPreorderQuantitySoldColumn = true
+  } catch (error) {
+    console.error('Failed to ensure preorder_round_products.quantity_sold column:', error.message)
+    hasPreorderQuantitySoldColumn = false
+  }
+
+  return hasPreorderQuantitySoldColumn
+}
+
 const uploadStorage = multer.diskStorage({
   destination: (_req, _file, callback) => {
     callback(null, uploadsDir)
@@ -62,7 +83,14 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
 })
 
-app.use(cors({ origin: frontendOrigin }))
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || LOCAL_DEV_ORIGINS.includes(origin)) {
+      return callback(null, true)
+    }
+    return callback(new Error('Not allowed by CORS'))
+  },
+}))
 app.use(express.json({ limit: '2mb' }))
 app.use('/uploads', express.static(uploadsDir))
 app.use('/api/cart', cartRouter)
@@ -275,6 +303,8 @@ function mapProductRow(row, imageUrlMap) {
     stock: Number(row.stock) || 0,
     flavorStock: flavorStockMap,
     basePrice: Number(row.basePrice) || 0,
+    price: Number(row.price ?? row.basePrice) || 0,
+    preorderRoundId: row.preorderRoundId ? Number(row.preorderRoundId) : null,
     description: row.description || '',
     flavors: parseFlavorList(row.flavors),
     imageUrls: imageUrlMap.get(row.id) || [],
@@ -331,6 +361,24 @@ async function queryProductsByIds(productIds, connection = pool) {
         c.cat_name AS categoryName,
         p.stock_qty AS stock,
         p.base_price AS basePrice,
+        (
+          SELECT prp.round_price
+          FROM preorder_round_products prp
+          JOIN preorder_rounds r ON r.round_id = prp.round_id
+          WHERE prp.prod_id = p.prod_id
+            AND LOWER(r.status) IN ('active', 'open')
+          ORDER BY r.start_date DESC, r.round_id DESC
+          LIMIT 1
+        ) AS price,
+        (
+          SELECT prp.round_id
+          FROM preorder_round_products prp
+          JOIN preorder_rounds r ON r.round_id = prp.round_id
+          WHERE prp.prod_id = p.prod_id
+            AND LOWER(r.status) IN ('active', 'open')
+          ORDER BY r.start_date DESC, r.round_id DESC
+          LIMIT 1
+        ) AS preorderRoundId,
         p.preorder_enabled AS preorderEnabled,
         p.ready_to_ship_enabled AS readyToShipEnabled
       FROM products p
@@ -438,8 +486,10 @@ async function ensureAdminSchema() {
       qty INT NOT NULL DEFAULT 1,
       item_type VARCHAR(20) DEFAULT NULL,
       flavor VARCHAR(120) DEFAULT NULL,
+      preorder_round_id INT DEFAULT NULL,
       PRIMARY KEY (cart_id),
       KEY idx_cart_user_id (user_id),
+      KEY idx_cart_preorder_round_id (preorder_round_id),
       CONSTRAINT fk_cart_user
         FOREIGN KEY (user_id) REFERENCES accounts (id)
         ON DELETE CASCADE,
@@ -480,6 +530,7 @@ async function ensureAdminSchema() {
       round_id INT NOT NULL,
       prod_id INT NOT NULL,
       quantity_available INT NOT NULL DEFAULT 0,
+      quantity_sold INT NOT NULL DEFAULT 0,
       round_price DECIMAL(10, 2) NULL,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -497,6 +548,13 @@ async function ensureAdminSchema() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
   `)
 
+  await ensurePreorderQuantitySoldColumn()
+
+  await pool.query(`
+    ALTER TABLE preorder_round_products
+    ADD COLUMN IF NOT EXISTS quantity_sold INT NOT NULL DEFAULT 0
+  `)
+
   await pool.query(`
     ALTER TABLE cart
     ADD COLUMN IF NOT EXISTS item_type VARCHAR(20) DEFAULT NULL
@@ -508,8 +566,23 @@ async function ensureAdminSchema() {
   `)
 
   await pool.query(`
+    ALTER TABLE cart
+    ADD COLUMN IF NOT EXISTS preorder_round_id INT DEFAULT NULL
+  `)
+
+  await pool.query(`
     ALTER TABLE order_details
     ADD COLUMN IF NOT EXISTS flavor VARCHAR(120) DEFAULT NULL
+  `)
+
+  await pool.query(`
+    ALTER TABLE order_details
+    ADD COLUMN IF NOT EXISTS item_type VARCHAR(20) DEFAULT NULL
+  `)
+
+  await pool.query(`
+    ALTER TABLE order_details
+    ADD COLUMN IF NOT EXISTS preorder_round_id INT DEFAULT NULL
   `)
 
   await pool.query(`
@@ -1105,85 +1178,11 @@ app.get('/api/products/ready-to-ship', async (req, res) => {
   }
 })
 
-// Get preorder products for users
+// Public API: Get preorder products in open rounds grouped for users
 app.get('/api/products/preorder', async (req, res) => {
   try {
     const categoryId = req.query.categoryId
     let sql = `
-      SELECT
-        p.prod_id AS id,
-        p.prod_name AS name,
-        p.description AS description,
-        p.flavors AS flavors,
-        p.sku AS sku,
-        p.cat_id AS categoryId,
-        c.cat_name AS categoryName,
-        p.stock_qty AS stock,
-        p.base_price AS basePrice,
-        p.preorder_enabled AS preorderEnabled,
-        p.ready_to_ship_enabled AS readyToShipEnabled
-      FROM products p
-      LEFT JOIN categories c ON c.cat_id = p.cat_id
-      WHERE p.preorder_enabled = 1
-    `
-    const params = []
-
-    if (categoryId) {
-      sql += ' AND p.cat_id = ?'
-      params.push(Number(categoryId))
-    }
-
-    sql += ' ORDER BY p.prod_id DESC'
-
-    const [productRows] = await pool.query(sql, params)
-
-    // Get product IDs and fetch images
-    const productIds = productRows.map((row) => row.id)
-    let imageUrlMap = new Map()
-
-    if (productIds.length > 0) {
-      const [imageRows] = await pool.query(
-        `
-        SELECT prod_id AS productId, image_url AS imageUrl
-        FROM product_images
-        WHERE prod_id IN (?)
-        ORDER BY sort_order ASC, img_id ASC
-      `,
-        [productIds],
-      )
-
-      for (const row of imageRows) {
-        const list = imageUrlMap.get(row.productId) || []
-        list.push(row.imageUrl)
-        imageUrlMap.set(row.productId, list)
-      }
-    }
-
-    const products = productRows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      description: row.description || '',
-      flavors: parseFlavorList(row.flavors),
-      sku: row.sku || '',
-      categoryId: row.categoryId,
-      categoryName: row.categoryName || '',
-      stock: Number(row.stock) || 0,
-      basePrice: Number(row.basePrice) || 0,
-      imageUrls: imageUrlMap.get(row.id) || [],
-      preorderEnabled: Boolean(row.preorderEnabled),
-      readyToShipEnabled: Boolean(row.readyToShipEnabled),
-    }))
-
-    res.json(products)
-  } catch (error) {
-    res.status(500).json({ message: error.message })
-  }
-})
-
-// Public API: Get preorder products in open rounds grouped for users
-app.get('/api/products/preorder', async (req, res) => {
-  try {
-    const [productRows] = await pool.query(`
       SELECT DISTINCT
         p.prod_id AS id,
         p.prod_name AS name,
@@ -1192,6 +1191,7 @@ app.get('/api/products/preorder', async (req, res) => {
         c.cat_name AS categoryName,
         p.stock_qty AS stock,
         p.base_price AS basePrice,
+        COALESCE(prp.round_price, p.base_price) AS price,
         p.preorder_enabled AS preorderEnabled,
         p.ready_to_ship_enabled AS readyToShipEnabled
       FROM preorder_round_products prp
@@ -1199,8 +1199,17 @@ app.get('/api/products/preorder', async (req, res) => {
       JOIN products p ON p.prod_id = prp.prod_id
       LEFT JOIN categories c ON c.cat_id = p.cat_id
       WHERE LOWER(r.status) IN ('active', 'open')
-      ORDER BY c.cat_name ASC, p.prod_name ASC
-    `)
+    `
+    const params = []
+
+    if (categoryId) {
+      sql += ' AND p.cat_id = ?'
+      params.push(Number(categoryId))
+    }
+
+    sql += ' ORDER BY c.cat_name ASC, p.prod_name ASC'
+
+    const [productRows] = await pool.query(sql, params)
 
     const productIds = productRows.map((row) => row.id)
     let imageUrlMap = new Map()
@@ -1230,6 +1239,7 @@ app.get('/api/products/preorder', async (req, res) => {
       categoryId: row.categoryId,
       categoryName: row.categoryName || '',
       stock: Number(row.stock) || 0,
+      price: Number(row.price) || Number(row.basePrice) || 0,
       basePrice: Number(row.basePrice) || 0,
       imageUrls: imageUrlMap.get(row.id) || [],
       preorderEnabled: Boolean(row.preorderEnabled),
@@ -1437,10 +1447,10 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
     }
 
     const round = roundRows[0]
+    const hasQuantitySold = await ensurePreorderQuantitySoldColumn()
 
-    // Get products in this round
-    const [productRows] = await pool.query(
-      `
+    const productQuery = hasQuantitySold
+      ? `
       SELECT
         p.prod_id AS id,
         p.prod_name AS name,
@@ -1450,6 +1460,8 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
         p.stock_qty AS stock,
         p.base_price AS basePrice,
         prp.quantity_available AS quantityAvailable,
+        COALESCE(prp.quantity_sold, 0) AS quantitySold,
+        (prp.quantity_available - COALESCE(prp.quantity_sold, 0)) AS quantityRemaining,
         prp.round_price AS roundPrice,
         p.preorder_enabled AS preorderEnabled,
         p.ready_to_ship_enabled AS readyToShipEnabled
@@ -1458,9 +1470,30 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
       LEFT JOIN categories c ON c.cat_id = p.cat_id
       WHERE prp.round_id = ?
       ORDER BY p.prod_id DESC
-    `,
-      [roundId],
-    )
+    `
+      : `
+      SELECT
+        p.prod_id AS id,
+        p.prod_name AS name,
+        p.sku AS sku,
+        p.cat_id AS categoryId,
+        c.cat_name AS categoryName,
+        p.stock_qty AS stock,
+        p.base_price AS basePrice,
+        prp.quantity_available AS quantityAvailable,
+        0 AS quantitySold,
+        prp.quantity_available AS quantityRemaining,
+        prp.round_price AS roundPrice,
+        p.preorder_enabled AS preorderEnabled,
+        p.ready_to_ship_enabled AS readyToShipEnabled
+      FROM preorder_round_products prp
+      JOIN products p ON p.prod_id = prp.prod_id
+      LEFT JOIN categories c ON c.cat_id = p.cat_id
+      WHERE prp.round_id = ?
+      ORDER BY p.prod_id DESC
+    `
+
+    const [productRows] = await pool.query(productQuery, [roundId])
 
     // Get images for all products
     const productIds = productRows.map((row) => row.id)
@@ -1493,6 +1526,8 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
       stock: Number(row.stock) || 0,
       basePrice: Number(row.basePrice) || 0,
       quantityAvailable: Number(row.quantityAvailable) || 0,
+      quantitySold: Number(row.quantitySold) || 0,
+      quantityRemaining: Number(row.quantityRemaining) || 0,
       roundPrice: row.roundPrice ? Number(row.roundPrice) : Number(row.basePrice) || 0,
       imageUrls: imageUrlMap.get(row.id) || [],
       preorderEnabled: Boolean(row.preorderEnabled),
@@ -1644,7 +1679,7 @@ app.delete('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (r
 // Add product to preorder round
 app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, async (req, res) => {
   const roundId = Number(req.params.id)
-  const { productIds, quantities } = req.body || {}
+  const { productIds, quantities, prices } = req.body || {}
 
   if (!Array.isArray(productIds) || productIds.length === 0) {
     res.status(400).json({ message: 'productIds array is required' })
@@ -1666,13 +1701,14 @@ app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, a
       roundId,
       Number(pid),
       quantities && quantities[index] ? Number(quantities[index]) : 0,
+      prices && prices[index] ? Number(prices[index]) : null,
     ])
 
     await pool.query(
       `
-      INSERT INTO preorder_round_products (round_id, prod_id, quantity_available)
+      INSERT INTO preorder_round_products (round_id, prod_id, quantity_available, round_price)
       VALUES ?
-      ON DUPLICATE KEY UPDATE quantity_available = VALUES(quantity_available)
+      ON DUPLICATE KEY UPDATE quantity_available = VALUES(quantity_available), round_price = VALUES(round_price)
     `,
       [values],
     )
@@ -1714,7 +1750,7 @@ app.delete(
   },
 )
 
-// Update product quantity in preorder round
+// Update product quantity and/or price in preorder round
 app.put(
   '/api/preorder-rounds/:id/products/:productId',
   authenticateToken,
@@ -1722,21 +1758,42 @@ app.put(
   async (req, res) => {
     const roundId = Number(req.params.id)
     const productId = Number(req.params.productId)
-    const { quantity } = req.body || {}
+    const { quantity, price } = req.body || {}
 
-    if (quantity === undefined || quantity < 0) {
-      res.status(400).json({ message: 'quantity must be a non-negative number' })
+    if ((quantity === undefined && price === undefined) || (quantity !== undefined && quantity < 0)) {
+      res.status(400).json({ message: 'quantity and/or price must be valid numbers' })
       return
     }
 
     try {
+      let updateFields = []
+      let values = []
+
+      if (quantity !== undefined) {
+        updateFields.push('quantity_available = ?')
+        values.push(Number(quantity))
+      }
+
+      if (price !== undefined) {
+        updateFields.push('round_price = ?')
+        values.push(price ? Number(price) : null)
+      }
+
+      if (updateFields.length === 0) {
+        res.status(400).json({ message: 'No valid fields to update' })
+        return
+      }
+
+      values.push(roundId)
+      values.push(productId)
+
       const [result] = await pool.query(
         `
       UPDATE preorder_round_products
-      SET quantity_available = ?
+      SET ${updateFields.join(', ')}
       WHERE round_id = ? AND prod_id = ?
     `,
-        [Number(quantity), roundId, productId],
+        values,
       )
 
       if (result.affectedRows === 0) {
@@ -1744,12 +1801,37 @@ app.put(
         return
       }
 
-      res.json({ message: 'Product quantity updated successfully' })
+      res.json({ message: 'Product updated successfully' })
     } catch (error) {
       res.status(500).json({ message: error.message })
     }
   },
 )
+
+// Get stock information for a preorder round
+app.get('/api/preorder-rounds/:id/stock-info', authenticateToken, requireAdmin, async (req, res) => {
+  const roundId = Number(req.params.id)
+
+  try {
+    const [stockInfo] = await pool.query(
+      `
+      SELECT
+        prod_id,
+        quantity_available,
+        COALESCE(quantity_sold, 0) AS quantity_sold,
+        (quantity_available - COALESCE(quantity_sold, 0)) AS quantity_remaining
+      FROM preorder_round_products
+      WHERE round_id = ?
+      ORDER BY prod_id
+    `,
+      [roundId],
+    )
+
+    res.json(stockInfo)
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
 
 app.get('/api/dashboard/overview', async (_req, res) => {
   try {

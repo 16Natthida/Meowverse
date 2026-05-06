@@ -6,7 +6,7 @@ import { useAuth } from '../../composables/useAuth'
 const router = useRouter()
 const { getUser } = useAuth()
 const currentUser = computed(() => getUser())
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || 'http://localhost:3001/api'
 
 const cartItems = ref([])
 const loading = ref(true)
@@ -46,6 +46,8 @@ const fetchCart = async () => {
       price: Number(item.price ?? item.basePrice ?? item.unit_price ?? 0),
       image: item.image ?? item.imageUrl ?? item.imageUrls?.[0] ?? item.images?.[0] ?? null,
       flavor: item.flavor ?? '',
+      item_type: item.item_type ?? '',
+      preorder_round_id: item.preorder_round_id ?? null,
       isPreorder: Boolean(item.pre_item_id) || item.item_type === 'preorder',
       stock: Number(item.stock ?? 999),
     }))
@@ -148,9 +150,13 @@ const checkout = async () => {
     const data = await res.json()
     showNotice('สร้างออเดอร์สำเร็จ! กำลังนำทาง...', 'success')
 
-    // นำทางไปยังหน้าสรุปออเดอร์
+    // นำทางไปยังหน้าสรุปออเดอร์หรือหน้าชำระเงิน Preorder
     setTimeout(() => {
-      router.push(`/order/${data.order_id}`)
+      if (data.order_type === 'Preorder') {
+        router.push(`/preorder-payment/${data.order_id}`)
+      } else {
+        router.push(`/order/${data.order_id}`)
+      }
     }, 1500)
   } catch (err) {
     showNotice(err.message, 'error')

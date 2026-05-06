@@ -121,6 +121,10 @@ const fetchProducts = async () => {
     const arr = Array.isArray(data) ? data : (data.data ?? data.products ?? [])
     products.value = arr.map((p) => ({
       preorderEnabled: Boolean(p.preorderEnabled ?? p.isPreorder ?? false),
+      basePrice: Number(p.basePrice ?? 0),
+      roundPrice: Number(p.roundPrice ?? p.price ?? 0),
+      price: Number(p.basePrice ?? 0),
+      preorderRoundId: p.preorderRoundId ?? null,
       readyToShipEnabled:
         p.readyToShipEnabled != null || p.isReadyToShip != null
           ? Boolean(p.readyToShipEnabled ?? p.isReadyToShip)
@@ -134,7 +138,6 @@ const fetchProducts = async () => {
       description: p.description || '',
       flavors: parseFlavorList(p.flavors),
       flavorStock: parseFlavorStock(p.flavorStock ?? p.flavor_stock),
-      price: p.basePrice ?? p.price ?? 0,
       image: p.imageUrls?.[0] ?? p.image_url?.[0] ?? p.imageUrl ?? p.image ?? null,
       categoryId: p.categoryId != null ? Number(p.categoryId) : null,
       categoryName: p.categoryName ?? '',
@@ -204,7 +207,11 @@ const addToCart = async (product, flavor = '', qty = 1) => {
       qty: qtyToAdd,
       item_type: itemType,
       flavor: flavorToAdd,
+      preorder_round_id: itemType === 'preorder' ? product.preorderRoundId : null,
     }
+    
+    console.log('🔍 addToCart payload:', payload)
+    console.log('🔍 product.preorderRoundId:', product.preorderRoundId)
 
     const res = await fetch(`${API_BASE_URL}/cart`, {
       method: 'POST',
@@ -376,6 +383,14 @@ function getCardBadge(product) {
   }
 
   return null
+}
+
+function getProductDisplayPrice(product) {
+  const itemType = getEffectiveItemType(product)
+  if (itemType === 'preorder') {
+    return Number(product.roundPrice ?? product.price ?? product.basePrice ?? 0)
+  }
+  return Number(product.basePrice ?? product.price ?? 0)
 }
 
 // ── FILTERING ──
@@ -719,7 +734,7 @@ onMounted(async () => {
             <div class="product-card__footer">
               <div class="product-card__price">
                 <span class="price-currency">฿</span>
-                <span class="price-amount">{{ Number(product.price).toLocaleString() }}</span>
+                <span class="price-amount">{{ Number(getProductDisplayPrice(product)).toLocaleString() }}</span>
               </div>
               <span :class="['stock-badge', getStockStatusClass(product.stock)]">
                 สต็อก {{ product.stock }} ชิ้น
@@ -843,7 +858,7 @@ onMounted(async () => {
               </p>
 
               <div class="detail-price-band">
-                ฿{{ Number(selectedProduct.price).toLocaleString() }}
+                ฿{{ Number(getProductDisplayPrice(selectedProduct)).toLocaleString() }}
               </div>
 
               <div v-if="selectedProduct.flavors?.length" class="detail-flavor-section">

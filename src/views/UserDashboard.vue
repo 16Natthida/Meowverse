@@ -259,7 +259,7 @@ function addToCart(product) {
                 <div class="product-footer">
                   <div class="price-section">
                     <span class="currency">฿</span>
-                    <span class="price">{{ product.basePrice }}</span>
+                    <span class="price">{{ product.price ?? product.basePrice }}</span>
                   </div>
                   <span class="stock">สต็อก: {{ product.stock }} ชิ้น</span>
                 </div>
@@ -292,7 +292,7 @@ function addToCart(product) {
             <div class="product-footer">
               <div class="price-section">
                 <span class="currency">฿</span>
-                <span class="price">{{ product.basePrice }}</span>
+                <span class="price">{{ product.price ?? product.basePrice }}</span>
               </div>
               <span class="stock">สต็อก: {{ product.stock }} ชิ้น</span>
             </div>

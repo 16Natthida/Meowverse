@@ -73,6 +73,7 @@ export function usePreorderStore() {
 
   async function fetchRoundDetail(roundId) {
     isLoadingCurrentRound.value = true
+    currentRound.value = null
 
     try {
       currentRound.value = await requestJson(`/preorder-rounds/${roundId}`)
@@ -134,12 +135,13 @@ export function usePreorderStore() {
     }
   }
 
-  async function addProductsToRound(roundId, productIds, quantities = []) {
+  async function addProductsToRound(roundId, productIds, quantities = [], prices = []) {
     await requestJson(`/preorder-rounds/${roundId}/products`, {
       method: 'POST',
       body: JSON.stringify({
         productIds: productIds.map(id => Number(id)),
         quantities: quantities.map(q => Number(q) || 0),
+        prices: prices.map(p => p ? Number(p) : null),
       }),
     })
 
@@ -178,6 +180,23 @@ export function usePreorderStore() {
     }
   }
 
+  async function updateProductPriceInRound(roundId, productId, price) {
+    await requestJson(`/preorder-rounds/${roundId}/products/${productId}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        price: price ? Number(price) : null,
+      }),
+    })
+
+    // Update the current round if it matches
+    if (currentRound.value && currentRound.value.id === roundId) {
+      const product = currentRound.value.products.find(p => String(p.id) === String(productId))
+      if (product) {
+        product.roundPrice = price ? Number(price) : Number(product.basePrice)
+      }
+    }
+  }
+
   async function reloadRounds() {
     return fetchRounds()
   }
@@ -206,6 +225,7 @@ export function usePreorderStore() {
     addProductsToRound,
     removeProductFromRound,
     updateProductQuantityInRound,
+    updateProductPriceInRound,
     reloadRounds,
   }
 }

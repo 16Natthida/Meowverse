@@ -304,7 +304,7 @@ function applyThemeToDocument() {
   try {
     document.documentElement.style.setProperty('--theme-primary', themePrimary.value)
     document.documentElement.style.setProperty('--theme-accent', themeAccent.value)
-  } catch (e) {
+  } catch {
     // ignore in non-browser environments
   }
 }

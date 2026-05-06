@@ -43,20 +43,60 @@ router.post('/checkout', async (req, res) => {
   try {
     await connection.beginTransaction()
 
-    // 1. ดึงข้อมูลตะกร้าของผู้ใช้
+    // 1. ดึงข้อมูลตะกร้าของผู้ใช้ (รวม preorder_round_id และราคา Preorder round)
     const [cartItems] = await connection.query(
       `SELECT
          c.cart_id,
          c.user_id,
          c.prod_id,
          c.qty,
-         c.item_type,
+         COALESCE(NULLIF(c.item_type, ''), CASE
+           WHEN c.preorder_round_id IS NOT NULL THEN 'preorder'
+           WHEN p.ready_to_ship_enabled = 1 THEN 'ready-to-ship'
+           WHEN p.preorder_enabled = 1 THEN 'preorder'
+           ELSE NULL
+         END) AS item_type,
          c.flavor,
+         COALESCE(
+           c.preorder_round_id,
+           (
+             SELECT prp2.round_id
+             FROM preorder_round_products prp2
+             JOIN preorder_rounds r2 ON r2.round_id = prp2.round_id
+             WHERE prp2.prod_id = c.prod_id
+               AND LOWER(r2.status) IN ('active', 'open')
+             ORDER BY r2.start_date DESC, prp2.round_id DESC
+             LIMIT 1
+           )
+         ) AS preorder_round_id,
          p.prod_name AS name,
-         p.base_price AS price,
+         COALESCE(
+           CASE
+             WHEN COALESCE(NULLIF(c.item_type, ''), CASE
+               WHEN c.preorder_round_id IS NOT NULL THEN 'preorder'
+               WHEN p.ready_to_ship_enabled = 1 THEN 'ready-to-ship'
+               WHEN p.preorder_enabled = 1 THEN 'preorder'
+               ELSE NULL
+             END) = 'preorder' THEN CASE
+               WHEN c.preorder_round_id IS NOT NULL THEN COALESCE(prp.round_price, p.base_price)
+               ELSE (
+                 SELECT prp2.round_price
+                 FROM preorder_round_products prp2
+                 JOIN preorder_rounds r2 ON r2.round_id = prp2.round_id
+                 WHERE prp2.prod_id = c.prod_id
+                   AND LOWER(r2.status) IN ('active', 'open')
+                 ORDER BY r2.start_date DESC, prp2.round_id DESC
+                 LIMIT 1
+               )
+             END
+             ELSE NULL
+           END,
+           p.base_price
+         ) AS price,
          p.stock_qty AS stock
        FROM cart c
        LEFT JOIN products p ON c.prod_id = p.prod_id
+       LEFT JOIN preorder_round_products prp ON prp.round_id = c.preorder_round_id AND prp.prod_id = c.prod_id
        WHERE c.user_id = ?
        ORDER BY c.cart_id`,
       [user_id],
@@ -67,13 +107,32 @@ router.post('/checkout', async (req, res) => {
       return res.status(400).json({ error: 'ตะกร้าสินค้าว่างเปล่า' })
     }
 
-    // 2. ตรวจสอบสต็อกสำหรับสินค้าที่พร้อมส่ง
+    // 2. ตรวจสอบสต็อกสำหรับสินค้าที่พร้อมส่ง และ preorder
     for (const item of cartItems) {
       if (item.item_type === 'ready-to-ship' && item.qty > item.stock) {
         await connection.rollback()
         return res.status(400).json({
           error: `สินค้า "${item.name}" มีสต็อกไม่เพียงพอ (เหลือ ${item.stock} ชิ้น)`,
         })
+      }
+
+      // ตรวจสอบ preorder stock
+      if (item.item_type === 'preorder' && item.preorder_round_id) {
+        const [preorderStock] = await connection.query(
+          `SELECT
+             (quantity_available - COALESCE(quantity_sold, 0)) AS remaining
+           FROM preorder_round_products
+           WHERE round_id = ? AND prod_id = ?`,
+          [item.preorder_round_id, item.prod_id],
+        )
+
+        if (preorderStock.length === 0 || preorderStock[0].remaining < item.qty) {
+          const remaining = preorderStock.length > 0 ? preorderStock[0].remaining : 0
+          await connection.rollback()
+          return res.status(400).json({
+            error: `สินค้า "${item.name}" (Preorder) มีสต็อกไม่เพียงพอ (เหลือ ${remaining} ชิ้น)`,
+          })
+        }
       }
     }
 
@@ -95,13 +154,34 @@ router.post('/checkout', async (req, res) => {
     for (const item of cartItems) {
       if (supportsFlavor) {
         await connection.query(
-          'INSERT INTO order_details (order_id, prod_id, flavor, Price, qty, received_qty, arrival_status, Import_fee) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [orderId, item.prod_id, item.flavor || null, item.price, item.qty, 0, 'Pending', 0.0],
+          'INSERT INTO order_details (order_id, prod_id, flavor, Price, qty, received_qty, arrival_status, Import_fee, item_type, preorder_round_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [
+            orderId,
+            item.prod_id,
+            item.flavor || null,
+            item.price,
+            item.qty,
+            0,
+            'Pending',
+            0.0,
+            item.item_type,
+            item.preorder_round_id || null,
+          ],
         )
       } else {
         await connection.query(
-          'INSERT INTO order_details (order_id, prod_id, Price, qty, received_qty, arrival_status, Import_fee) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          [orderId, item.prod_id, item.price, item.qty, 0, 'Pending', 0.0],
+          'INSERT INTO order_details (order_id, prod_id, Price, qty, received_qty, arrival_status, Import_fee, item_type, preorder_round_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [
+            orderId,
+            item.prod_id,
+            item.price,
+            item.qty,
+            0,
+            'Pending',
+            0.0,
+            item.item_type,
+            item.preorder_round_id || null,
+          ],
         )
       }
     }
@@ -119,11 +199,24 @@ router.post('/checkout', async (req, res) => {
       }
     }
 
+    // 8. ลดสต็อก preorder (เพิ่ม quantity_sold)
+    for (const item of cartItems) {
+      if (item.item_type === 'preorder' && item.preorder_round_id) {
+        await connection.query(
+          `UPDATE preorder_round_products
+           SET quantity_sold = COALESCE(quantity_sold, 0) + ?
+           WHERE round_id = ? AND prod_id = ?`,
+          [item.qty, item.preorder_round_id, item.prod_id],
+        )
+      }
+    }
+
     await connection.commit()
 
     res.status(201).json({
       message: 'สร้างออเดอร์สำเร็จ',
       order_id: orderId,
+      order_type: orderType,
       total_amount: totalAmount,
       item_count: cartItems.length,
     })
@@ -213,11 +306,18 @@ router.get('/:order_id', async (req, res) => {
          od.detail_id,
          od.prod_id,
          od.Price AS unit_price,
+         od.Price AS price,
          od.qty,
          od.received_qty,
          od.Lot_id,
          od.arrival_status,
+         od.flavor,
+         od.item_type,
+         od.preorder_round_id,
          p.prod_name AS name,
+         p.cat_id AS categoryId,
+         c.cat_name AS categoryName,
+         p.base_price AS base_price,
          COALESCE(
            (
              SELECT pi.image_url
@@ -230,8 +330,9 @@ router.get('/:order_id', async (req, res) => {
          ) AS image
        FROM order_details od
        LEFT JOIN products p ON od.prod_id = p.prod_id
+       LEFT JOIN categories c ON p.cat_id = c.cat_id
        WHERE od.order_id = ?
-       ORDER BY od.detail_id`,
+       ORDER BY od.item_type ASC, od.detail_id`,
       [order_id],
     )
 
