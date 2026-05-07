@@ -19,6 +19,10 @@ const unspecifiedItems = computed(
       (item) => item.item_type !== 'ready-to-ship' && item.item_type !== 'preorder',
     ) || [],
 )
+const importFeeTotal = computed(() => Number(order.value?.import_fee_total || 0))
+const totalAmountWithImportFee = computed(
+  () => Number(order.value?.total_amount || 0) + importFeeTotal.value,
+)
 const error = ref(null)
 const notice = ref({ msg: '', type: '' })
 
@@ -268,6 +272,7 @@ onMounted(() => {
                     <p v-if="item.categoryName" class="item-category">หมวดหมู่ {{ item.categoryName }}</p>
                     <p v-if="item.preorder_round_id" class="item-round">รอบนำเข้า #{{ item.preorder_round_id }}</p>
                     <p class="item-price-small">฿{{ item.price.toLocaleString() }}</p>
+                    <p v-if="item.import_fee" class="item-import-fee">ค่านำเข้า: ฿{{ Number(item.import_fee).toLocaleString() }}</p>
                   </div>
                   <div class="item-qty">x{{ item.qty }}</div>
                   <div class="item-total">฿{{ (item.price * item.qty).toLocaleString() }}</div>
@@ -390,6 +395,10 @@ onMounted(() => {
               <span>ยอดรวมสินค้า</span>
               <span>฿{{ order.total_amount.toLocaleString() }}</span>
             </div>
+            <div class="summary-row" v-if="importFeeTotal > 0">
+              <span>ค่านำเข้า</span>
+              <span>฿{{ importFeeTotal.toLocaleString() }}</span>
+            </div>
             <div class="summary-row">
               <span>ค่าจัดส่ง</span>
               <span class="free-text" v-if="!isPreorder">ฟรี</span>
@@ -398,7 +407,7 @@ onMounted(() => {
             <hr class="divider" />
             <div class="summary-row total">
               <span>ยอดสุทธิ</span>
-              <span class="total-amount">฿{{ order.total_amount.toLocaleString() }}</span>
+              <span class="total-amount">฿{{ totalAmountWithImportFee.toLocaleString() }}</span>
             </div>
             <button class="btn-checkout" @click="confirmPayment" :disabled="loading">
               {{ loading ? 'กำลังประมวลผล...' : 'ยืนยันและชำระเงิน' }}

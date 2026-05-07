@@ -116,24 +116,6 @@ router.post('/checkout', async (req, res) => {
         })
       }
 
-      // ตรวจสอบ preorder stock
-      if (item.item_type === 'preorder' && item.preorder_round_id) {
-        const [preorderStock] = await connection.query(
-          `SELECT
-             (quantity_available - COALESCE(quantity_sold, 0)) AS remaining
-           FROM preorder_round_products
-           WHERE round_id = ? AND prod_id = ?`,
-          [item.preorder_round_id, item.prod_id],
-        )
-
-        if (preorderStock.length === 0 || preorderStock[0].remaining < item.qty) {
-          const remaining = preorderStock.length > 0 ? preorderStock[0].remaining : 0
-          await connection.rollback()
-          return res.status(400).json({
-            error: `สินค้า "${item.name}" (Preorder) มีสต็อกไม่เพียงพอ (เหลือ ${remaining} ชิ้น)`,
-          })
-        }
-      }
     }
 
     // 3. คำนวณราคารวมและกำหนดประเภทออเดอร์
@@ -312,6 +294,7 @@ router.get('/:order_id', async (req, res) => {
          od.Lot_id,
          od.arrival_status,
          od.flavor,
+         od.Import_fee AS import_fee,
          od.item_type,
          od.preorder_round_id,
          p.prod_name AS name,
@@ -336,13 +319,57 @@ router.get('/:order_id', async (req, res) => {
       [order_id],
     )
 
+    const importFeeTotal = detailRows.reduce((sum, item) => sum + (Number(item.import_fee) || 0), 0)
+
     res.json({
       ...order,
       items: detailRows,
+      import_fee_total: importFeeTotal,
     })
   } catch (err) {
     console.error('[GET /api/orders/:order_id]', err)
     res.status(500).json({ error: 'เกิดข้อผิดพลาดในการดึงข้อมูลออเดอร์' })
+  }
+})
+
+router.patch('/:order_id/import-fee', async (req, res) => {
+  const { order_id } = req.params
+  const importFee = Number(req.body.import_fee)
+
+  if (Number.isNaN(importFee) || importFee < 0) {
+    return res.status(400).json({ error: 'import_fee must be a non-negative number' })
+  }
+
+  const connection = await getDB(req).getConnection()
+  try {
+    await connection.beginTransaction()
+
+    const [rows] = await connection.query(
+      `SELECT detail_id FROM order_details
+       WHERE order_id = ? AND item_type = 'preorder'
+       ORDER BY detail_id ASC
+       LIMIT 1`,
+      [order_id],
+    )
+
+    if (rows.length === 0) {
+      await connection.rollback()
+      return res.status(404).json({ error: 'ไม่พบรายการพรีออเดอร์ในออเดอร์นี้' })
+    }
+
+    await connection.query(
+      'UPDATE order_details SET Import_fee = ? WHERE detail_id = ?',
+      [importFee, rows[0].detail_id],
+    )
+
+    await connection.commit()
+    res.json({ success: true, order_id: Number(order_id), import_fee: importFee })
+  } catch (err) {
+    await connection.rollback()
+    console.error('[PATCH /api/orders/:order_id/import-fee]', err)
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการบันทึกค่านำเข้า' })
+  } finally {
+    connection.release()
   }
 })
 

@@ -10,6 +10,7 @@ const order = ref(null)
 const loading = ref(true)
 const error = ref(null)
 const notice = ref({ msg: '', type: '' })
+const importFeeTotal = computed(() => Number(order.value?.import_fee_total || 0))
 const readyItems = computed(() => order.value?.items?.filter((item) => item.item_type === 'ready-to-ship') || [])
 const preorderItems = computed(() => order.value?.items?.filter((item) => item.item_type === 'preorder') || [])
 const unspecifiedItems = computed(
@@ -18,6 +19,16 @@ const unspecifiedItems = computed(
       (item) => item.item_type !== 'ready-to-ship' && item.item_type !== 'preorder',
     ) || [],
 )
+const paymentStatus = computed(() => {
+  return importFeeTotal.value > 0 ? 'round2' : 'round1'
+})
+
+const currentPaymentAmount = computed(() => {
+  if (importFeeTotal.value > 0) {
+    return importFeeTotal.value
+  }
+  return Number(order.value?.total_amount || 0)
+})
 
 const slipFile = ref(null)
 const slipPreview = ref(null)
@@ -150,8 +161,11 @@ onMounted(fetchOrder)
         <div class="order-details">
           <div class="section-card">
             <h2 class="section-title">🕐 Preorder #{{ order.order_id }}</h2>
-            <div class="preorder-notice">
-              สินค้า Preorder จะถูกนำเข้าหลังได้รับการชำระเงิน ทีมงานจะแจ้งค่านำเข้าเพิ่มเติมภายหลัง
+            <div class="preorder-notice" v-if="importFeeTotal === 0">
+              <strong>รอบ 1 (ชำระแรก):</strong> สินค้า Preorder จะถูกนำเข้าหลังได้รับการชำระเงิน ทีมงานจะแจ้งค่านำเข้าเพิ่มเติมภายหลัง
+            </div>
+            <div class="preorder-notice" style="background: #ecfdf5; border-color: #10b981;" v-else>
+              <strong style="color: #10b981;">รอบ 2 (ชำระค่านำเข้า):</strong> <span style="color: #059669;">แอดมินได้แจ้งค่านำเข้าแล้ว กรุณาชำระเงินค่านำเข้า</span>
             </div>
             <div class="order-info">
               <div class="info-row">
@@ -271,17 +285,23 @@ onMounted(fetchOrder)
               <span>ยอดรวมสินค้า</span>
               <span>฿{{ Number(order.total_amount).toLocaleString() }}</span>
             </div>
+            <div class="summary-row" v-if="importFeeTotal > 0">
+              <span>ค่านำเข้าแจ้งแล้ว</span>
+              <span>฿{{ importFeeTotal.toLocaleString() }}</span>
+            </div>
             <div class="summary-row">
-              <span>ค่านำเข้า</span>
-              <span class="pending-text">แจ้งภายหลัง</span>
+              <span>สถานะค่านำเข้า</span>
+              <span class="pending-text" v-if="importFeeTotal === 0">⏳ รอแจ้งจากแอดมิน</span>
+              <span v-else style="color: #10b981; font-weight: 600;">✅ แจ้งแล้ว</span>
             </div>
             <hr class="divider" />
             <div class="summary-row total">
               <span>ยอดชำระขณะนี้</span>
-              <span class="total-amount">฿{{ Number(order.total_amount).toLocaleString() }}</span>
+              <span class="total-amount" v-if="importFeeTotal > 0">฿{{ importFeeTotal.toLocaleString() }}</span>
+              <span class="total-amount" v-else>฿{{ Number(order.total_amount).toLocaleString() }}</span>
             </div>
             <button class="btn-checkout" @click="confirmPayment" :disabled="loading">
-              {{ loading ? 'กำลังประมวลผล...' : 'ยืนยันการชำระเงิน Preorder' }}
+              {{ loading ? 'กำลังประมวลผล...' : (importFeeTotal > 0 ? 'ยืนยันการชำระค่านำเข้า' : 'ยืนยันการชำระเงิน Preorder') }}
             </button>
           </div>
         </div>

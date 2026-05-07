@@ -7,6 +7,10 @@ const payments = ref([])
 const loading = ref(false)
 const error = ref('')
 const selectedSlip = ref(null)
+const selectedOrder = ref(null)
+const selectedOrderLoading = ref(false)
+const selectedOrderError = ref('')
+const importFeeInput = ref('')
 const filterStatus = ref('all')
 
 // ใช้ Config สีและข้อความเดียวกับ HomeView
@@ -51,8 +55,71 @@ async function updateStatus(payId, status) {
   }
 }
 
-function openSlip(pay) { selectedSlip.value = pay }
-function closeSlip()   { selectedSlip.value = null }
+async function fetchOrderDetails(orderId) {
+  selectedOrderLoading.value = true
+  selectedOrderError.value = ''
+  selectedOrder.value = null
+
+  try {
+    const res = await fetch(`${API_BASE}/orders/${orderId}`)
+    if (!res.ok) {
+      throw new Error(`ไม่สามารถโหลดข้อมูลออเดอร์ได้ (${res.status})`)
+    }
+    selectedOrder.value = await res.json()
+    importFeeInput.value = selectedOrder.value.import_fee_total || ''
+  } catch (err) {
+    selectedOrderError.value = err.message
+  } finally {
+    selectedOrderLoading.value = false
+  }
+}
+
+async function openSlip(pay) {
+  selectedSlip.value = pay
+  selectedOrder.value = null
+  importFeeInput.value = ''
+  selectedOrderError.value = ''
+
+  if (pay.Order_type === 'Preorder') {
+    await fetchOrderDetails(pay.order_id)
+  }
+}
+
+function closeSlip() {
+  selectedSlip.value = null
+  selectedOrder.value = null
+  selectedOrderError.value = ''
+  importFeeInput.value = ''
+}
+
+async function saveImportFee() {
+  if (!selectedSlip.value) return
+  const fee = Number(importFeeInput.value)
+
+  if (Number.isNaN(fee) || fee < 0) {
+    selectedOrderError.value = 'กรุณากรอกค่านำเข้าที่เป็นตัวเลข 0 ขึ้นไป'
+    return
+  }
+
+  try {
+    selectedOrderError.value = ''
+    const res = await fetch(`${API_BASE}/orders/${selectedSlip.value.order_id}/import-fee`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ import_fee: fee }),
+    })
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => null)
+      throw new Error(body?.error || 'ไม่สามารถบันทึกค่านำเข้าได้')
+    }
+
+    await fetchPayments()
+    await fetchOrderDetails(selectedSlip.value.order_id)
+  } catch (err) {
+    selectedOrderError.value = err.message
+  }
+}
 
 function formatDate(d) {
   if (!d) return '-'
@@ -95,8 +162,8 @@ onMounted(fetchPayments)
 
     <!-- Filter Pills โดยใช้โครงสร้าง KPI Grid -->
     <section class="kpi-grid">
-      <article 
-        class="kpi-card clickable" 
+      <article
+        class="kpi-card clickable"
         :class="{ 'kpi-card--highlight': filterStatus === 'all' }"
         @click="filterStatus = 'all'"
       >
@@ -104,8 +171,8 @@ onMounted(fetchPayments)
         <p class="kpi-value">{{ payments.length }} รายการ</p>
       </article>
 
-      <article 
-        class="kpi-card clickable" 
+      <article
+        class="kpi-card clickable"
         :class="{ 'kpi-card--highlight': filterStatus === 'Pending' }"
         @click="filterStatus = 'Pending'"
       >
@@ -113,8 +180,8 @@ onMounted(fetchPayments)
         <p class="kpi-value" style="color: #f59e0b">{{ countByStatus('Pending') }}</p>
       </article>
 
-      <article 
-        class="kpi-card clickable" 
+      <article
+        class="kpi-card clickable"
         :class="{ 'kpi-card--highlight': filterStatus === 'Approved' }"
         @click="filterStatus = 'Approved'"
       >
@@ -122,8 +189,8 @@ onMounted(fetchPayments)
         <p class="kpi-value" style="color: #10b981">{{ countByStatus('Approved') }}</p>
       </article>
 
-      <article 
-        class="kpi-card clickable" 
+      <article
+        class="kpi-card clickable"
         :class="{ 'kpi-card--highlight': filterStatus === 'Rejected' }"
         @click="filterStatus = 'Rejected'"
       >
@@ -215,6 +282,38 @@ onMounted(fetchPayments)
           </div>
           <div class="slip-modal-body">
             <img :src="resolveSlipUrl(selectedSlip.slip_img)" class="slip-img-full" alt="slip" />
+
+            <div v-if="selectedSlip.Order_type === 'Preorder'" class="import-fee-panel">
+              <h4>ค่านำเข้า</h4>
+              <p class="import-fee-note">สำหรับพรีออเดอร์ แอดมินสามารถบันทึกค่านำเข้าเพื่อแจ้งลูกค้าต่อได้</p>
+
+              <div v-if="selectedOrderLoading" class="state-wrap">
+                <div class="loader"></div>
+                <p>กำลังโหลดข้อมูลออเดอร์...</p>
+              </div>
+
+              <div v-else>
+                <div v-if="selectedOrderError" class="error-box">{{ selectedOrderError }}</div>
+                <div v-else-if="selectedOrder">
+                  <div class="import-fee-summary">
+                    <p>ยอดรวมสินค้า: ฿{{ Number(selectedOrder.total_amount).toLocaleString('th-TH') }}</p>
+                    <p>ค่านำเข้าปัจจุบัน: ฿{{ Number(selectedOrder.import_fee_total || 0).toLocaleString('th-TH') }}</p>
+                  </div>
+                  <div class="form-group">
+                    <label for="import-fee-input">ใส่ค่านำเข้า</label>
+                    <input
+                      id="import-fee-input"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      v-model="importFeeInput"
+                      class="form-input"
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="slip-modal-foot" v-if="selectedSlip.status === 'Pending'">
             <button class="btn-approve" @click="updateStatus(selectedSlip.pay_id, 'Approved')">✓ อนุมัติสลิป</button>
@@ -224,6 +323,9 @@ onMounted(fetchPayments)
              <span class="status-pill" :style="{ color: statusConfig[selectedSlip.status].color, background: statusConfig[selectedSlip.status].bg }">
                 {{ statusConfig[selectedSlip.status].text }}
              </span>
+          </div>
+          <div class="slip-modal-foot" v-if="selectedSlip.Order_type === 'Preorder'">
+            <button class="btn-approve" @click="saveImportFee">💰 บันทึกค่านำเข้า</button>
           </div>
         </div>
       </div>
@@ -286,6 +388,15 @@ th { color: #826ea1; text-transform: uppercase; letter-spacing: 0.05em; font-siz
 .slip-modal-head { display: flex; justify-content: space-between; padding: 1rem; border-bottom: 1px solid #eee; }
 .slip-img-full { width: 100%; max-height: 450px; object-fit: contain; padding: 1rem; }
 .slip-modal-foot { padding: 1rem; border-top: 1px solid #eee; display: flex; justify-content: flex-end; gap: 10px; }
+
+.import-fee-panel { padding: 1rem 1.2rem 1.8rem; border-top: 1px solid #f3e8ff; background: #faf5ff; margin-top: 1rem; border-radius: 12px; }
+.import-fee-panel h4 { margin: 0 0 0.5rem; font-size: 1rem; color: #5b21b6; }
+.import-fee-note { margin: 0 0 1rem; color: #6d28d9; font-size: 0.9rem; }
+.import-fee-summary { margin-bottom: 0.8rem; color: #4338ca; font-size: 0.9rem; line-height: 1.5; }
+.import-fee-summary p { margin: 0; }
+.form-group { margin-top: 0.8rem; }
+.form-group label { display: block; margin-bottom: 0.35rem; color: #4c1d95; font-weight: 700; }
+.form-input { width: 100%; padding: 0.75rem 0.9rem; border-radius: 12px; border: 1px solid #ddd6fe; background: #fff; color: #1e293b; }
 
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }

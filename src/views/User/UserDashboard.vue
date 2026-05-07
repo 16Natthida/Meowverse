@@ -184,18 +184,21 @@ const addToCart = async (product, flavor = '', qty = 1) => {
     return
   }
 
-  // Check flavor stock
+  // Check flavor stock only for ready-to-ship items
   const flavorToAdd = String(flavor || '').trim() || product.flavors?.[0] || ''
-  const flavorStock = getFlavorStock(flavorToAdd)
-  if (flavorStock === 0) {
-    showNotice(`รสชาติ "${flavorToAdd}" หมดสต็อกแล้ว`, 'error')
-    return
-  }
-
+  const flavorStock = getFlavorStock(flavorToAdd, product)
   const qtyToAdd = Math.max(1, Number(qty) || 1)
-  if (qtyToAdd > flavorStock) {
-    showNotice(`สต็อกของ "${flavorToAdd}" มีเพียง ${flavorStock} ชิ้นเท่านั้น`, 'error')
-    return
+
+  if (itemType !== 'preorder') {
+    if (flavorStock === 0) {
+      showNotice(`รสชาติ "${flavorToAdd}" หมดสต็อกแล้ว`, 'error')
+      return
+    }
+
+    if (qtyToAdd > flavorStock) {
+      showNotice(`สต็อกของ "${flavorToAdd}" มีเพียง ${flavorStock} ชิ้นเท่านั้น`, 'error')
+      return
+    }
   }
 
   cartLoading.value = { ...cartLoading.value, [product.id]: true }
@@ -209,7 +212,7 @@ const addToCart = async (product, flavor = '', qty = 1) => {
       flavor: flavorToAdd,
       preorder_round_id: itemType === 'preorder' ? product.preorderRoundId : null,
     }
-    
+
     console.log('🔍 addToCart payload:', payload)
     console.log('🔍 product.preorderRoundId:', product.preorderRoundId)
 
@@ -522,6 +525,18 @@ async function fetchLogoImage() {
   }
 }
 
+// ── AUTO SELECT TAB ──
+function autoSelectTab() {
+  const hasPreorder = products.value.some((p) => p.isPreorder)
+  const hasReadyToShip = products.value.some((p) => p.isReadyToShip)
+
+  if (hasPreorder) {
+    activeTab.value = 'พรีออเดอร์'
+  } else if (hasReadyToShip) {
+    activeTab.value = 'พร้อมส่ง'
+  }
+}
+
 onMounted(async () => {
   await Promise.all([
     fetchCategories(),
@@ -530,6 +545,7 @@ onMounted(async () => {
     fetchBannerImage(),
     fetchLogoImage(),
   ])
+  autoSelectTab()
 })
 </script>
 

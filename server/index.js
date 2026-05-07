@@ -2040,7 +2040,7 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
 app.get('/api/payments', async (_req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT p.*, o.user_id, a.username
+      `SELECT p.*, o.user_id, o.Order_type, a.username
        FROM payment p
        LEFT JOIN orders o ON p.order_id = o.order_id
        LEFT JOIN accounts a ON o.user_id = a.user_id
