@@ -154,7 +154,24 @@ const fetchProducts = async () => {
     loading.value = false
   }
 }
-
+const fetchActivePreorderRound = async () => {
+  try {
+    const res = await fetch(`${API_BASE_URL}/preorder-rounds`)
+    if (!res.ok) return
+    const data = await res.json()
+    
+    const now = new Date()
+    // ค้นหารอบที่ Status เป็น active และ วันนี้อยู่ระหว่าง start และ end
+    activePreorderRound.value = data.find(round => {
+      const start = new Date(round.start_date) // ใช้ snake_case
+      const end = new Date(round.end_date)     // ใช้ snake_case
+      return round.status === 'active' && now >= start && now <= end
+    })
+    console.log("Active Round Found:", activePreorderRound.value) // เช็กใน Console
+  } catch (err) {
+    console.error('Error:', err)
+  }
+}
 // ── FETCH CART COUNT ──
 const fetchCartCount = async () => {
   const user = currentUser.value
@@ -179,8 +196,8 @@ const addToCart = async (product, flavor = '', qty = 1) => {
   }
 
   const itemType = getEffectiveItemType(product)
-  if (!itemType) {
-    showNotice('สินค้านี้ยังไม่เปิดขาย', 'warn')
+  if (itemType === 'preorder' && !isPreorderOpen.value) {
+    showNotice('ขออภัย รอบพรีออเดอร์นี้ปิดรับแล้ว ไม่สามารถสั่งซื้อได้', 'error')
     return
   }
 
@@ -544,12 +561,21 @@ onMounted(async () => {
     fetchCartCount(),
     fetchBannerImage(),
     fetchLogoImage(),
+    fetchActivePreorderRound(), // เพิ่มตรงนี้
   ])
   autoSelectTab()
 })
 </script>
 
 <template>
+<div v-if="activeTab === 'พรีออเดอร์' && activePreorderRound" class="preorder-info-banner">
+  <div class="preorder-info-card">
+    <h3>{{ activePreorderRound.round_name }}</h3> <p>{{ activePreorderRound.round_description }}</p>
+    <div class="dates">
+      ปิดรับ: {{ new Date(activePreorderRound.end_date).toLocaleDateString('th-TH') }}
+    </div>
+  </div>
+</div>
   <div class="shop">
     <!-- ───── NAVBAR ───── -->
     <nav class="navbar">
@@ -712,6 +738,18 @@ onMounted(async () => {
       <div class="products__header">
         <div>
           <h2 class="products__title">สินค้า</h2>
+
+          <div v-if="activeTab === 'พรีออเดอร์' && activePreorderRound" class="preorder-info-banner">
+        <div class="preorder-info-card">
+          <span class="info-label">📢 รอบที่กำลังเปิด:</span>
+          <h3 class="info-title">{{ activePreorderRound.name }}</h3>
+          <p class="info-desc">{{ activePreorderRound.description }}</p>
+          <div class="info-dates">
+  📅 ปิดรับวันที่: {{ activePreorderRound?.endDate ? new Date(activePreorderRound.endDate).toLocaleDateString('th-TH') : 'รอระบุวันที่' }}
+</div>
+          <div v-if="!isPreorderOpen" class="status-badge closed">⚠️ ปิดรับออเดอร์แล้ว</div>
+        </div>
+      </div>
           <p class="products__sub">
             {{
               activeTab === 'พรีออเดอร์'
@@ -764,13 +802,12 @@ onMounted(async () => {
               </span>
             </div>
 
-            <button
-              class="btn-cart"
-              :disabled="cartLoading[product.id] || Number(product.stock) === 0"
-              @click.stop="
-                product.flavors?.length ? openProductDetail(product) : addToCart(product)
-              "
-            >
+           <button
+  class="btn-cart"
+  :disabled="cartLoading[product.id] || Number(product.stock) === 0 || (activeTab === 'พรีออเดอร์' && !isPreorderOpen)"
+  @click.stop="product.flavors?.length ? openProductDetail(product) : addToCart(product)"
+>
+            <span v-if="activeTab === 'พรีออเดอร์' && !isPreorderOpen">ปิดรับพรีออเดอร์</span>
               <span v-if="cartLoading[product.id]" class="btn-cart__inner">
                 <svg class="spin cart-svg" viewBox="0 0 24 24" fill="none">
                   <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.3)" stroke-width="3" />
@@ -956,9 +993,14 @@ onMounted(async () => {
 
               <div class="detail-actions">
                 <button
-                  class="btn btn--primary detail-action-btn"
-                  @click="addToCart(selectedProduct, selectedFlavor, detailQty)"
-                >
+  class="btn btn--primary detail-action-btn"
+  :disabled="(activeTab === 'พรีออเดอร์' && !isPreorderOpen)"
+  @click="addToCart(selectedProduct, selectedFlavor, detailQty)"
+>
+<span v-if="activeTab === 'พรีออเดอร์' && !isPreorderOpen">ปิดรับพรีออเดอร์แล้ว</span>
+  <span v-else>
+    {{ selectedProduct.flavors?.length ? 'เพิ่มลงตะกร้า (ตัวเลือกนี้)' : 'เพิ่มลงตะกร้า' }}
+  </span>
                   {{
                     selectedProduct.flavors?.length
                       ? 'เพิ่มลงตะกร้า (ตัวเลือกนี้)'
@@ -978,6 +1020,56 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.preorder-info-banner {
+  margin-top: 1rem;
+  margin-bottom: 1.5rem;
+}
+.preorder-info-card {
+  background: #fdf2ff; /* สีม่วงอ่อนตามธีม */
+  border: 1px solid #e9d5ff;
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+.info-label {
+  color: #a855f7;
+  font-weight: 700;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+}
+.info-title {
+  color: #4c1d95;
+  font-size: 1.4rem;
+  margin: 0.2rem 0 0.8rem;
+}
+
+.info-desc {
+  color: #6b7280;
+  margin-bottom: 1rem;
+}
+
+.info-dates {
+  display: flex;
+  gap: 1.5rem;
+  font-size: 0.95rem;
+  color: #374151;
+}
+
+.date-item span {
+  font-weight: bold;
+  color: #7c3aed;
+}
+
+.status-badge.closed {
+  margin-top: 1rem;
+  background: #fee2e2;
+  color: #dc2626;
+  padding: 0.5rem;
+  border-radius: 6px;
+  text-align: center;
+  font-weight: bold;
+}
 .shop {
   --primary: #6f50a0;
   --primary-light: #cda2fb;

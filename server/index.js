@@ -2056,7 +2056,17 @@ app.get('/api/payments', async (_req, res) => {
 // เพิ่มไว้ในไฟล์ index.js ต่อจาก API อื่นๆ
 app.get('/api/preorder-rounds', async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT * FROM preorder_rounds ORDER BY created_at DESC');
+    const [rows] = await pool.query(`
+      SELECT 
+        round_id AS id, 
+        round_name AS name, 
+        round_description AS description, 
+        start_date AS startDate, 
+        end_date AS endDate, 
+        status 
+      FROM preorder_rounds 
+      ORDER BY created_at DESC
+    `);
     res.json(rows);
   } catch (error) {
     res.status(500).json({ error: error.message });

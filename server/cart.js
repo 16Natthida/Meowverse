@@ -81,21 +81,6 @@ async function getProductById(db, prodId) {
   return rows[0] || null
 }
 
-async function findActivePreorderRoundForProduct(db, prodId) {
-  const [rows] = await db.query(
-    `SELECT prp.round_id
-     FROM preorder_round_products prp
-     JOIN preorder_rounds r ON r.round_id = prp.round_id
-     WHERE prp.prod_id = ?
-       AND LOWER(r.status) IN ('active', 'open')
-     ORDER BY r.start_date DESC, prp.round_id DESC
-     LIMIT 1`,
-    [prodId],
-  )
-
-  return rows[0]?.round_id || null
-}
-
 // ── ดึง db connection จาก app locals (หรือ import ตรงก็ได้) ──
 // สมมติใช้ mysql2/promise pool ชื่อ `db` ที่ set ไว้ใน app.locals
 // ถ้าใช้วิธีอื่นให้แก้ส่วนนี้ตามโปรเจกต์
@@ -114,7 +99,7 @@ router.get('/', async (req, res) => {
   try {
     const db = getDB(req)
 
-    // JOIN กับ products และ preorder_round_products เพื่อดึงชื่อ ราคา รูปภาพ
+    // JOIN กับ products เพื่อดึงชื่อ ราคา รูปภาพ
     const [rows] = await db.query(
       `SELECT
          c.cart_id,
@@ -122,48 +107,29 @@ router.get('/', async (req, res) => {
          c.prod_id,
          c.qty,
          c.flavor,
-         COALESCE(
-           c.preorder_round_id,
-           (
-             SELECT prp2.round_id
-             FROM preorder_round_products prp2
-             JOIN preorder_rounds r2 ON r2.round_id = prp2.round_id
-             WHERE prp2.prod_id = c.prod_id
-               AND LOWER(r2.status) IN ('active', 'open')
-             ORDER BY r2.start_date DESC, prp2.round_id DESC
-             LIMIT 1
-           )
-         ) AS preorder_round_id,
-         COALESCE(NULLIF(c.item_type, ''), CASE
-           WHEN c.preorder_round_id IS NOT NULL THEN 'preorder'
+         COALESCE(c.item_type, CASE
            WHEN p.ready_to_ship_enabled = 1 THEN 'ready-to-ship'
            WHEN p.preorder_enabled = 1 THEN 'preorder'
            ELSE NULL
          END) AS item_type,
          p.prod_name AS name,
-         COALESCE(
-           CASE
-             WHEN COALESCE(NULLIF(c.item_type, ''), CASE
-               WHEN c.preorder_round_id IS NOT NULL THEN 'preorder'
-               WHEN p.ready_to_ship_enabled = 1 THEN 'ready-to-ship'
-               WHEN p.preorder_enabled = 1 THEN 'preorder'
-               ELSE NULL
-             END) = 'preorder' THEN CASE
-               WHEN c.preorder_round_id IS NOT NULL THEN COALESCE(prp.round_price, p.base_price)
-               ELSE (
-                 SELECT prp2.round_price
-                 FROM preorder_round_products prp2
-                 JOIN preorder_rounds r2 ON r2.round_id = prp2.round_id
-                 WHERE prp2.prod_id = c.prod_id
-                   AND LOWER(r2.status) IN ('active', 'open')
-                 ORDER BY r2.start_date DESC, prp2.round_id DESC
+        c.round_id AS round_id,
+         -- prefer locked round_price in cart; otherwise compute from active round or preorder/base price
+         COALESCE(c.round_price,
+         CASE
+           WHEN COALESCE(c.item_type, CASE WHEN p.ready_to_ship_enabled = 1 THEN 'ready-to-ship' WHEN p.preorder_enabled = 1 THEN 'preorder' ELSE NULL END) = 'preorder'
+             THEN COALESCE(
+               (
+                 SELECT prp.round_price
+                 FROM preorder_round_products prp
+                 JOIN preorder_rounds r ON prp.round_id = r.round_id
+                 WHERE prp.prod_id = p.prod_id AND r.status = 'active'
+                 ORDER BY prp.link_id DESC
                  LIMIT 1
-               )
-             END
-             ELSE NULL
-           END,
-           p.base_price
-         ) AS price,
+               ), p.preorder_price, p.base_price
+             )
+           ELSE p.base_price
+         END) AS price,
          COALESCE(
            (
              SELECT pi.image_url
@@ -174,10 +140,24 @@ router.get('/', async (req, res) => {
            ),
            ''
          ) AS image,
-         p.stock_qty AS stock
+         p.stock_qty AS stock,
+         -- calculate remaining preorder pool for the round (if any): quantity_available - reserved_in_carts
+         COALESCE(
+           (
+             SELECT prp.quantity_available - COALESCE((
+               SELECT SUM(c2.qty) FROM cart c2 WHERE c2.prod_id = p.prod_id AND c2.item_type = 'preorder' AND c2.round_id = prp.round_id
+             ),0)
+             FROM preorder_round_products prp
+             WHERE prp.prod_id = p.prod_id
+               AND prp.round_id = COALESCE(c.round_id, (
+                 SELECT r.round_id FROM preorder_rounds r WHERE LOWER(r.status) = 'active' LIMIT 1
+               ))
+             LIMIT 1
+           ),
+           NULL
+         ) AS preorder_remaining
        FROM cart c
        LEFT JOIN products p ON c.prod_id = p.prod_id
-       LEFT JOIN preorder_round_products prp ON prp.round_id = c.preorder_round_id AND prp.prod_id = c.prod_id
        WHERE c.user_id = ?
        ORDER BY c.cart_id DESC`,
       [user_id],
@@ -193,10 +173,18 @@ router.get('/', async (req, res) => {
 // ─────────────────────────────────────────────
 // POST /api/cart
 // เพิ่มสินค้าลงตะกร้า (ถ้ามีอยู่แล้วให้ +qty)
-// Body: { user_id, prod_id, qty, item_type, flavor, preorder_round_id }
+// Body: { user_id, prod_id, qty }
 // ─────────────────────────────────────────────
 router.post('/', async (req, res) => {
-  const { user_id, prod_id, qty = 1, item_type, flavor = '', preorder_round_id } = req.body
+  const {
+    user_id,
+    prod_id,
+    qty = 1,
+    item_type,
+    flavor = '',
+    round_id = null,
+    round_price = null,
+  } = req.body
 
   if (!user_id) return res.status(400).json({ error: 'user_id is required' })
   if (!prod_id) {
@@ -211,72 +199,173 @@ router.post('/', async (req, res) => {
       return res.status(404).json({ error: 'Product not found' })
     }
 
-    const requestedType = normalizeItemType(item_type)
-    const fallbackType = requestedType || getFallbackItemType(product)
-    const effectiveItemType = fallbackType || null
+    const requestedType = normalizeItemType(item_type) || getFallbackItemType(product)
     const flavorList = parseFlavorList(product.flavors)
     const requestedFlavor = normalizeFlavor(flavor)
     const effectiveFlavor =
       flavorList.length > 0 ? requestedFlavor || flavorList[0] : requestedFlavor
 
-    let resolvedPreorderRoundId = preorder_round_id || null
-    if (requestedType === 'preorder') {
-      if (!resolvedPreorderRoundId) {
-        resolvedPreorderRoundId = await findActivePreorderRoundForProduct(db, prod_id)
+    if (!requestedType) {
+      return res.status(400).json({ error: 'Product is not available for cart' })
+    }
+
+    if (flavorList.length > 0 && !flavorList.includes(effectiveFlavor)) {
+      return res.status(400).json({ error: 'Invalid flavor selection' })
+    }
+
+    if (requestedType === 'ready-to-ship' && Number(product.readyToShipEnabled) !== 1) {
+      return res.status(400).json({ error: 'Product is not available for ready-to-ship' })
+    }
+
+    if (requestedType === 'preorder' && Number(product.preorderEnabled) !== 1) {
+      return res.status(400).json({ error: 'Product is not available for preorder' })
+    }
+
+    if (requestedType === 'ready-to-ship' && Number(product.stock) < Number(qty)) {
+      return res.status(400).json({ error: 'Not enough stock available' })
+    }
+
+    // เช็ค/ปรับยอดในทรานแซคชันเมื่อเป็น preorder ที่มีข้อจำกัด
+    const connection = await db.getConnection()
+    try {
+      await connection.beginTransaction()
+
+      // ค้นหาเฉพาะรายการที่มีชนิดเดียวกัน (item_type) เพื่อให้สามารถมีแถวแยกกัน
+      // ระหว่าง 'preorder' และ 'ready-to-ship' สำหรับสินค้าชิ้นเดียวได้
+      // หากเป็น preorder และมี round_id ให้จับคู่เฉพาะกับแถวที่มี round_id เดียวกัน
+      let existingQuery
+      let existingParams
+      if (requestedType === 'preorder' && round_id) {
+        existingQuery = `SELECT cart_id, qty, item_type, flavor, round_id FROM cart WHERE user_id = ? AND prod_id = ? AND COALESCE(flavor, '') = COALESCE(?, '') AND item_type = ? AND round_id = ? LIMIT 1`
+        existingParams = [user_id, prod_id, effectiveFlavor, requestedType, round_id]
+      } else {
+        existingQuery = `SELECT cart_id, qty, item_type, flavor, round_id FROM cart WHERE user_id = ? AND prod_id = ? AND COALESCE(flavor, '') = COALESCE(?, '') AND item_type = ? LIMIT 1`
+        existingParams = [user_id, prod_id, effectiveFlavor, requestedType]
       }
 
-      if (!resolvedPreorderRoundId) {
-        return res.status(400).json({ error: 'ไม่พบรอบพรีออเดอร์สำหรับสินค้านี้' })
+      const [existing] = await connection.query(existingQuery, existingParams)
+
+      // Helper to resolve effective round id/price for preorder
+      let effectiveRoundId = round_id || null
+      let effectiveRoundPrice = round_price != null ? Number(round_price) : null
+      if (requestedType === 'preorder' && !effectiveRoundPrice) {
+        const [roundRows] = await connection.query(
+          `SELECT prp.round_id AS round_id, prp.round_price AS round_price
+           FROM preorder_round_products prp
+           JOIN preorder_rounds r ON prp.round_id = r.round_id
+           WHERE prp.prod_id = ? AND r.status = 'active'
+           ORDER BY prp.link_id DESC
+           LIMIT 1`,
+          [prod_id],
+        )
+
+        if (roundRows.length > 0) {
+          effectiveRoundId = effectiveRoundId || roundRows[0].round_id
+          effectiveRoundPrice = effectiveRoundPrice || Number(roundRows[0].round_price)
+        }
       }
 
-      await db.query(
-        `UPDATE cart
-         SET preorder_round_id = ?
-         WHERE user_id = ?
-           AND prod_id = ?
-           AND item_type = 'preorder'
-           AND COALESCE(flavor, '') = COALESCE(?, '')
-           AND preorder_round_id IS NULL`,
-        [resolvedPreorderRoundId, user_id, prod_id, effectiveFlavor || ''],
+      if (existing.length > 0) {
+        // มีอยู่แล้ว → เพิ่ม qty
+        const newQty = existing[0].qty + Number(qty)
+        if (requestedType === 'ready-to-ship' && newQty > Number(product.stock)) {
+          await connection.rollback()
+          connection.release()
+          return res.status(400).json({ error: 'Not enough stock available' })
+        }
+
+        // If preorder and limited pool, lock pool row and validate
+        if (requestedType === 'preorder' && effectiveRoundId) {
+          const [prpRows] = await connection.query(
+            'SELECT link_id, quantity_available FROM preorder_round_products WHERE prod_id = ? AND round_id = ? LIMIT 1 FOR UPDATE',
+            [prod_id, effectiveRoundId],
+          )
+
+          if (prpRows.length > 0 && prpRows[0].quantity_available != null) {
+            const avail = Number(prpRows[0].quantity_available) || 0
+            const [reservedRows] = await connection.query(
+              'SELECT COALESCE(SUM(qty),0) AS reserved FROM cart WHERE prod_id = ? AND item_type = ? AND round_id = ?',
+              [prod_id, 'preorder', effectiveRoundId],
+            )
+            const reserved = Number(reservedRows[0].reserved) || 0
+            const reservedExcludingExisting = Math.max(0, reserved - Number(existing[0].qty))
+            if (reservedExcludingExisting + newQty > avail) {
+              await connection.rollback()
+              connection.release()
+              return res.status(400).json({
+                error: `ไม่สามารถเพิ่มพรีออเดอร์ได้ (เหลือ ${Math.max(0, avail - reservedExcludingExisting)} ชิ้น)`,
+              })
+            }
+          }
+        }
+
+        await connection.query(
+          'UPDATE cart SET qty = ?, item_type = ?, flavor = ?, round_id = ?, round_price = ? WHERE cart_id = ?',
+          [
+            newQty,
+            requestedType,
+            effectiveFlavor || null,
+            round_id || existing[0].round_id || null,
+            round_price != null ? round_price : existing[0].round_price || null,
+            existing[0].cart_id,
+          ],
+        )
+
+        await connection.commit()
+        connection.release()
+        return res.json({ message: 'Updated qty', cart_id: existing[0].cart_id, qty: newQty })
+      }
+
+      // ไม่มี → insert ใหม่
+      if (requestedType === 'preorder' && effectiveRoundId) {
+        const [prpRows] = await connection.query(
+          'SELECT link_id, quantity_available FROM preorder_round_products WHERE prod_id = ? AND round_id = ? LIMIT 1 FOR UPDATE',
+          [prod_id, effectiveRoundId],
+        )
+
+        if (prpRows.length > 0 && prpRows[0].quantity_available != null) {
+          const avail = Number(prpRows[0].quantity_available) || 0
+          const [reservedRows] = await connection.query(
+            'SELECT COALESCE(SUM(qty),0) AS reserved FROM cart WHERE prod_id = ? AND item_type = ? AND round_id = ?',
+            [prod_id, 'preorder', effectiveRoundId],
+          )
+          const reserved = Number(reservedRows[0].reserved) || 0
+          if (reserved + Number(qty) > avail) {
+            await connection.rollback()
+            connection.release()
+            return res.status(400).json({
+              error: `ไม่สามารถเพิ่มพรีออเดอร์ได้ (เหลือ ${Math.max(0, avail - reserved)} ชิ้น)`,
+            })
+          }
+        }
+      }
+
+      const [result] = await connection.query(
+        'INSERT INTO cart (user_id, prod_id, qty, item_type, flavor, round_id, round_price) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [
+          user_id,
+          prod_id,
+          Number(qty),
+          requestedType,
+          effectiveFlavor || null,
+          effectiveRoundId,
+          effectiveRoundPrice,
+        ],
       )
-    }
 
-    // เช็คว่ามีในตะกร้าแล้วหรือยัง
-    const [existing] = await db.query(
-      `SELECT cart_id, qty, item_type, flavor FROM cart
-       WHERE user_id = ?
-         AND prod_id = ?
-         AND COALESCE(NULLIF(item_type, ''), ?) = ?
-         AND COALESCE(flavor, '') = COALESCE(?, '')
-         AND COALESCE(preorder_round_id, 0) = COALESCE(?, 0)
-       LIMIT 1`,
-      [user_id, prod_id, effectiveItemType, effectiveItemType, effectiveFlavor, resolvedPreorderRoundId],
-    )
+      await connection.commit()
+      connection.release()
 
-    if (existing.length > 0) {
-      // มีอยู่แล้ว → เพิ่ม qty
-      const newQty = existing[0].qty + Number(qty)
-      if (requestedType === 'ready-to-ship' && newQty > Number(product.stock)) {
-        return res.status(400).json({ error: 'Not enough stock available' })
+      res.status(201).json({ message: 'Added to cart', cart_id: result.insertId })
+    } catch (txErr) {
+      try {
+        await connection.rollback()
+      } catch (e) {
+        console.warn('rollback failed', e && e.message ? e.message : e)
       }
-
-      await db.query('UPDATE cart SET qty = ?, item_type = ?, flavor = ?, preorder_round_id = ? WHERE cart_id = ?', [
-        newQty,
-        existing[0].item_type || effectiveItemType,
-        effectiveFlavor || null,
-        resolvedPreorderRoundId,
-        existing[0].cart_id,
-      ])
-      return res.json({ message: 'Updated qty', cart_id: existing[0].cart_id, qty: newQty })
+      connection.release()
+      throw txErr
     }
-
-    // ไม่มี → insert ใหม่
-    const [result] = await db.query(
-      'INSERT INTO cart (user_id, prod_id, qty, item_type, flavor, preorder_round_id) VALUES (?, ?, ?, ?, ?, ?)',
-      [user_id, prod_id, Number(qty), effectiveItemType, effectiveFlavor || null, resolvedPreorderRoundId],
-    )
-
-    res.status(201).json({ message: 'Added to cart', cart_id: result.insertId })
   } catch (err) {
     console.error('[POST /api/cart]', err)
     res.status(500).json({ error: 'Internal server error' })
@@ -335,16 +424,70 @@ router.put('/:cart_id', async (req, res) => {
       return res.status(400).json({ error: 'Product is not available for preorder' })
     }
 
-    const [result] = await db.query('UPDATE cart SET qty = ? WHERE cart_id = ?', [
-      Number(qty),
-      cart_id,
-    ])
+    // For preorder items with limited pool, validate inside a transaction
+    const connection = await db.getConnection()
+    try {
+      await connection.beginTransaction()
 
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ error: 'Cart item not found' })
+      if (effectiveType === 'preorder') {
+        // resolve round id for this cart row (attempt to use cart's round or active round)
+        const [prpRound] = await connection.query(
+          `SELECT prp.round_id FROM preorder_round_products prp WHERE prp.prod_id = ? AND prp.round_id = (
+             SELECT COALESCE(c.round_id, (SELECT r.round_id FROM preorder_rounds r WHERE LOWER(r.status) = 'active' LIMIT 1)) FROM cart c WHERE c.cart_id = ? LIMIT 1
+          ) LIMIT 1`,
+          [cartRow.prod_id, cart_id],
+        )
+
+        const roundId = prpRound.length > 0 ? prpRound[0].round_id : cartRow.round_id || null
+
+        if (roundId) {
+          const [prpRows] = await connection.query(
+            'SELECT link_id, quantity_available FROM preorder_round_products WHERE prod_id = ? AND round_id = ? LIMIT 1 FOR UPDATE',
+            [cartRow.prod_id, roundId],
+          )
+
+          if (prpRows.length > 0 && prpRows[0].quantity_available != null) {
+            const avail = Number(prpRows[0].quantity_available) || 0
+            const [reservedRows] = await connection.query(
+              'SELECT COALESCE(SUM(qty),0) AS reserved FROM cart WHERE prod_id = ? AND item_type = ? AND round_id = ? AND cart_id != ?',
+              [cartRow.prod_id, 'preorder', roundId, cart_id],
+            )
+            const reserved = Number(reservedRows[0].reserved) || 0
+            if (reserved + Number(qty) > avail) {
+              await connection.rollback()
+              connection.release()
+              return res.status(400).json({
+                error: `ไม่สามารถอัปเดตจำนวนได้ (เหลือ ${Math.max(0, avail - reserved)} ชิ้น)`,
+              })
+            }
+          }
+        }
+      }
+
+      const [result] = await connection.query('UPDATE cart SET qty = ? WHERE cart_id = ?', [
+        Number(qty),
+        cart_id,
+      ])
+
+      if (result.affectedRows === 0) {
+        await connection.rollback()
+        connection.release()
+        return res.status(404).json({ error: 'Cart item not found' })
+      }
+
+      await connection.commit()
+      connection.release()
+
+      res.json({ message: 'Updated', cart_id: Number(cart_id), qty: Number(qty) })
+    } catch (txErr) {
+      try {
+        await connection.rollback()
+      } catch (e) {
+        console.warn('rollback failed', e && e.message ? e.message : e)
+      }
+      connection.release()
+      throw txErr
     }
-
-    res.json({ message: 'Updated', cart_id: Number(cart_id), qty: Number(qty) })
   } catch (err) {
     console.error('[PUT /api/cart/:id]', err)
     res.status(500).json({ error: 'Internal server error' })
