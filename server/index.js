@@ -1983,7 +1983,8 @@ app.get('/api/dashboard/overview', async (_req, res) => {
 // POST /api/orders/:order_id/payment
 app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res) => {
   const { order_id } = req.params
-  const { payment_method, shipping_name, shipping_phone, shipping_address, notes } = req.body
+  const { 
+    payment_method, shipping_name, shipping_phone, shipping_address, shipping_carrier, notes } = req.body
   const slip_url = req.file ? `/uploads/${req.file.filename}` : null
 
   const connection = await pool.getConnection()
@@ -2014,9 +2015,10 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     // รวมชื่อ เบอร์โทร และหมายเหตุเข้ากับที่อยู่ เพื่อเก็บในคอลัมน์ address ตามโครงสร้างตาราง
     const fullAddress = `ชื่อผู้รับ: ${shipping_name}\nโทร: ${shipping_phone}\nที่อยู่: ${shipping_address}\nหมายเหตุ: ${notes || '-'}`
 
-    await connection.query(`INSERT INTO shipping (order_id, address) VALUES (?, ?)`, [
-      order_id,
+    await connection.query(`INSERT INTO shipping (order_id, address, Shipping_Carrier) VALUES (?, ?, ?)`, [
+      order_id, 
       fullAddress,
+      shipping_carrier || null
     ])
 
     // 4. อัปเดตสถานะในตาราง orders เป็น 'Pending'
@@ -2051,6 +2053,25 @@ app.get('/api/payments', async (_req, res) => {
     res.status(500).json({ error: err.message })
   }
 })
+// เพิ่มไว้ในไฟล์ index.js ต่อจาก API อื่นๆ
+app.get('/api/preorder-rounds', async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT 
+        round_id AS id, 
+        round_name AS name, 
+        round_description AS description, 
+        start_date AS startDate, 
+        end_date AS endDate, 
+        status 
+      FROM preorder_rounds 
+      ORDER BY created_at DESC
+    `);
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // ─────────────────────────────────────────────
 // PATCH /api/payments/:pay_id/status

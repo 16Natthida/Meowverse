@@ -80,11 +80,20 @@ const paymentMethods = [
 
 const selectedPaymentMethod = ref('bank_transfer')
 
-// ── SHIPPING INFO ──
+// เพิ่มรายการบริษัทขนส่งที่ต้องการ
+const carriers = [
+  { id: 'Kerry', name: 'Kerry Express' },
+  { id: 'Flash', name: 'Flash Express' },
+  { id: 'J&T', name: 'J&T Express' },
+  { id: 'EMS', name: 'ไปรษณีย์ไทย (EMS)' },
+  { id: 'Self-Pickup', name: 'รับสินค้าด้วยตัวเอง' }
+]
+
 const shippingInfo = ref({
   name: '',
   phone: '',
   address: '',
+  carrier: '', // จะถูกเลือกจาก Dropdown
   notes: '',
 })
 
@@ -117,6 +126,9 @@ const confirmPayment = async () => {
       formData.append('shipping_name', shippingInfo.value.name)
       formData.append('shipping_phone', shippingInfo.value.phone)
       formData.append('shipping_address', shippingInfo.value.address)
+      formData.append('shipping_carrier', shippingInfo.value.carrier)
+      formData.append('notes', shippingInfo.value.notes)
+// ...
     }
 
     formData.append('notes', shippingInfo.value.notes)
@@ -346,6 +358,18 @@ onMounted(() => {
               <label class="form-label">หมายเหตุ</label>
               <textarea v-model="shippingInfo.notes" class="form-textarea" rows="1"></textarea>
             </div>
+            <div class="form-group">
+  <label class="form-label">บริษัทขนส่งที่ต้องการ</label>
+ <div class="form-group">
+  <label class="form-label">บริษัทขนส่ง</label>
+  <select v-model="shippingInfo.carrier" class="form-input">
+    <option value="" disabled>-- กรุณาเลือกบริษัทขนส่ง --</option>
+    <option v-for="item in carriers" :key="item.id" :value="item.id">
+      {{ item.name }}
+    </option>
+  </select>
+</div>
+</div>
           </div>
         </div>
 
