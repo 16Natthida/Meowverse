@@ -108,6 +108,12 @@ const router = createRouter({
       meta: { requiresAuth: true, roles: ['admin'] },
     },
     {
+      path: '/admin/inventory-intake',
+      name: 'admin-inventory-intake',
+      component: () => import('../views/Admin/SlipManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
       path: '/:pathMatch(.*)*',
       redirect: '/',
     },

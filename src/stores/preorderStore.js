@@ -9,7 +9,8 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
 async function requestJson(path, options = {}) {
   // Get auth info from localStorage
-  const userDataStr = localStorage.getItem('meowverse-user') || sessionStorage.getItem('meowverse-user')
+  const userDataStr =
+    localStorage.getItem('meowverse-user') || sessionStorage.getItem('meowverse-user')
   let userId = null
   let userRole = 'admin'
 
@@ -127,19 +128,24 @@ export function usePreorderStore() {
       method: 'DELETE',
     })
 
-    preorderRounds.value = preorderRounds.value.filter((round) => String(round.id) !== String(roundId))
+    preorderRounds.value = preorderRounds.value.filter(
+      (round) => String(round.id) !== String(roundId),
+    )
 
     if (currentRound.value && currentRound.value.id === roundId) {
       currentRound.value = null
     }
   }
 
-  async function addProductsToRound(roundId, productIds, quantities = []) {
+  async function addProductsToRound(roundId, productIds, quantities = [], roundPrices = []) {
     await requestJson(`/preorder-rounds/${roundId}/products`, {
       method: 'POST',
       body: JSON.stringify({
-        productIds: productIds.map(id => Number(id)),
-        quantities: quantities.map(q => Number(q) || 0),
+        productIds: productIds.map((id) => Number(id)),
+        quantities: quantities.map((q) => Number(q) || 0),
+        roundPrices: roundPrices.map((price) =>
+          price === '' || price == null ? null : Number(price),
+        ),
       }),
     })
 
@@ -156,24 +162,29 @@ export function usePreorderStore() {
 
     if (currentRound.value && currentRound.value.id === roundId) {
       currentRound.value.products = currentRound.value.products.filter(
-        (p) => String(p.id) !== String(productId)
+        (p) => String(p.id) !== String(productId),
       )
     }
   }
 
-  async function updateProductQuantityInRound(roundId, productId, quantity) {
+  async function updateProductQuantityInRound(roundId, productId, quantity, roundPrice = null) {
+    const qtyPayload = quantity === null || quantity === '' ? null : Number(quantity)
     await requestJson(`/preorder-rounds/${roundId}/products/${productId}`, {
       method: 'PUT',
       body: JSON.stringify({
-        quantity: Number(quantity),
+        quantity: qtyPayload,
+        roundPrice: roundPrice === '' || roundPrice == null ? null : Number(roundPrice),
       }),
     })
 
     // Update the current round if it matches
     if (currentRound.value && currentRound.value.id === roundId) {
-      const product = currentRound.value.products.find(p => String(p.id) === String(productId))
+      const product = currentRound.value.products.find((p) => String(p.id) === String(productId))
       if (product) {
-        product.quantityAvailable = Number(quantity)
+        product.quantityAvailable = quantity === null ? null : Number(quantity)
+        if (roundPrice !== undefined && roundPrice !== null && roundPrice !== '') {
+          product.roundPrice = Number(roundPrice)
+        }
       }
     }
   }

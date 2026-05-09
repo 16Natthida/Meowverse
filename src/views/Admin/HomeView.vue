@@ -1,6 +1,5 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { RouterLink } from 'vue-router'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
@@ -24,6 +23,10 @@ const chartModes = {
   low: {
     label: 'สินค้าเสี่ยง',
     chartKey: 'byCategoryLowStock',
+  },
+  orders: {
+    label: 'ยอดขายรายคำสั่งซื้อ',
+    chartKey: 'byRecentOrders',
   },
 }
 
@@ -97,7 +100,7 @@ function formatNumber(numberValue) {
 }
 
 function formatChartValue(value) {
-  if (activeRange.value === 'value') {
+  if (activeRange.value === 'value' || activeRange.value === 'orders') {
     return formatCurrency(value)
   }
 
@@ -241,27 +244,6 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="home-page">
-    <section class="hero-panel">
-      <div class="hero-copy">
-        <p class="eyebrow">Meowverse Admin Console</p>
-        <h2>แดชบอร์ดร้าน Pet Shop ที่ดูสถานะได้ครบในหน้าเดียว</h2>
-        <p>
-          ภาพรวมยอดขาย ออเดอร์ และสต็อกคงเหลือแบบเรียลไทม์ เพื่อให้ทีมแอดมินตัดสินใจได้ไว
-          และไม่พลาดสินค้าขาดมือ
-        </p>
-      </div>
-
-      <div class="hero-actions">
-        <RouterLink class="hero-btn hero-btn--primary" to="/admin/products"
-          >จัดการสินค้า</RouterLink
-        >
-        <RouterLink class="hero-btn hero-btn--primary" to="/admin/preorder-rounds"
-          >รอบนำเข้าสินค้า</RouterLink
-        >
-        <a class="hero-btn hero-btn--ghost" href="#stock-alerts">ดูสต็อกใกล้หมด</a>
-      </div>
-    </section>
-
     <section class="kpi-grid">
       <article class="kpi-card kpi-card--highlight">
         <p class="kpi-label">คำสั่งซื้อทั้งหมด</p>
@@ -304,7 +286,7 @@ onBeforeUnmount(() => {
 
           <div class="range-switch">
             <button
-              v-for="range in ['stock', 'value', 'low']"
+              v-for="range in Object.keys(chartModes)"
               :key="range"
               :class="['switch-btn', { 'switch-btn--active': activeRange === range }]"
               type="button"
@@ -335,28 +317,6 @@ onBeforeUnmount(() => {
             <p class="bar-label">{{ bar.label }}</p>
           </div>
         </div>
-      </article>
-
-      <article class="panel panel--alert-summary" id="stock-alerts">
-        <header class="panel-head panel-head--stack">
-          <h3>สรุปสต็อกใกล้หมด</h3>
-          <p v-if="!error">อ้างอิงข้อมูลจากสินค้าในระบบ</p>
-        </header>
-
-        <div v-if="error" class="error-banner">{{ error }}</div>
-
-        <div class="summary-row">
-          <div class="summary-card">
-            <p>สินค้าคงเหลือน้อยกว่า {{ thresholds.lowStock }}</p>
-            <strong>{{ kpi.lowStockCount }}</strong>
-          </div>
-          <div class="summary-card summary-card--critical">
-            <p>เสี่ยงหมดสต็อก (&lt;= {{ thresholds.severeLowStock }})</p>
-            <strong>{{ kpi.severeLowStockCount }}</strong>
-          </div>
-        </div>
-
-        <p v-if="isLoading" class="loading-message">กำลังโหลดข้อมูลสต็อก...</p>
       </article>
     </section>
 
@@ -747,7 +707,7 @@ onBeforeUnmount(() => {
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 1.6fr 1fr;
+  grid-template-columns: 1fr;
   gap: 0.85rem;
 }
 
@@ -845,10 +805,10 @@ onBeforeUnmount(() => {
 }
 
 .sales-chart {
-  height: 220px;
+  height: 280px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(48px, 1fr));
-  gap: 0.35rem;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 0.5rem;
 }
 
 .bar-wrap {
@@ -1054,6 +1014,12 @@ td {
 
   .sales-chart {
     height: 180px;
+  }
+}
+
+@media (min-width: 1081px) {
+  .sales-chart {
+    min-height: 300px;
   }
 }
 

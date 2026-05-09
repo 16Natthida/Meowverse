@@ -134,6 +134,10 @@ export function useAdminProductStore() {
       stock: Number(payload.stock) || 0,
       flavorStock,
       basePrice: Number(payload.basePrice) || 0,
+      preorderPrice:
+        payload.preorderPrice === '' || payload.preorderPrice == null
+          ? Number(payload.basePrice) || 0
+          : Number(payload.preorderPrice) || 0,
       imageUrls: payload.imageUrls || [],
       preorderEnabled: Boolean(payload.preorderEnabled),
       readyToShipEnabled: Boolean(payload.readyToShipEnabled),

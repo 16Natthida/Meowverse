@@ -15,10 +15,18 @@ const store = useAdminProductStore()
 const searchKeyword = ref('')
 const productPanelOpen = ref(false)
 const categoryPanelOpen = ref(false)
+const showAddStockModal = ref(false)
 const editingProductId = ref(null)
 const isSubmitting = ref(false)
 const isCategorySubmitting = ref(false)
+const isAddingStock = ref(false)
 const flavorInput = ref('')
+const selectedProductForStock = ref(null)
+const stockForm = reactive({
+  quantity: 0,
+  flavorStock: {},
+  readyToShipEnabled: true,
+})
 
 const notice = reactive({
   type: '',
@@ -32,11 +40,10 @@ const form = reactive({
   sku: '',
   categoryId: '',
   basePrice: 0,
-  stock: 0,
+  preorderPrice: 0,
   flavorStock: {},
   imageUrls: [],
   preorderEnabled: false,
-  readyToShipEnabled: true,
 })
 
 const categoryForm = reactive({
@@ -91,13 +98,6 @@ const filteredProducts = computed(() => {
 })
 
 const flavorItems = computed(() => parseFlavorsText(form.flavorsText))
-
-const totalFlavorStock = computed(() => {
-  if (!form.flavorStock || Object.keys(form.flavorStock).length === 0) {
-    return 0
-  }
-  return Object.values(form.flavorStock).reduce((sum, qty) => sum + Number(qty || 0), 0)
-})
 
 function setNotice(type, message) {
   notice.type = type
@@ -247,20 +247,27 @@ async function submitForm() {
       sku: form.sku.trim(),
       categoryId: form.categoryId,
       basePrice: Number(form.basePrice) || 0,
-      stock:
-        parseFlavorsText(form.flavorsText).length > 0
-          ? totalFlavorStock.value
-          : Number(form.stock) || 0,
+      preorderPrice: Number(form.preorderPrice) || 0,
       flavorStock: { ...form.flavorStock },
       imageUrls: [...form.imageUrls],
       preorderEnabled: form.preorderEnabled,
-      readyToShipEnabled: form.readyToShipEnabled,
     }
 
     if (editingProductId.value) {
+      // Edit mode: keep stock and readyToShipEnabled from existing product
+      const existingProduct = store.products.find(
+        (p) => String(p.id) === String(editingProductId.value),
+      )
+      if (existingProduct) {
+        payload.stock = Number(existingProduct.stock) || 0
+        payload.readyToShipEnabled = Boolean(existingProduct.readyToShipEnabled)
+      }
       await store.updateProduct(editingProductId.value, payload)
       setNotice('success', 'อัปเดตสินค้าเรียบร้อยแล้ว')
     } else {
+      // Create mode: new product starts with stock=0, readyToShip=false
+      payload.stock = 0
+      payload.readyToShipEnabled = false
       await store.createProduct(payload)
       setNotice('success', 'เพิ่มสินค้าเรียบร้อยแล้ว')
     }
@@ -377,11 +384,10 @@ function editProduct(product) {
   form.sku = product.sku
   form.categoryId = product.categoryId
   form.basePrice = Number(product.basePrice) || 0
-  form.stock = Number(product.stock) || 0
+  form.preorderPrice = Number(product.preorderPrice ?? product.basePrice) || 0
   form.flavorStock = typeof product.flavorStock === 'object' ? { ...product.flavorStock } : {}
   form.imageUrls = [...(product.imageUrls || [])]
   form.preorderEnabled = Boolean(product.preorderEnabled)
-  form.readyToShipEnabled = Boolean(product.readyToShipEnabled)
   flavorInput.value = ''
 }
 
@@ -392,15 +398,71 @@ function resetForm() {
   form.sku = ''
   form.categoryId = ''
   form.basePrice = 0
-  form.stock = 0
+  form.preorderPrice = 0
   form.flavorStock = {}
   form.imageUrls = []
   form.preorderEnabled = false
-  form.readyToShipEnabled = true
   flavorInput.value = ''
 
   editingProductId.value = null
   productPanelOpen.value = false
+}
+
+function openAddStockModal(product) {
+  selectedProductForStock.value = product
+  const parsedFlavors = Array.isArray(product.flavors) ? product.flavors : []
+
+  stockForm.quantity = Number(product.stock) || 0
+  stockForm.flavorStock = parsedFlavors.length > 0 ? { ...product.flavorStock } : {}
+  stockForm.readyToShipEnabled = Boolean(product.readyToShipEnabled)
+
+  showAddStockModal.value = true
+}
+
+function closeAddStockModal() {
+  showAddStockModal.value = false
+  selectedProductForStock.value = null
+  stockForm.quantity = 0
+  stockForm.flavorStock = {}
+  stockForm.readyToShipEnabled = true
+}
+
+async function submitAddStock() {
+  if (!selectedProductForStock.value) return
+
+  isAddingStock.value = true
+  try {
+    const payload = {
+      name: selectedProductForStock.value.name,
+      description: selectedProductForStock.value.description || '',
+      flavors: selectedProductForStock.value.flavors || [],
+      sku: selectedProductForStock.value.sku,
+      categoryId: selectedProductForStock.value.categoryId,
+      basePrice: Number(selectedProductForStock.value.basePrice) || 0,
+      preorderPrice:
+        Number(
+          selectedProductForStock.value.preorderPrice ?? selectedProductForStock.value.basePrice,
+        ) || 0,
+      stock:
+        Array.isArray(selectedProductForStock.value.flavors) &&
+        selectedProductForStock.value.flavors.length > 0
+          ? Object.values(stockForm.flavorStock).reduce((sum, qty) => sum + Number(qty || 0), 0)
+          : Number(stockForm.quantity) || 0,
+      flavorStock: { ...stockForm.flavorStock },
+      imageUrls: selectedProductForStock.value.imageUrls || [],
+      preorderEnabled: Boolean(selectedProductForStock.value.preorderEnabled),
+      readyToShipEnabled: Boolean(stockForm.readyToShipEnabled),
+    }
+
+    await store.updateProduct(selectedProductForStock.value.id, payload)
+    setNotice('success', 'เพิ่มสต็อกเรียบร้อยแล้ว')
+    closeAddStockModal()
+  } catch (error) {
+    setNotice('error', 'เพิ่มสต็อกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
+    console.error(error)
+  } finally {
+    isAddingStock.value = false
+  }
 }
 
 function getImageCount(product) {
@@ -680,40 +742,19 @@ onMounted(async () => {
         </label>
 
         <label>
-          ราคา *
+          ราคาพร้อมส่ง *
           <input v-model.number="form.basePrice" min="0" step="1" type="number" />
         </label>
 
         <label>
-          จำนวนคงเหลือ
+          ราคาพรีออเดอร์ *
           <input
-            v-model.number="form.stock"
-            :disabled="flavorItems.length > 0"
-            :placeholder="
-              flavorItems.length > 0 ? `รวม: ${totalFlavorStock} ชิ้น (คำนวณจากรสชาติ)` : ''
-            "
+            v-model.number="form.preorderPrice"
             min="0"
+            step="1"
             type="number"
+            placeholder="ถ้าไม่กรอกจะใช้ราคาพร้อมส่ง"
           />
-          <p v-if="flavorItems.length > 0" class="compact input-hint">
-            ✓ อัตโนมัติรวมจากสต็อกแต่ละรสชาติ = {{ totalFlavorStock }} ชิ้น
-          </p>
-        </label>
-
-        <label v-if="flavorItems.length > 0">
-          สต็อกแต่ละรสชาติ
-          <div class="flavor-stock-inputs">
-            <div v-for="flavor in flavorItems" :key="flavor" class="flavor-stock-row">
-              <span class="flavor-label">{{ flavor }}</span>
-              <input
-                v-model.number="form.flavorStock[flavor]"
-                min="0"
-                type="number"
-                placeholder="0"
-              />
-              <span class="flavor-unit">ชิ้น</span>
-            </div>
-          </div>
         </label>
 
         <label class="upload-field">
@@ -785,11 +826,24 @@ onMounted(async () => {
             }).format(Number(product.basePrice) || 0)
           }}
         </p>
+        <p class="meta">
+          พรีออเดอร์:
+          {{
+            new Intl.NumberFormat('th-TH', {
+              style: 'currency',
+              currency: 'THB',
+              maximumFractionDigits: 0,
+            }).format(Number(product.preorderPrice ?? product.basePrice) || 0)
+          }}
+        </p>
         <p class="meta">คงเหลือ: {{ product.stock }} ชิ้น</p>
         <p class="meta">รูปภาพทั้งหมด: {{ getImageCount(product) }}</p>
 
         <div class="card-actions">
           <button class="ghost" type="button" @click="editProduct(product)">แก้ไข</button>
+          <button class="ghost" type="button" @click="openAddStockModal(product)">
+            เพิ่มสต็อก
+          </button>
           <button class="danger" type="button" @click="deleteProduct(product.id)">ลบ</button>
         </div>
       </article>
@@ -802,6 +856,66 @@ onMounted(async () => {
         เพิ่มสินค้า
       </button>
     </section>
+
+    <!-- Add Stock Modal -->
+    <div
+      v-if="showAddStockModal && selectedProductForStock"
+      class="modal-overlay"
+      @click.self="closeAddStockModal"
+    >
+      <div class="modal modal-stock">
+        <div class="modal-header">
+          <h2>เพิ่มสต็อก - {{ selectedProductForStock.name }}</h2>
+          <button class="close-btn" type="button" @click="closeAddStockModal">×</button>
+        </div>
+
+        <div class="modal-body">
+          <form @submit.prevent="submitAddStock">
+            <div
+              v-if="
+                !selectedProductForStock.flavors || selectedProductForStock.flavors.length === 0
+              "
+            >
+              <label>
+                จำนวนสต็อก *
+                <input v-model.number="stockForm.quantity" type="number" min="0" placeholder="0" />
+              </label>
+            </div>
+
+            <div v-else>
+              <p class="flavor-stock-label">สต็อกแต่ละรสชาติ</p>
+              <div class="flavor-stock-grid">
+                <div
+                  v-for="flavor in selectedProductForStock.flavors"
+                  :key="flavor"
+                  class="flavor-stock-item"
+                >
+                  <span class="flavor-name">{{ flavor }}</span>
+                  <input
+                    v-model.number="stockForm.flavorStock[flavor]"
+                    type="number"
+                    min="0"
+                    placeholder="0"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <label class="checkbox-label">
+              <input v-model="stockForm.readyToShipEnabled" type="checkbox" />
+              <span>เปิดให้ "พร้อมส่ง" หลังจากเพิ่มสต็อก</span>
+            </label>
+
+            <div class="form-actions">
+              <button type="button" class="ghost" @click="closeAddStockModal">ยกเลิก</button>
+              <button type="submit" :disabled="isAddingStock">
+                {{ isAddingStock ? 'กำลังบันทึก...' : 'บันทึก' }}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -1583,5 +1697,166 @@ textarea:focus {
   .category-item .danger {
     width: 100%;
   }
+}
+
+/* Add Stock Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  max-width: 500px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal.modal-stock {
+  max-width: 450px;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px;
+  border-bottom: 1px solid #eee;
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  color: #3f2f5d;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  font-size: 24px;
+  color: #999;
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.close-btn:hover {
+  color: #333;
+}
+
+.modal-body {
+  padding: 20px;
+}
+
+.modal-body form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.modal-body label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-weight: 600;
+  color: #3f2f5d;
+}
+
+.modal-body input[type='number'] {
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.flavor-stock-label {
+  font-weight: 600;
+  color: #3f2f5d;
+  margin: 0 0 12px 0;
+}
+
+.flavor-stock-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.flavor-stock-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.flavor-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #666;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  color: #3f2f5d;
+  cursor: pointer;
+}
+
+.checkbox-label input {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.form-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+.form-actions button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.form-actions button[type='submit'] {
+  background: linear-gradient(135deg, #ff93b8 0%, #f7c8e4 100%);
+  color: white;
+}
+
+.form-actions button[type='submit']:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.form-actions button.ghost {
+  background: transparent;
+  border: 1px solid #ddd;
+  color: #666;
+}
+
+.form-actions button.ghost:hover {
+  border-color: #999;
 }
 </style>

@@ -40,10 +40,18 @@
               <button class="btn-action" @click="openEditRoundModal(round)">แก้ไข</button>
               <button
                 class="btn-action"
-                :class="['active', 'open'].includes(String(round.status || '').toLowerCase()) ? 'danger' : 'success'"
+                :class="
+                  ['active', 'open'].includes(String(round.status || '').toLowerCase())
+                    ? 'danger'
+                    : 'success'
+                "
                 @click="toggleRoundStatus(round)"
               >
-                {{ ['active', 'open'].includes(String(round.status || '').toLowerCase()) ? 'ปิดรอบ' : 'เปิดรอบ' }}
+                {{
+                  ['active', 'open'].includes(String(round.status || '').toLowerCase())
+                    ? 'ปิดรอบ'
+                    : 'เปิดรอบ'
+                }}
               </button>
               <button class="btn-action danger" @click="deleteRound(round.id)">ลบ</button>
             </td>
@@ -118,21 +126,25 @@
 
             <div class="form-actions">
               <button type="button" class="btn-cancel" @click="closeRoundModal">ยกเลิก</button>
-              <button type="submit" class="btn-submit">{{ editingRound ? 'บันทึก' : 'สร้าง' }}</button>
+              <button type="submit" class="btn-submit">
+                {{ editingRound ? 'บันทึก' : 'สร้าง' }}
+              </button>
             </div>
           </form>
         </div>
 
         <div v-if="editingRound && currentRound" class="modal-footer">
-          <button class="btn-add-products" @click="openAddProductsModal">
-            + เพิ่มสินค้า
-          </button>
+          <button class="btn-add-products" @click="openAddProductsModal">+ เพิ่มสินค้า</button>
         </div>
       </div>
     </div>
 
     <!-- Edit Round with Products Modal -->
-    <div v-if="showEditRoundModal && currentRound" class="modal-overlay" @click.self="closeEditRoundModal">
+    <div
+      v-if="showEditRoundModal && currentRound"
+      class="modal-overlay"
+      @click.self="closeEditRoundModal"
+    >
       <div class="modal modal-large">
         <div class="modal-header">
           <h2>{{ currentRound.name }}</h2>
@@ -169,7 +181,10 @@
               </button>
             </div>
 
-            <div v-if="!currentRound.products || currentRound.products.length === 0" class="empty-products">
+            <div
+              v-if="!currentRound.products || currentRound.products.length === 0"
+              class="empty-products"
+            >
               <p>ยังไม่มีสินค้าในรอบนี้</p>
             </div>
 
@@ -192,10 +207,34 @@
                     <span class="price">{{ formatPrice(product.basePrice) }}</span>
                   </div>
                   <div class="quantity-section">
-                    <span class="quantity-label">จำนวนคงเหลือ</span>
-                    <span class="quantity-value">{{ product.quantityAvailable }}</span>
+                    <span class="quantity-label">จำนวนที่เปิดรับ</span>
+                    <span class="quantity-value">
+                      {{
+                        product.quantityAvailable === null ? 'ไม่จำกัด' : product.quantityAvailable
+                      }}
+                    </span>
                     <div class="quantity-edit">
+                      <label class="unlimited-checkbox">
+                        <input
+                          type="checkbox"
+                          :checked="
+                            (productQuantityChanges[product.id] ?? product.quantityAvailable) ===
+                            null
+                          "
+                          @change="
+                            (e) =>
+                              updateProductQuantity(
+                                product.id,
+                                e.target.checked ? null : (product.quantityAvailable ?? 0),
+                              )
+                          "
+                        />
+                        ไม่จำกัด
+                      </label>
                       <input
+                        v-if="
+                          (productQuantityChanges[product.id] ?? product.quantityAvailable) !== null
+                        "
                         type="number"
                         min="0"
                         :value="productQuantityChanges[product.id] ?? product.quantityAvailable"
@@ -211,7 +250,9 @@
                       </button>
                     </div>
                   </div>
-                  <button class="btn-detail" @click="openProductDetailModal(product)">ดูรายละเอียด</button>
+                  <button class="btn-detail" @click="openProductDetailModal(product)">
+                    ดูรายละเอียด
+                  </button>
                 </div>
                 <button
                   class="btn-remove"
@@ -228,7 +269,11 @@
     </div>
 
     <!-- Add Products Modal -->
-    <div v-if="showAddProductsModal && currentRound" class="modal-overlay" @click.self="closeAddProductsModal">
+    <div
+      v-if="showAddProductsModal && currentRound"
+      class="modal-overlay"
+      @click.self="closeAddProductsModal"
+    >
       <div class="modal modal-large">
         <div class="modal-header">
           <h2>เพิ่มสินค้าไปในรอบ {{ currentRound.name }}</h2>
@@ -251,18 +296,24 @@
             </div>
 
             <div v-else class="products-list">
-              <div v-for="product in filteredAvailableProducts" :key="product.id" class="product-selection">
+              <div
+                v-for="product in filteredAvailableProducts"
+                :key="product.id"
+                class="product-selection"
+              >
                 <div class="product-selection-header">
                   <label class="product-checkbox">
                     <input
                       type="checkbox"
                       :checked="selectedProductIds.includes(product.id)"
-                      @change="toggleProductSelection(product.id)"
+                      @change="toggleProductSelection(product)"
                     />
                     <span class="checkmark"></span>
                     <span class="product-label">{{ product.name }}</span>
                   </label>
-                  <div v-if="selectedProductIds.includes(product.id)" class="quantity-input">
+                </div>
+                <div v-if="selectedProductIds.includes(product.id)" class="selection-field-row">
+                  <div class="quantity-input">
                     <label>จำนวน:</label>
                     <input
                       type="number"
@@ -275,7 +326,7 @@
                 <div class="product-meta">
                   <span class="sku">SKU: {{ product.sku || '-' }}</span>
                   <span class="category">{{ product.categoryName || '-' }}</span>
-                  <span class="price">฿{{ formatPrice(product.basePrice) }}</span>
+                  <span class="price">ราคา ฿{{ formatPrice(product.basePrice) }}</span>
                 </div>
               </div>
             </div>
@@ -297,7 +348,11 @@
     </div>
 
     <!-- Product Detail Modal -->
-    <div v-if="showProductDetailModal && selectedProduct" class="modal-overlay" @click.self="closeProductDetailModal">
+    <div
+      v-if="showProductDetailModal && selectedProduct"
+      class="modal-overlay"
+      @click.self="closeProductDetailModal"
+    >
       <div class="modal">
         <div class="modal-header">
           <h2>รายละเอียดสินค้า</h2>
@@ -318,25 +373,28 @@
               <h3>{{ selectedProduct.name }}</h3>
               <p><strong>SKU:</strong> {{ selectedProduct.sku || '-' }}</p>
               <p><strong>หมวดหมู่:</strong> {{ selectedProduct.categoryName || '-' }}</p>
-              <p><strong>ราคาพื้นฐาน:</strong> {{ formatPrice(selectedProduct.basePrice) }} บาท</p>
+              <p><strong>ราคา:</strong> {{ formatPrice(selectedProduct.basePrice) }} บาท</p>
+              <p class="compact">ราคานี้จะถูกใช้กับรอบพรีออเดอร์อัตโนมัติ</p>
               <p><strong>จำนวนคงเหลือ:</strong> {{ selectedProduct.quantityAvailable }}</p>
               <div class="quantity-detail-edit">
                 <label>แก้ไขจำนวน:</label>
                 <input
                   type="number"
                   min="0"
-                  :value="productQuantityChanges[selectedProduct.id] ?? selectedProduct.quantityAvailable"
+                  :value="
+                    productQuantityChanges[selectedProduct.id] ?? selectedProduct.quantityAvailable
+                  "
                   @input="updateProductQuantity(selectedProduct.id, $event.target.value)"
                   class="quantity-input-field"
                 />
-                <button
-                  class="btn-save-detail"
-                  @click="saveProductQuantity(selectedProduct.id)"
-                  :disabled="!hasQuantityChanged(selectedProduct.id)"
-                >
-                  บันทึก
-                </button>
               </div>
+              <button
+                class="btn-save-detail"
+                @click="saveProductQuantity(selectedProduct.id)"
+                :disabled="!hasQuantityChanged(selectedProduct.id)"
+              >
+                บันทึกจำนวน
+              </button>
             </div>
           </div>
         </div>
@@ -378,17 +436,14 @@ const isLoading = computed(() => preorderStore.isLoading)
 const allProducts = computed(() => adminProductStore.products)
 
 const filteredAvailableProducts = computed(() => {
-  const currentProductIds = currentRound.value?.products?.map(p => p.id) || []
-  const filtered = allProducts.value.filter(
-    p => !currentProductIds.includes(p.id)
-  )
+  const currentProductIds = currentRound.value?.products?.map((p) => p.id) || []
+  const filtered = allProducts.value.filter((p) => !currentProductIds.includes(p.id))
 
   if (!searchQuery.value) return filtered
 
   const query = searchQuery.value.toLowerCase()
-  return filtered.filter(p =>
-    p.name.toLowerCase().includes(query) ||
-    (p.sku && p.sku.toLowerCase().includes(query))
+  return filtered.filter(
+    (p) => p.name.toLowerCase().includes(query) || (p.sku && p.sku.toLowerCase().includes(query)),
   )
 })
 
@@ -401,6 +456,16 @@ function formatDate(dateString) {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+function formatDateForInput(dateString) {
+  const date = new Date(dateString)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  return `${year}-${month}-${day}T${hours}:${minutes}`
 }
 
 function formatPrice(price) {
@@ -443,8 +508,8 @@ function openEditRoundModal(round) {
   roundForm.value = {
     name: round.name,
     description: round.description || '',
-    startDate: round.startDate,
-    endDate: round.endDate,
+    startDate: formatDateForInput(round.startDate),
+    endDate: formatDateForInput(round.endDate),
     status: ['active', 'open'].includes(normalizedStatus) ? 'active' : normalizedStatus || 'active',
   }
   showRoundModal.value = true
@@ -472,7 +537,7 @@ function closeEditRoundModal() {
 function openAddProductsModal() {
   searchQuery.value = ''
   selectedProductIds.value = []
-  Object.keys(selectedProductQuantities).forEach(key => {
+  Object.keys(selectedProductQuantities).forEach((key) => {
     delete selectedProductQuantities[key]
   })
   showAddProductsModal.value = true
@@ -481,7 +546,7 @@ function openAddProductsModal() {
 function closeAddProductsModal() {
   showAddProductsModal.value = false
   selectedProductIds.value = []
-  Object.keys(selectedProductQuantities).forEach(key => {
+  Object.keys(selectedProductQuantities).forEach((key) => {
     delete selectedProductQuantities[key]
   })
 }
@@ -496,7 +561,8 @@ function closeProductDetailModal() {
   selectedProduct.value = null
 }
 
-function toggleProductSelection(productId) {
+function toggleProductSelection(product) {
+  const productId = product.id
   const index = selectedProductIds.value.indexOf(productId)
   if (index > -1) {
     selectedProductIds.value.splice(index, 1)
@@ -508,6 +574,18 @@ function toggleProductSelection(productId) {
 }
 
 function updateProductQuantity(productId, quantity) {
+  // Allow null to represent "unlimited"
+  if (quantity === null) {
+    if (selectedProductIds.value.includes(productId)) {
+      selectedProductQuantities[productId] = null
+      return
+    }
+    if (currentRound.value?.products) {
+      productQuantityChanges[productId] = null
+    }
+    return
+  }
+
   const qty = Math.max(0, parseInt(quantity) || 0)
 
   if (selectedProductIds.value.includes(productId)) {
@@ -520,24 +598,37 @@ function updateProductQuantity(productId, quantity) {
   }
 }
 
-function hasQuantityChanged(productId) {
-  if (!currentRound.value?.products) return false
-  const product = currentRound.value.products.find(p => String(p.id) === String(productId))
-  if (!product) return false
-  return Number(productQuantityChanges[productId] ?? product.quantityAvailable) !== Number(product.quantityAvailable)
+async function saveProductQuantity(productId) {
+  try {
+    if (!currentRound.value) return
+    const raw = Object.prototype.hasOwnProperty.call(productQuantityChanges, productId)
+      ? productQuantityChanges[productId]
+      : currentRound.value.products.find((p) => String(p.id) === String(productId))
+          ?.quantityAvailable
+
+    // raw may be null (unlimited) or a number
+    await preorderStore.updateProductQuantityInRound(currentRound.value.id, productId, raw)
+    // Refresh current round detail
+    await preorderStore.fetchRoundDetail(currentRound.value.id)
+    // Clear local change tracking
+    delete productQuantityChanges[productId]
+  } catch (err) {
+    alert('การบันทึกล้มเหลว: ' + err.message)
+  }
 }
 
-async function saveProductQuantity(productId) {
-  if (!currentRound.value) return
-  const quantity = productQuantityChanges[productId]
-  if (quantity == null) return
-
-  try {
-    await preorderStore.updateProductQuantityInRound(currentRound.value.id, productId, quantity)
-    delete productQuantityChanges[productId]
-  } catch (error) {
-    alert('เกิดข้อผิดพลาด: ' + error.message)
-  }
+function hasQuantityChanged(productId) {
+  if (!currentRound.value?.products) return false
+  const product = currentRound.value.products.find((p) => String(p.id) === String(productId))
+  if (!product) return false
+  const left = Object.prototype.hasOwnProperty.call(productQuantityChanges, productId)
+    ? productQuantityChanges[productId]
+    : product.quantityAvailable
+  const right = product.quantityAvailable
+  if (left === null && right === null) return false
+  if (left === null && right !== null) return true
+  if (left !== null && right === null) return true
+  return Number(left) !== Number(right)
 }
 
 async function saveRound() {
@@ -561,8 +652,12 @@ async function saveRound() {
 async function confirmAddProducts() {
   try {
     if (selectedProductIds.value.length > 0 && currentRound.value) {
-      const quantities = selectedProductIds.value.map(id => selectedProductQuantities[id] || 1)
-      await preorderStore.addProductsToRound(currentRound.value.id, selectedProductIds.value, quantities)
+      const quantities = selectedProductIds.value.map((id) => selectedProductQuantities[id] || 1)
+      await preorderStore.addProductsToRound(
+        currentRound.value.id,
+        selectedProductIds.value,
+        quantities,
+      )
       closeAddProductsModal()
     }
   } catch (error) {
@@ -742,7 +837,7 @@ onMounted(async () => {
   background-color: #e0e0e0;
 }
 
-..btn-action.danger {
+.btn-action.danger {
   color: #d32f2f;
 }
 
@@ -1216,7 +1311,27 @@ onMounted(async () => {
   margin-left: 16px;
 }
 
+.selection-field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0 0 28px;
+}
+
+.price-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .quantity-input label {
+  font-size: 12px;
+  color: #666;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.price-input label {
   font-size: 12px;
   color: #666;
   font-weight: 500;
@@ -1233,6 +1348,23 @@ onMounted(async () => {
 }
 
 .quantity-field:focus {
+  outline: none;
+  border-color: #b388d4;
+  box-shadow: 0 0 0 2px rgba(179, 136, 212, 0.1);
+}
+
+.price-field,
+.price-input-field {
+  width: 110px;
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 12px;
+  text-align: center;
+}
+
+.price-field:focus,
+.price-input-field:focus {
   outline: none;
   border-color: #b388d4;
   box-shadow: 0 0 0 2px rgba(179, 136, 212, 0.1);
@@ -1270,10 +1402,24 @@ onMounted(async () => {
   margin-top: 16px;
 }
 
+.price-detail-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
 .quantity-detail-edit label {
   font-size: 13px;
   color: #5e3b77;
   min-width: 84px;
+}
+
+.price-detail-edit label {
+  font-size: 13px;
+  color: #5e3b77;
+  min-width: 120px;
 }
 
 .product-detail .quantity-input-field {

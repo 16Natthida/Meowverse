@@ -14,6 +14,7 @@ const error = ref(null)
 const notice = ref({ msg: '', type: '' })
 const updatingId = ref(null)
 const deletingId = ref(null)
+const activeCartView = ref('ready')
 
 function resolveUserId(user) {
   return user?.id ?? user?.user_id ?? null
@@ -48,7 +49,17 @@ const fetchCart = async () => {
       flavor: item.flavor ?? '',
       isPreorder: Boolean(item.pre_item_id) || item.item_type === 'preorder',
       stock: Number(item.stock ?? 999),
+      preorderRemaining:
+        item.preorder_remaining == null ? null : Math.max(0, Number(item.preorder_remaining) || 0),
     }))
+
+    const hasReadyItems = cartItems.value.some((item) => !item.isPreorder)
+    const hasPreorderItems = cartItems.value.some((item) => item.isPreorder)
+    if (hasReadyItems) {
+      activeCartView.value = 'ready'
+    } else if (hasPreorderItems) {
+      activeCartView.value = 'preorder'
+    }
   } catch (err) {
     error.value = err.message
   } finally {
@@ -86,25 +97,56 @@ const updateQty = async (item, newQty) => {
 const removeItem = async (item) => {
   deletingId.value = item.cart_id
   try {
-    const res = await fetch(`${API_BASE_URL}/cart/${item.cart_id}`, {
+    console.debug('[removeItem] Removing cart item', item.cart_id, 'item:', item)
+    const deleteUrl = `${API_BASE_URL}/cart/${item.cart_id}`
+    console.debug('[removeItem] DELETE URL:', deleteUrl)
+
+    const res = await fetch(deleteUrl, {
       method: 'DELETE',
     })
+    console.debug('[removeItem] Response status:', res.status, 'ok:', res.ok)
+
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
+      console.error('[removeItem] Delete failed, response body:', body)
       throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`)
     }
-    cartItems.value = cartItems.value.filter((i) => i.cart_id !== item.cart_id)
+
+    console.debug('[removeItem] Delete successful, refreshing cart...')
+    // Refresh cart from server to keep UI in sync (handles server-side merges)
+    await fetchCart()
+    console.debug('[removeItem] Cart refreshed, total items:', cartItems.value.length)
     showNotice(`ลบ "${item.name}" ออกจากตะกร้าแล้ว`, 'success')
   } catch (err) {
+    console.error('[removeItem] Error:', err.message, err)
     showNotice(err.message, 'error')
   } finally {
     deletingId.value = null
   }
 }
 
+// ── SEPARATE ITEMS BY TYPE ──
+const readyToShipItems = computed(() => {
+  return cartItems.value.filter((item) => !item.isPreorder)
+})
+
+const preorderItems = computed(() => {
+  return cartItems.value.filter((item) => item.isPreorder)
+})
+
 // ── COMPUTED ──
-const subtotal = computed(() => cartItems.value.reduce((sum, i) => sum + i.price * i.qty, 0))
-const total = computed(() => subtotal.value)
+const activeItems = computed(() =>
+  activeCartView.value === 'preorder' ? preorderItems.value : readyToShipItems.value,
+)
+const activeSubtotal = computed(() =>
+  activeItems.value.reduce((sum, item) => sum + item.price * item.qty, 0),
+)
+const activeLabel = computed(() =>
+  activeCartView.value === 'preorder' ? 'ยอดพรีออเดอร์ในแท็บนี้' : 'ยอดพร้อมส่งในแท็บนี้',
+)
+const checkoutLabel = computed(() =>
+  activeCartView.value === 'preorder' ? 'สั่งซื้อพรีออเดอร์' : 'สั่งซื้อพร้อมส่ง',
+)
 
 let noticeTimer = null
 function showNotice(msg, type = 'success') {
@@ -134,10 +176,24 @@ const checkout = async () => {
   }
 
   try {
+    // ส่งเฉพาะรายการของแท็บที่กำลังเลือก (frontend จะส่ง subset ให้ backend)
+    const payload = {
+      user_id: userId,
+      items: activeItems.value.map((it) => ({
+        cart_id: it.cart_id,
+        prod_id: it.prod_id,
+        pre_item_id: it.pre_item_id ?? null,
+        qty: Number(it.qty) || 1,
+        price: Number(it.price) || 0,
+        flavor: it.flavor || null,
+        item_type: it.isPreorder ? 'preorder' : 'ready-to-ship',
+      })),
+    }
+
     const res = await fetch(`${API_BASE_URL}/orders/checkout`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userId }),
+      body: JSON.stringify(payload),
     })
 
     if (!res.ok) {
@@ -146,11 +202,12 @@ const checkout = async () => {
     }
 
     const data = await res.json()
-    showNotice('สร้างออเดอร์สำเร็จ! กำลังนำทาง...', 'success')
 
-    // นำทางไปยังหน้าสรุปออเดอร์
+    showNotice('สร้างออเดอร์สำเร็จ! กำลังไปหน้ากรอกข้อมูลจัดส่ง...', 'success')
+
+    // ไปหน้าแนบสลิป/กรอกข้อมูลการจัดส่งเสมอ
     setTimeout(() => {
-      router.push(`/order/${data.order_id}`)
+      router.push(`/order/${data.order_id || data.order_ids?.[0]}`)
     }, 1500)
   } catch (err) {
     showNotice(err.message, 'error')
@@ -275,108 +332,262 @@ onMounted(fetchCart)
         <div class="cart-items">
           <div class="section-header">
             <h2 class="section-title">รายการสินค้า</h2>
+            <div class="view-toggle">
+              <button
+                class="view-toggle__btn"
+                :class="{ 'view-toggle__btn--active': activeCartView === 'ready' }"
+                @click="activeCartView = 'ready'"
+              >
+                พร้อมส่งสินค้า
+              </button>
+              <button
+                class="view-toggle__btn"
+                :class="{ 'view-toggle__btn--active': activeCartView === 'preorder' }"
+                @click="activeCartView = 'preorder'"
+              >
+                สินค้าพรีออเดอร์
+              </button>
+            </div>
           </div>
 
-          <transition-group name="list" tag="div" class="item-list">
-            <div
-              v-for="item in cartItems"
-              :key="item.cart_id"
-              :class="['cart-item', { 'cart-item--deleting': deletingId === item.cart_id }]"
-            >
-              <!-- Thumbnail -->
-              <div class="item-img">
-                <img v-if="item.image" :src="item.image" :alt="item.name" />
-                <span v-else class="item-emoji">🐾</span>
-                <span v-if="item.isPreorder" class="item-preorder-badge">พรีออเดอร์</span>
-              </div>
+          <!-- ── READY TO SHIP SECTION ── -->
+          <div
+            v-if="activeCartView === 'ready' && readyToShipItems.length > 0"
+            class="item-section"
+          >
+            <h3 class="item-section-title">✅ พร้อมส่ง</h3>
 
-              <!-- Info -->
-              <div class="item-info">
-                <p class="item-name">{{ item.name }}</p>
-                <p v-if="item.flavor" class="item-flavor">รสชาติ: {{ item.flavor }}</p>
-                <p class="item-price-unit">฿{{ Number(item.price).toLocaleString() }} / ชิ้น</p>
-              </div>
+            <transition-group name="list" tag="div" class="item-list">
+              <div
+                v-for="item in readyToShipItems"
+                :key="item.cart_id"
+                :class="['cart-item', { 'cart-item--deleting': deletingId === item.cart_id }]"
+              >
+                <!-- Thumbnail -->
+                <div class="item-img">
+                  <img v-if="item.image" :src="item.image" :alt="item.name" />
+                  <span v-else class="item-emoji">🐾</span>
+                </div>
 
-              <!-- Qty controls -->
-              <div class="item-qty">
+                <!-- Info -->
+                <div class="item-info">
+                  <p class="item-name">{{ item.name }}</p>
+                  <p v-if="item.flavor" class="item-flavor">รสชาติ: {{ item.flavor }}</p>
+                  <p class="item-price-unit">฿{{ Number(item.price).toLocaleString() }} / ชิ้น</p>
+                </div>
+
+                <!-- Qty controls -->
+                <div class="item-qty">
+                  <button
+                    class="qty-btn"
+                    :disabled="item.qty <= 1 || updatingId === item.cart_id"
+                    @click="updateQty(item, item.qty - 1)"
+                  >
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
+                      <path
+                        fill-rule="evenodd"
+                        d="M3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z"
+                        clip-rule="evenodd"
+                      />
+                    </svg>
+                  </button>
+
+                  <span v-if="updatingId === item.cart_id" class="qty-loading">
+                    <svg class="spin" viewBox="0 0 24 24" fill="none" width="14" height="14">
+                      <circle
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="rgba(111,80,160,0.2)"
+                        stroke-width="3"
+                      />
+                      <path
+                        d="M12 2a10 10 0 0110 10"
+                        stroke="#9a7dbf"
+                        stroke-width="3"
+                        stroke-linecap="round"
+                      />
+                    </svg>
+                  </span>
+                  <span v-else class="qty-value">{{ item.qty }}</span>
+
+                  <button
+                    class="qty-btn"
+                    :disabled="
+                      (item.isPreorder
+                        ? item.preorderRemaining != null
+                          ? item.qty >= item.preorderRemaining
+                          : false
+                        : item.qty >= item.stock) || updatingId === item.cart_id
+                    "
+                    @click="updateQty(item, item.qty + 1)"
+                  >
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
+                      <path
+                        fill-rule="evenodd"
+                        d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"
+                        clip-rule="evenodd"
+                      />
+                    </svg>
+                  </button>
+                </div>
+
+                <!-- Subtotal -->
+                <div class="item-subtotal">฿{{ (item.price * item.qty).toLocaleString() }}</div>
+
+                <!-- Delete -->
                 <button
-                  class="qty-btn"
-                  :disabled="item.qty <= 1 || updatingId === item.cart_id"
-                  @click="updateQty(item, item.qty - 1)"
+                  class="delete-btn"
+                  :disabled="deletingId === item.cart_id"
+                  @click="removeItem(item)"
+                  title="ลบออก"
                 >
-                  <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
-                    <path
-                      fill-rule="evenodd"
-                      d="M3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z"
-                      clip-rule="evenodd"
-                    />
-                  </svg>
-                </button>
-
-                <span v-if="updatingId === item.cart_id" class="qty-loading">
-                  <svg class="spin" viewBox="0 0 24 24" fill="none" width="14" height="14">
-                    <circle cx="12" cy="12" r="10" stroke="rgba(111,80,160,0.2)" stroke-width="3" />
+                  <svg
+                    v-if="deletingId === item.cart_id"
+                    class="spin"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    width="16"
+                    height="16"
+                  >
+                    <circle cx="12" cy="12" r="10" stroke="rgba(232,64,92,0.2)" stroke-width="3" />
                     <path
                       d="M12 2a10 10 0 0110 10"
-                      stroke="#9a7dbf"
+                      stroke="#e8405c"
                       stroke-width="3"
                       stroke-linecap="round"
                     />
                   </svg>
-                </span>
-                <span v-else class="qty-value">{{ item.qty }}</span>
-
-                <button
-                  class="qty-btn"
-                  :disabled="item.qty >= item.stock || updatingId === item.cart_id"
-                  @click="updateQty(item, item.qty + 1)"
-                >
-                  <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
+                  <svg v-else viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
                     <path
                       fill-rule="evenodd"
-                      d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"
+                      d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z"
                       clip-rule="evenodd"
                     />
                   </svg>
                 </button>
               </div>
+            </transition-group>
+          </div>
 
-              <!-- Subtotal -->
-              <div class="item-subtotal">฿{{ (item.price * item.qty).toLocaleString() }}</div>
+          <!-- ── PREORDER SECTION ── -->
+          <div
+            v-if="activeCartView === 'preorder' && preorderItems.length > 0"
+            class="item-section"
+          >
+            <h3 class="item-section-title">⏳ พรีออเดอร์</h3>
 
-              <!-- Delete -->
-              <button
-                class="delete-btn"
-                :disabled="deletingId === item.cart_id"
-                @click="removeItem(item)"
-                title="ลบออก"
+            <transition-group name="list" tag="div" class="item-list">
+              <div
+                v-for="item in preorderItems"
+                :key="item.cart_id"
+                :class="['cart-item', { 'cart-item--deleting': deletingId === item.cart_id }]"
               >
-                <svg
-                  v-if="deletingId === item.cart_id"
-                  class="spin"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  width="16"
-                  height="16"
+                <!-- Thumbnail -->
+                <div class="item-img">
+                  <img v-if="item.image" :src="item.image" :alt="item.name" />
+                  <span v-else class="item-emoji">🐾</span>
+                  <span class="item-preorder-badge">พรีออเดอร์</span>
+                </div>
+
+                <!-- Info -->
+                <div class="item-info">
+                  <p class="item-name">{{ item.name }}</p>
+                  <p v-if="item.flavor" class="item-flavor">รสชาติ: {{ item.flavor }}</p>
+                  <p class="item-price-unit">฿{{ Number(item.price).toLocaleString() }} / ชิ้น</p>
+                  <p v-if="item.preorderRemaining !== null" class="item-remaining">
+                    เหลือ {{ item.preorderRemaining }} ชิ้น
+                  </p>
+                  <p v-else class="item-remaining">จำนวนไม่จำกัด</p>
+                </div>
+
+                <!-- Qty controls -->
+                <div class="item-qty">
+                  <button
+                    class="qty-btn"
+                    :disabled="item.qty <= 1 || updatingId === item.cart_id"
+                    @click="updateQty(item, item.qty - 1)"
+                  >
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
+                      <path
+                        fill-rule="evenodd"
+                        d="M3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z"
+                        clip-rule="evenodd"
+                      />
+                    </svg>
+                  </button>
+
+                  <span v-if="updatingId === item.cart_id" class="qty-loading">
+                    <svg class="spin" viewBox="0 0 24 24" fill="none" width="14" height="14">
+                      <circle
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="rgba(111,80,160,0.2)"
+                        stroke-width="3"
+                      />
+                      <path
+                        d="M12 2a10 10 0 0110 10"
+                        stroke="#9a7dbf"
+                        stroke-width="3"
+                        stroke-linecap="round"
+                      />
+                    </svg>
+                  </span>
+                  <span v-else class="qty-value">{{ item.qty }}</span>
+
+                  <button
+                    class="qty-btn"
+                    :disabled="item.qty >= item.stock || updatingId === item.cart_id"
+                    @click="updateQty(item, item.qty + 1)"
+                  >
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
+                      <path
+                        fill-rule="evenodd"
+                        d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"
+                        clip-rule="evenodd"
+                      />
+                    </svg>
+                  </button>
+                </div>
+
+                <!-- Subtotal -->
+                <div class="item-subtotal">฿{{ (item.price * item.qty).toLocaleString() }}</div>
+
+                <!-- Delete -->
+                <button
+                  class="delete-btn"
+                  :disabled="deletingId === item.cart_id"
+                  @click="removeItem(item)"
+                  title="ลบออก"
                 >
-                  <circle cx="12" cy="12" r="10" stroke="rgba(232,64,92,0.2)" stroke-width="3" />
-                  <path
-                    d="M12 2a10 10 0 0110 10"
-                    stroke="#e8405c"
-                    stroke-width="3"
-                    stroke-linecap="round"
-                  />
-                </svg>
-                <svg v-else viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
-                  <path
-                    fill-rule="evenodd"
-                    d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z"
-                    clip-rule="evenodd"
-                  />
-                </svg>
-              </button>
-            </div>
-          </transition-group>
+                  <svg
+                    v-if="deletingId === item.cart_id"
+                    class="spin"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    width="16"
+                    height="16"
+                  >
+                    <circle cx="12" cy="12" r="10" stroke="rgba(232,64,92,0.2)" stroke-width="3" />
+                    <path
+                      d="M12 2a10 10 0 0110 10"
+                      stroke="#e8405c"
+                      stroke-width="3"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                  <svg v-else viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
+                    <path
+                      fill-rule="evenodd"
+                      d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z"
+                      clip-rule="evenodd"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </transition-group>
+          </div>
         </div>
 
         <!-- RIGHT: order summary -->
@@ -402,17 +613,12 @@ onMounted(fetchCart)
 
             <div class="summary-rows">
               <div class="summary-row">
-                <span>ราคาสินค้า</span>
-                <span>฿{{ subtotal.toLocaleString() }}</span>
-              </div>
-              <div class="summary-divider"></div>
-              <div class="summary-row summary-row--total">
-                <span>ยอดรวมทั้งหมด</span>
-                <span class="total-price">฿{{ total.toLocaleString() }}</span>
+                <span>{{ activeLabel }}</span>
+                <span class="total-price">฿{{ activeSubtotal.toLocaleString() }}</span>
               </div>
             </div>
 
-            <button class="btn-checkout" @click="checkout">
+            <button class="btn-checkout" :disabled="activeItems.length === 0" @click="checkout">
               <svg
                 viewBox="0 0 24 24"
                 fill="none"
@@ -425,7 +631,7 @@ onMounted(fetchCart)
               >
                 <path d="M5 12h14M12 5l7 7-7 7" />
               </svg>
-              ดำเนินการสั่งซื้อ
+              {{ checkoutLabel }}
             </button>
 
             <button class="btn-continue" @click="goBack">← เลือกสินค้าเพิ่ม</button>
@@ -653,6 +859,56 @@ onMounted(fetchCart)
   font-weight: 900;
   color: var(--primary-dark);
 }
+.view-toggle {
+  display: flex;
+  gap: 0.55rem;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+}
+.view-toggle__btn {
+  border: 1px solid #d8c6f0;
+  background: linear-gradient(180deg, #ffffff, #f5effd);
+  color: var(--primary-dark);
+  border-radius: 999px;
+  padding: 0.72rem 1.05rem;
+  font-size: 0.92rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition:
+    transform 0.2s ease,
+    background 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
+}
+.view-toggle__btn:hover {
+  transform: translateY(-1px);
+  border-color: #c2a6ea;
+  box-shadow: 0 6px 16px rgba(111, 80, 160, 0.12);
+}
+.view-toggle__btn--active {
+  background: linear-gradient(180deg, #cda2fb, #ab7fe4);
+  color: #fff;
+  border-color: #b88eee;
+  box-shadow: 0 10px 18px rgba(111, 80, 160, 0.2);
+}
+
+/* ── ITEM SECTIONS ── */
+.item-section {
+  margin-bottom: 1.5rem;
+}
+.item-section-title {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--primary);
+  margin: 1rem 0 0.8rem 0;
+  padding-bottom: 0.8rem;
+  border-bottom: 2px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .item-list {
   display: flex;
   flex-direction: column;
@@ -872,6 +1128,12 @@ onMounted(fetchCart)
   border: none;
   border-top: 1px dashed #e2d5f0;
   margin: 0.3rem 0;
+}
+.summary-note {
+  margin: 0.8rem 0 0.2rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--muted);
 }
 
 .btn-checkout {

@@ -245,6 +245,7 @@ onUnmounted(() => {
           <RouterLink to="/admin/home">แดชบอร์ด</RouterLink>
           <RouterLink to="/admin/products">สินค้า</RouterLink>
           <RouterLink to="/admin/preorder-rounds">รอบนำเข้าสินค้า</RouterLink>
+          <RouterLink to="/admin/inventory-intake">รับสินค้าเข้า</RouterLink>
           <RouterLink to="/admin/settings">ตั้งค่าระบบ</RouterLink>
           <RouterLink to="/admin/users">เพิ่ม User</RouterLink>
         </nav>

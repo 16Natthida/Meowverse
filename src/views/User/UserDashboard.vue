@@ -119,32 +119,36 @@ const fetchProducts = async () => {
     if (!res.ok) throw new Error('Failed to fetch products')
     const data = await res.json()
     const arr = Array.isArray(data) ? data : (data.data ?? data.products ?? [])
-    products.value = arr.map((p) => ({
-      preorderEnabled: Boolean(p.preorderEnabled ?? p.isPreorder ?? false),
-      readyToShipEnabled:
-        p.readyToShipEnabled != null || p.isReadyToShip != null
-          ? Boolean(p.readyToShipEnabled ?? p.isReadyToShip)
-          : !(p.preorderEnabled ?? p.isPreorder ?? false),
-      imageUrls: [
-        ...(Array.isArray(p.imageUrls) ? p.imageUrls : []),
-        ...(Array.isArray(p.images) ? p.images : []),
-      ].filter(Boolean),
-      id: p.id,
-      name: p.name,
-      description: p.description || '',
-      flavors: parseFlavorList(p.flavors),
-      flavorStock: parseFlavorStock(p.flavorStock ?? p.flavor_stock),
-      price: p.basePrice ?? p.price ?? 0,
-      image: p.imageUrls?.[0] ?? p.image_url?.[0] ?? p.imageUrl ?? p.image ?? null,
-      categoryId: p.categoryId != null ? Number(p.categoryId) : null,
-      categoryName: p.categoryName ?? '',
-      stock: p.stock ?? 0,
-      isPreorder: Boolean(p.preorderEnabled ?? p.isPreorder ?? false),
-      isReadyToShip:
-        p.readyToShipEnabled != null || p.isReadyToShip != null
-          ? Boolean(p.readyToShipEnabled ?? p.isReadyToShip)
-          : !(p.preorderEnabled ?? p.isPreorder ?? false),
-    }))
+    products.value = arr.map((p) => {
+      const isPreorder = Boolean(p.preorderEnabled ?? p.isPreorder ?? false)
+      return {
+        preorderEnabled: isPreorder,
+        readyToShipEnabled:
+          p.readyToShipEnabled != null || p.isReadyToShip != null
+            ? Boolean(p.readyToShipEnabled ?? p.isReadyToShip)
+            : !isPreorder,
+        imageUrls: [
+          ...(Array.isArray(p.imageUrls) ? p.imageUrls : []),
+          ...(Array.isArray(p.images) ? p.images : []),
+        ].filter(Boolean),
+        id: p.id,
+        name: p.name,
+        description: p.description || '',
+        flavors: parseFlavorList(p.flavors),
+        flavorStock: parseFlavorStock(p.flavorStock ?? p.flavor_stock),
+        basePrice: Number(p.basePrice) || 0,
+        preorderPrice: Number(p.preorderPrice) || 0,
+        image: p.imageUrls?.[0] ?? p.image_url?.[0] ?? p.imageUrl ?? p.image ?? null,
+        categoryId: p.categoryId != null ? Number(p.categoryId) : null,
+        categoryName: p.categoryName ?? '',
+        stock: p.stock ?? 0,
+        isPreorder: isPreorder,
+        isReadyToShip:
+          p.readyToShipEnabled != null || p.isReadyToShip != null
+            ? Boolean(p.readyToShipEnabled ?? p.isReadyToShip)
+            : !isPreorder,
+      }
+    })
   } catch (err) {
     error.value = err.message
   } finally {
@@ -175,22 +179,28 @@ const addToCart = async (product, flavor = '', qty = 1) => {
     return
   }
 
-  const itemType = getEffectiveItemType(product)
+  // If user is on the Preorder tab, prefer adding as 'preorder' when supported.
+  let itemType = getEffectiveItemType(product)
+  if (activeTab.value === 'พรีออเดอร์' && product?.isPreorder) {
+    itemType = 'preorder'
+  }
   if (!itemType) {
     showNotice('สินค้านี้ยังไม่เปิดขาย', 'warn')
     return
   }
 
+  const isPreorderPurchase = itemType === 'preorder'
+
   // Check flavor stock
   const flavorToAdd = String(flavor || '').trim() || product.flavors?.[0] || ''
   const flavorStock = getFlavorStock(flavorToAdd)
-  if (flavorStock === 0) {
+  if (!isPreorderPurchase && flavorStock === 0) {
     showNotice(`รสชาติ "${flavorToAdd}" หมดสต็อกแล้ว`, 'error')
     return
   }
 
   const qtyToAdd = Math.max(1, Number(qty) || 1)
-  if (qtyToAdd > flavorStock) {
+  if (!isPreorderPurchase && qtyToAdd > flavorStock) {
     showNotice(`สต็อกของ "${flavorToAdd}" มีเพียง ${flavorStock} ชิ้นเท่านั้น`, 'error')
     return
   }
@@ -254,6 +264,11 @@ function closeProductDetail() {
 }
 
 function increaseDetailQty() {
+  if (getEffectiveItemType(selectedProduct.value) === 'preorder') {
+    detailQty.value = Math.min(detailQty.value + 1, 999)
+    return
+  }
+
   const stock = selectedFlavorStock.value || Number(selectedProduct.value?.stock) || 0
   if (stock > 0) {
     detailQty.value = Math.min(detailQty.value + 1, stock)
@@ -318,6 +333,7 @@ function getEffectiveItemType(product) {
   const supportsPreorder = Boolean(product?.isPreorder)
   const supportsReadyToShip = Boolean(product?.isReadyToShip)
 
+  // ── Priority 1: Check active tab first ──
   if (activeTab.value === 'พรีออเดอร์' && supportsPreorder) {
     return 'preorder'
   }
@@ -326,6 +342,7 @@ function getEffectiveItemType(product) {
     return 'ready-to-ship'
   }
 
+  // ── Priority 2: If only one type is supported ──
   if (supportsReadyToShip && !supportsPreorder) {
     return 'ready-to-ship'
   }
@@ -334,12 +351,9 @@ function getEffectiveItemType(product) {
     return 'preorder'
   }
 
-  if (supportsReadyToShip) {
+  // ── Priority 3: If both types are supported (default to ready-to-ship) ──
+  if (supportsReadyToShip && supportsPreorder) {
     return 'ready-to-ship'
-  }
-
-  if (supportsPreorder) {
-    return 'preorder'
   }
 
   return ''
@@ -378,6 +392,18 @@ function getCardBadge(product) {
   return null
 }
 
+function isPreorderDisplay(product) {
+  return getEffectiveItemType(product) === 'preorder'
+}
+
+function getDisplayPrice(product) {
+  const itemType = getEffectiveItemType(product)
+  if (itemType === 'preorder') {
+    return Number(product.preorderPrice ?? product.basePrice ?? 0)
+  }
+  return Number(product.basePrice ?? product.preorderPrice ?? 0)
+}
+
 // ── FILTERING ──
 const filteredProducts = computed(() => {
   let list = products.value
@@ -411,6 +437,14 @@ const paginatedProducts = computed(() => {
   return filteredProducts.value.slice(start, start + itemsPerPage)
 })
 
+// Lists used for homepage sections
+// readyProductsAll: products that are ready-to-ship (include those that are ready even if they also support preorder)
+const readyProductsAll = computed(() => products.value.filter((p) => p.isReadyToShip))
+// preorderProductsAll: show only products that are preorder-only (exclude items that are also ready-to-ship)
+const preorderProductsAll = computed(() =>
+  products.value.filter((p) => p.isPreorder && !p.isReadyToShip),
+)
+
 function goToPage(page) {
   if (page >= 1 && page <= totalPages.value) currentPage.value = page
 }
@@ -428,6 +462,15 @@ function handleTabClick(tab) {
 function handleCategoryClick(id) {
   activeCategory.value = id
   currentPage.value = 1
+}
+
+function showAll(tabName) {
+  handleTabClick(tabName)
+  // scroll to products section for visibility
+  setTimeout(() => {
+    const el = document.querySelector('.products')
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, 80)
 }
 
 function handleLogout() {
@@ -690,85 +733,245 @@ onMounted(async () => {
         ไม่พบสินค้าในหมวดหมู่นี้
       </div>
 
-      <div v-else class="product-grid">
-        <article
-          v-for="product in paginatedProducts"
-          :key="product.id"
-          class="product-card"
-          role="button"
-          tabindex="0"
-          @click="openProductDetail(product)"
-          @keydown.enter.prevent="openProductDetail(product)"
-          @keydown.space.prevent="openProductDetail(product)"
-        >
-          <span
-            v-if="getCardBadge(product)"
-            :class="['product-card__badge', getCardBadge(product).className]"
-            >{{ getCardBadge(product).label }}</span
-          >
-
-          <div class="product-card__img">
-            <img v-if="product.image" :src="product.image" :alt="product.name" />
-            <span v-else class="product-card__emoji">🐾</span>
-          </div>
-
-          <div class="product-card__body">
-            <h3 class="product-card__name">{{ product.name }}</h3>
-            <p class="product-card__desc">{{ product.description || product.categoryName }}</p>
-
-            <div class="product-card__footer">
-              <div class="product-card__price">
-                <span class="price-currency">฿</span>
-                <span class="price-amount">{{ Number(product.price).toLocaleString() }}</span>
+      <div v-else>
+        <template v-if="activeTab === 'หน้าหลัก'">
+          <div class="section-sub">
+            <div class="section-sub__header">
+              <div>
+                <h3>พร้อมส่งสินค้า</h3>
+                <p class="muted">สินค้าที่พร้อมจัดส่งทันที</p>
               </div>
-              <span :class="['stock-badge', getStockStatusClass(product.stock)]">
-                สต็อก {{ product.stock }} ชิ้น
-              </span>
+              <button class="view-all-btn" @click.stop="showAll('พร้อมส่ง')">ดูทั้งหมด</button>
             </div>
-
-            <button
-              class="btn-cart"
-              :disabled="cartLoading[product.id] || Number(product.stock) === 0"
-              @click.stop="
-                product.flavors?.length ? openProductDetail(product) : addToCart(product)
-              "
-            >
-              <span v-if="cartLoading[product.id]" class="btn-cart__inner">
-                <svg class="spin cart-svg" viewBox="0 0 24 24" fill="none">
-                  <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.3)" stroke-width="3" />
-                  <path
-                    d="M12 2a10 10 0 0110 10"
-                    stroke="white"
-                    stroke-width="3"
-                    stroke-linecap="round"
-                  />
-                </svg>
-                กำลังเพิ่ม...
-              </span>
-              <span v-else-if="Number(product.stock) === 0" class="btn-cart__inner">
-                สินค้าหมด
-              </span>
-              <span v-else class="btn-cart__inner">
-                <svg
-                  class="cart-svg"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
+            <div class="product-grid">
+              <article
+                v-for="product in readyProductsAll.slice(0, itemsPerPage)"
+                :key="`ready-${product.id}`"
+                class="product-card"
+                role="button"
+                tabindex="0"
+                @click="openProductDetail(product)"
+                @keydown.enter.prevent="openProductDetail(product)"
+                @keydown.space.prevent="openProductDetail(product)"
+              >
+                <span
+                  v-if="getCardBadge(product)"
+                  :class="['product-card__badge', getCardBadge(product).className]"
+                  >{{ getCardBadge(product).label }}</span
                 >
-                  <circle cx="9" cy="21" r="1" />
-                  <circle cx="20" cy="21" r="1" />
-                  <path
-                    d="M1 1h4l2.68 13.39a2 2 0 001.98 1.61h9.72a2 2 0 001.98-1.69l1.38-7.31H6"
-                  />
-                </svg>
-                {{ product.flavors?.length ? 'เลือกรสชาติ' : 'หยิบใส่ตะกร้า' }}
-              </span>
-            </button>
+
+                <div class="product-card__img">
+                  <img v-if="product.image" :src="product.image" :alt="product.name" />
+                  <span v-else class="product-card__emoji">🐾</span>
+                </div>
+
+                <div class="product-card__body">
+                  <h3 class="product-card__name">{{ product.name }}</h3>
+                  <p class="product-card__desc">
+                    {{ product.description || product.categoryName }}
+                  </p>
+
+                  <div class="product-card__footer">
+                    <div class="product-card__price">
+                      <span class="price-currency">฿</span>
+                      <span class="price-amount">{{
+                        Number(getDisplayPrice(product)).toLocaleString()
+                      }}</span>
+                    </div>
+                    <span :class="['stock-badge', getStockStatusClass(product.stock)]"
+                      >สต็อก {{ product.stock }} ชิ้น</span
+                    >
+                  </div>
+
+                  <button
+                    class="btn-cart"
+                    :disabled="
+                      cartLoading[product.id] ||
+                      (getEffectiveItemType(product) !== 'preorder' && Number(product.stock) === 0)
+                    "
+                    @click.stop="
+                      product.flavors?.length ? openProductDetail(product) : addToCart(product)
+                    "
+                  >
+                    <span v-if="cartLoading[product.id]" class="btn-cart__inner"
+                      >กำลังเพิ่ม...</span
+                    >
+                    <span v-else class="btn-cart__inner">{{
+                      product.flavors?.length ? 'เลือกรสชาติ' : 'หยิบใส่ตะกร้า'
+                    }}</span>
+                  </button>
+                </div>
+              </article>
+            </div>
           </div>
-        </article>
+
+          <div class="section-sub">
+            <div class="section-sub__header">
+              <div>
+                <h3>สินค้าพรีออเดอร์ (เฉพาะพรีออเดอร์)</h3>
+                <p class="muted">รวมสินค้าที่ต้องสั่งล่วงหน้า (ไม่รวมสินค้าที่พร้อมส่ง)</p>
+              </div>
+              <button class="view-all-btn" @click.stop="showAll('พรีออเดอร์')">ดูทั้งหมด</button>
+            </div>
+            <div class="product-grid">
+              <article
+                v-for="product in preorderProductsAll.slice(0, itemsPerPage)"
+                :key="`pre-${product.id}`"
+                class="product-card"
+                role="button"
+                tabindex="0"
+                @click="openProductDetail(product)"
+                @keydown.enter.prevent="openProductDetail(product)"
+                @keydown.space.prevent="openProductDetail(product)"
+              >
+                <span
+                  v-if="getCardBadge(product)"
+                  :class="['product-card__badge', getCardBadge(product).className]"
+                  >{{ getCardBadge(product).label }}</span
+                >
+
+                <div class="product-card__img">
+                  <img v-if="product.image" :src="product.image" :alt="product.name" />
+                  <span v-else class="product-card__emoji">🐾</span>
+                </div>
+
+                <div class="product-card__body">
+                  <h3 class="product-card__name">{{ product.name }}</h3>
+                  <p class="product-card__desc">
+                    {{ product.description || product.categoryName }}
+                  </p>
+
+                  <div class="product-card__footer">
+                    <div class="product-card__price">
+                      <span class="price-currency">฿</span>
+                      <span class="price-amount">{{
+                        Number(getDisplayPrice(product)).toLocaleString()
+                      }}</span>
+                    </div>
+                    <span class="stock-badge stock-badge--preorder">พรีออเดอร์</span>
+                  </div>
+
+                  <button
+                    class="btn-cart"
+                    :disabled="cartLoading[product.id]"
+                    @click.stop="
+                      product.flavors?.length ? openProductDetail(product) : addToCart(product)
+                    "
+                  >
+                    <span v-if="cartLoading[product.id]" class="btn-cart__inner"
+                      >กำลังเพิ่ม...</span
+                    >
+                    <span v-else class="btn-cart__inner">{{
+                      product.flavors?.length ? 'เลือกรสชาติ' : 'หยิบใส่ตะกร้า'
+                    }}</span>
+                  </button>
+                </div>
+              </article>
+            </div>
+          </div>
+        </template>
+        <template v-else>
+          <div class="product-grid">
+            <article
+              v-for="product in paginatedProducts"
+              :key="product.id"
+              class="product-card"
+              role="button"
+              tabindex="0"
+              @click="openProductDetail(product)"
+              @keydown.enter.prevent="openProductDetail(product)"
+              @keydown.space.prevent="openProductDetail(product)"
+            >
+              <span
+                v-if="getCardBadge(product)"
+                :class="['product-card__badge', getCardBadge(product).className]"
+                >{{ getCardBadge(product).label }}</span
+              >
+
+              <div class="product-card__img">
+                <img v-if="product.image" :src="product.image" :alt="product.name" />
+                <span v-else class="product-card__emoji">🐾</span>
+              </div>
+
+              <div class="product-card__body">
+                <h3 class="product-card__name">{{ product.name }}</h3>
+                <p class="product-card__desc">{{ product.description || product.categoryName }}</p>
+
+                <div class="product-card__footer">
+                  <div class="product-card__price">
+                    <span class="price-currency">฿</span>
+                    <span class="price-amount">{{
+                      Number(getDisplayPrice(product)).toLocaleString()
+                    }}</span>
+                  </div>
+                  <span
+                    v-if="!isPreorderDisplay(product)"
+                    :class="['stock-badge', getStockStatusClass(product.stock)]"
+                  >
+                    สต็อก {{ product.stock }} ชิ้น
+                  </span>
+                  <span v-else class="stock-badge stock-badge--preorder">พรีออเดอร์</span>
+                </div>
+
+                <button
+                  class="btn-cart"
+                  :disabled="
+                    cartLoading[product.id] ||
+                    (getEffectiveItemType(product) !== 'preorder' && Number(product.stock) === 0)
+                  "
+                  @click.stop="
+                    product.flavors?.length ? openProductDetail(product) : addToCart(product)
+                  "
+                >
+                  <span v-if="cartLoading[product.id]" class="btn-cart__inner">
+                    <svg class="spin cart-svg" viewBox="0 0 24 24" fill="none">
+                      <circle
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="rgba(255,255,255,0.3)"
+                        stroke-width="3"
+                      />
+                      <path
+                        d="M12 2a10 10 0 0110 10"
+                        stroke="white"
+                        stroke-width="3"
+                        stroke-linecap="round"
+                      />
+                    </svg>
+                    กำลังเพิ่ม...
+                  </span>
+                  <span
+                    v-else-if="
+                      getEffectiveItemType(product) !== 'preorder' && Number(product.stock) === 0
+                    "
+                    class="btn-cart__inner"
+                  >
+                    สินค้าหมด
+                  </span>
+                  <span v-else class="btn-cart__inner">
+                    <svg
+                      class="cart-svg"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <circle cx="9" cy="21" r="1" />
+                      <circle cx="20" cy="21" r="1" />
+                      <path
+                        d="M1 1h4l2.68 13.39a2 2 0 001.98 1.61h9.72a2 2 0 001.98-1.69l1.38-7.31H6"
+                      />
+                    </svg>
+                    {{ product.flavors?.length ? 'เลือกรสชาติ' : 'หยิบใส่ตะกร้า' }}
+                  </span>
+                </button>
+              </div>
+            </article>
+          </div>
+        </template>
       </div>
 
       <!-- Pagination -->
@@ -828,7 +1031,21 @@ onMounted(async () => {
                 </button>
               </div>
 
-              <span v-if="selectedProduct.isPreorder" class="detail-badge">พรีออเดอร์</span>
+              <span
+                v-if="getEffectiveItemType(selectedProduct)"
+                :class="[
+                  'detail-badge',
+                  getEffectiveItemType(selectedProduct) === 'preorder'
+                    ? 'detail-badge--preorder'
+                    : 'detail-badge--ready',
+                ]"
+              >
+                {{
+                  getEffectiveItemType(selectedProduct) === 'preorder'
+                    ? '⏳ พรีออเดอร์'
+                    : '✅ พร้อมส่ง'
+                }}
+              </span>
             </div>
 
             <div class="detail-content">
@@ -843,7 +1060,7 @@ onMounted(async () => {
               </p>
 
               <div class="detail-price-band">
-                ฿{{ Number(selectedProduct.price).toLocaleString() }}
+                ฿{{ Number(getDisplayPrice(selectedProduct)).toLocaleString() }}
               </div>
 
               <div v-if="selectedProduct.flavors?.length" class="detail-flavor-section">
@@ -856,13 +1073,22 @@ onMounted(async () => {
                     :class="[
                       'flavor-chip',
                       { 'flavor-chip--active': selectedFlavor === flavor },
-                      { 'flavor-chip--out': getFlavorStock(flavor) === 0 },
+                      {
+                        'flavor-chip--out':
+                          getEffectiveItemType(selectedProduct) !== 'preorder' &&
+                          getFlavorStock(flavor) === 0,
+                      },
                     ]"
-                    :disabled="getFlavorStock(flavor) === 0"
+                    :disabled="
+                      getEffectiveItemType(selectedProduct) !== 'preorder' &&
+                      getFlavorStock(flavor) === 0
+                    "
                     @click="selectedFlavor = flavor"
                   >
                     <span>{{ flavor }}</span>
-                    <span class="flavor-stock">{{ getFlavorStock(flavor) }}</span>
+                    <span v-if="!isPreorderDisplay(selectedProduct)" class="flavor-stock">{{
+                      getFlavorStock(flavor)
+                    }}</span>
                   </button>
                 </div>
               </div>
@@ -882,7 +1108,10 @@ onMounted(async () => {
                   <button
                     type="button"
                     class="qty-picker__btn"
-                    :disabled="detailQty >= selectedFlavorStock"
+                    :disabled="
+                      getEffectiveItemType(selectedProduct) !== 'preorder' &&
+                      detailQty >= selectedFlavorStock
+                    "
                     @click="increaseDetailQty"
                   >
                     +
@@ -899,13 +1128,23 @@ onMounted(async () => {
                 </div>
                 <div class="detail-meta">
                   <span class="detail-meta__label">
-                    {{ selectedProduct.flavors?.length ? 'สต็อกรสที่เลือก' : 'สต็อก' }}
+                    {{
+                      isPreorderDisplay(selectedProduct)
+                        ? 'สถานะ'
+                        : selectedProduct.flavors?.length
+                          ? 'สต็อกรสที่เลือก'
+                          : 'สต็อก'
+                    }}
                   </span>
                   <strong class="detail-meta__value">
                     {{
-                      selectedProduct.flavors?.length ? selectedFlavorStock : selectedProduct.stock
+                      isPreorderDisplay(selectedProduct)
+                        ? 'เปิดรับพรีออเดอร์'
+                        : selectedProduct.flavors?.length
+                          ? selectedFlavorStock
+                          : selectedProduct.stock
                     }}
-                    ชิ้น
+                    <template v-if="!isPreorderDisplay(selectedProduct)"> ชิ้น </template>
                   </strong>
                 </div>
                 <div class="detail-meta">
@@ -960,6 +1199,84 @@ onMounted(async () => {
   min-height: 100vh;
   color: var(--text);
   padding-bottom: 2rem;
+}
+
+.section-sub {
+  margin: 1.6rem 0 2.2rem;
+  padding: 0.8rem 0;
+}
+.section-sub__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.8rem;
+}
+.section-sub__header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--primary-dark);
+}
+.section-sub__header .muted {
+  margin: 0.15rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.view-all-btn {
+  background: transparent;
+  border: 1px solid rgba(111, 80, 160, 0.12);
+  color: var(--primary);
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.product-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 18px;
+}
+.product-card {
+  background: var(--surface);
+  border-radius: 12px;
+  padding: 0.75rem;
+  box-shadow: 0 6px 18px rgba(111, 80, 160, 0.06);
+  transition:
+    transform 0.14s ease,
+    box-shadow 0.14s ease;
+}
+.product-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 10px 28px rgba(111, 80, 160, 0.12);
+}
+.product-card__img img {
+  width: 100%;
+  height: 150px;
+  object-fit: cover;
+  border-radius: 10px;
+}
+.product-card__body {
+  padding-top: 0.6rem;
+}
+.product-card__name {
+  font-size: 0.98rem;
+  margin: 0 0 0.25rem;
+}
+.product-card__desc {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin: 0 0 0.6rem;
+  min-height: 38px;
+}
+.product-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+.btn-cart {
+  margin-top: 0.6rem;
+  width: 100%;
 }
 
 /* ── NAVBAR ── */
@@ -1642,6 +1959,11 @@ onMounted(async () => {
   background: #f3f4f6;
   border-color: #e5e7eb;
 }
+.stock-badge--preorder {
+  color: #6f50a0;
+  background: #f1e8ff;
+  border-color: #d7bdf6;
+}
 
 /* ── CART BUTTON ── */
 .btn-cart {
@@ -1848,13 +2170,23 @@ onMounted(async () => {
   position: absolute;
   left: 1rem;
   bottom: 1rem;
-  background: #fff2d9;
-  color: #9b6210;
-  border: 1px solid #f7ddb0;
+  border: 1px solid;
   border-radius: 999px;
   padding: 0.35rem 0.7rem;
   font-size: 0.78rem;
   font-weight: 800;
+}
+
+.detail-badge--preorder {
+  background: #fff2d9;
+  color: #9b6210;
+  border-color: #f7ddb0;
+}
+
+.detail-badge--ready {
+  background: #ecfdf5;
+  color: #059669;
+  border-color: #a7f3d0;
 }
 
 .detail-content {
