@@ -24,6 +24,27 @@ async function fetchShippingOrders() {
   }
 }
 
+// ฟังก์ชันเปลี่ยนสถานะเป็น Ready_to_Ship
+async function updateToReady(orderId) {
+  if (!confirm(`ยืนยันการเปลี่ยนสถานะออเดอร์ #${orderId} เป็นพร้อมส่ง?`)) return
+
+  try {
+    const res = await fetch(`${API_BASE}/admin/orders/${orderId}/status`, {
+      method: 'PATCH', // หรือ PUT ตามที่ Backend กำหนด
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'Ready_to_Ship' })
+    })
+
+    if (!res.ok) throw new Error('ไม่สามารถอัปเดตสถานะได้')
+    
+    alert('อัปเดตสถานะเรียบร้อยแล้ว')
+    // ดึงข้อมูลใหม่เพื่อให้รายการที่อัปเดตแล้วหายไปจากหน้า 'เตรียมจัดส่ง' (ถ้า API กรองเฉพาะสถานะ Paid/Ready)
+    await fetchShippingOrders() 
+  } catch (err) {
+    alert(err.message)
+  }
+}
+
 // ฟังก์ชันจัดรูปแบบที่อยู่จาก SQL (แปลง \n เป็น <br>)
 function formatAddress(address) {
   if (!address) return '-'
@@ -61,35 +82,6 @@ onMounted(fetchShippingOrders)
 
 <template>
   <div class="shipping-page">
-    <section class="hero-panel">
-      <div class="hero-copy">
-        <p class="eyebrow">Logistics Management</p>
-        <h2>🚚 รายการเตรียมจัดส่ง</h2>
-        <p>ตรวจสอบที่อยู่และรายการสินค้าของออเดอร์ที่ชำระเงินแล้ว เพื่อดำเนินการบรรจุและเรียกขนส่ง</p>
-      </div>
-      <div class="hero-actions">
-        <div class="search-box">
-          <input v-model="searchQuery" type="text" placeholder="ค้นหา รหัสออเดอร์ หรือ ชื่อลูกค้า..." class="search-input" />
-        </div>
-        <button class="hero-btn hero-btn--primary" @click="fetchShippingOrders">🔄 อัปเดตรายการ</button>
-      </div>
-    </section>
-
-    <section class="kpi-grid">
-      <article class="kpi-card" :class="{ 'active': filterType === 'all' }" @click="filterType = 'all'">
-        <p class="kpi-label">ทั้งหมดที่ต้องส่ง</p>
-        <p class="kpi-value">{{ kpiStats.total }}</p>
-      </article>
-      <article class="kpi-card" :class="{ 'active': filterType === 'Ready' }" @click="filterType = 'Ready'">
-        <p class="kpi-label">สินค้าพร้อมส่ง (Ready)</p>
-        <p class="kpi-value" style="color: #10b981">{{ kpiStats.ready }}</p>
-      </article>
-      <article class="kpi-card" :class="{ 'active': filterType === 'Preorder' }" @click="filterType = 'Preorder'">
-        <p class="kpi-label">สินค้าพรีออเดอร์ (Preorder)</p>
-        <p class="kpi-value" style="color: #f59e0b">{{ kpiStats.preorder }}</p>
-      </article>
-    </section>
-
     <section class="panel table-panel">
       <header class="panel-head">
         <h3>📦 รายการคำสั่งซื้อที่รอจัดส่ง</h3>
@@ -110,7 +102,7 @@ onMounted(fetchShippingOrders)
             <tr>
               <th>ออเดอร์</th>
               <th>ประเภท</th>
-              <th>รายการสินค้า</th>
+              <th>สถานะ</th> <th>รายการสินค้า</th>
               <th>ข้อมูลการจัดส่ง</th>
               <th>ขนส่ง</th>
               <th>ยอดรวม</th>
@@ -119,12 +111,23 @@ onMounted(fetchShippingOrders)
           </thead>
           <tbody>
             <tr v-for="order in filteredOrders" :key="order.order_id">
-              <td><strong>#{{ order.order_id }}</strong><br/><small>{{ formatDate(order.Order_date) }}</small></td>
+              <td>
+                <strong>#{{ order.order_id }}</strong><br/>
+                <small>{{ formatDate(order.Order_date) }}</small>
+              </td>
+
               <td>
                 <span :class="order.Order_type === 'Preorder' ? 'status status--pending' : 'status status--paid'">
                   {{ order.Order_type }}
                 </span>
               </td>
+
+              <td>
+                <span :class="['status', order.status === 'Ready_to_Ship' ? 'status--ready' : 'status--paid']">
+                  {{ order.status === 'Ready_to_Ship' ? 'พร้อมจัดส่ง' : 'ชำระเงินแล้ว' }}
+                </span>
+              </td>
+
               <td>
                 <ul class="item-list">
                   <li v-for="item in order.details" :key="item.detail_id">
@@ -133,18 +136,33 @@ onMounted(fetchShippingOrders)
                   </li>
                 </ul>
               </td>
+
               <td class="address-cell">
                 <div v-html="formatAddress(order.address)" class="address-text"></div>
               </td>
+
               <td>
                 <span class="carrier-badge" v-if="order.Shipping_Carrier">
                   {{ order.Shipping_Carrier }}
                 </span>
                 <span v-else class="no-data">ยังไม่ระบุ</span>
               </td>
-              <td class="price-text">฿{{ Number(order.total_amount).toLocaleString() }}</td>
+
+              <td class="price-text">
+                ฿{{ Number(order.total_amount).toLocaleString() }}
+              </td>
+
               <td>
-                <button class="btn-action">🖨️ พิมพ์ใบแปะหน้า</button>
+                <button 
+                  v-if="order.status !== 'Ready_to_Ship'"
+                  class="btn-action btn-action--ready" 
+                  @click="updateToReady(order.order_id)"
+                >
+                  📦 พร้อมจัดส่ง
+                </button>
+                <span v-else style="color: #10b981; font-weight: bold; font-size: 0.8rem;">
+                  ✅ ดำเนินการแล้ว
+                </span>
               </td>
             </tr>
           </tbody>
@@ -242,6 +260,26 @@ td { padding: 1rem; border-bottom: 1px solid #f3e8ff; font-size: 0.9rem; vertica
   transition: 0.2s;
 }
 .btn-action:hover { background: var(--grape); color: white; }
+.btn-action--ready {
+  border-color: #10b981;
+  color: #10b981;
+}
+/* เพิ่มต่อจาก status--paid */
+.status--ready { 
+  background: #ecfdf5; 
+  color: #059669; 
+  border: 1px solid #10b981;
+}
 
+
+.status {
+  border: 1px solid transparent;
+  display: inline-block;
+  white-space: nowrap;
+}
+.btn-action--ready:hover {
+  background: #10b981;
+  color: white;
+}
 .loading-wrap { text-align: center; padding: 3rem; color: var(--text-muted); }
 </style>

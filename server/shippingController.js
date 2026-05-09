@@ -28,6 +28,7 @@ const getShippingOrders = async (req, res) => {
           Order_type: row.Order_type,
           Order_date: row.Order_date,
           total_amount: row.total_amount,
+          status: row.status,
           address: row.address,
           Shipping_Carrier: row.Shipping_Carrier,
           details: [] 
@@ -50,4 +51,24 @@ const getShippingOrders = async (req, res) => {
   }
 };
 
-export default { getShippingOrders };
+const updateOrderStatus = async (req, res) => {
+  const pool = req.app.locals.db;
+  const { orderId } = req.params;
+  const { status } = req.body; // รับค่า 'Ready_to_Ship' มาจาก Vue
+
+  try {
+    const sql = `UPDATE orders SET status = ? WHERE order_id = ?`;
+    const [result] = await pool.query(sql, [status, orderId]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'ไม่พบรหัสคำสั่งซื้อนี้' });
+    }
+
+    res.json({ message: 'อัปเดตสถานะสำเร็จ', order_id: orderId });
+  } catch (error) {
+    console.error('Update Status Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export default { getShippingOrders, updateOrderStatus };
