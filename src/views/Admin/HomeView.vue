@@ -258,6 +258,9 @@ onBeforeUnmount(() => {
         <RouterLink class="hero-btn hero-btn--primary" to="/admin/preorder-rounds"
           >รอบนำเข้าสินค้า</RouterLink
         >
+        <RouterLink class="hero-btn hero-btn--primary" to="/admin/shipping">
+    ข้อมูลจัดส่ง
+  </RouterLink>
         <a class="hero-btn hero-btn--ghost" href="#stock-alerts">ดูสต็อกใกล้หมด</a>
       </div>
     </section>

@@ -10,6 +10,7 @@ import { mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import cartRouter from './cart.js'
 import orderRouter from './order.js'
+import shippingRouter from './shipping.js';
 
 dotenv.config()
 
@@ -95,6 +96,7 @@ app.use(express.json({ limit: '2mb' }))
 app.use('/uploads', express.static(uploadsDir))
 app.use('/api/cart', cartRouter)
 app.use('/api/orders', orderRouter)
+app.use('/api/admin', shippingRouter)
 
 function authenticateToken(req, res, next) {
   const roleHeader = String(req.headers['x-user-role'] || '')

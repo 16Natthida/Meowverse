@@ -116,6 +116,12 @@ const router = createRouter({
       meta: { requiresAuth: true, roles: ['admin'] },
     },
     {
+     path: '/admin/shipping',
+     name: 'admin-shipping',
+     component: () => import('../views/Admin/ShippingManagement.vue'),
+     meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
       path: '/:pathMatch(.*)*',
       redirect: '/',
     },

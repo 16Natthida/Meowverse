@@ -19,6 +19,8 @@ const menuItems = computed(() => [
   { name: 'Dashboard', icon: '📊' },
   { name: 'Orders', icon: '📦' },
   { name: 'Products', icon: '🛍️' },
+  { name: 'Preorder Rounds', icon: '📅' }, // เพิ่มรอบนำเข้าสินค้า
+  { name: 'Shipping', icon: '🚚' },        // เพิ่มข้อมูลจัดส่ง
   { name: 'Categories', icon: '🏷️' },
   { name: 'Users', icon: '👥', count: totalMembers.value },
   { name: 'Reports', icon: '📈' },
@@ -74,6 +76,8 @@ function handleMenuClick(itemName) {
     Dashboard: '/admin/home',
     Orders: '/admin/home',
     Products: '/admin/products',
+    'Preorder Rounds': '/admin/preorder-rounds', // กำหนด route
+    Shipping: '/admin/shipping',
     Categories: '/admin/products',
     Users: '/admin/users',
     Reports: '/admin/home',

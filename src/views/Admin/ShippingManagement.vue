@@ -1,0 +1,247 @@
+<script setup>
+import { ref, onMounted, computed } from 'vue'
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api'
+
+const orders = ref([])
+const loading = ref(false)
+const error = ref('')
+const searchQuery = ref('')
+const filterType = ref('all')
+
+// ดึงข้อมูลออเดอร์ที่สถานะเป็น 'Paid' หรือ 'Ready_to_Ship'
+async function fetchShippingOrders() {
+  loading.value = true
+  error.value = ''
+  try {
+    const res = await fetch(`${API_BASE}/admin/shipping-orders`)
+    if (!res.ok) throw new Error('โหลดข้อมูลการจัดส่งไม่สำเร็จ')
+    orders.value = await res.json()
+  } catch (err) {
+    error.value = err.message
+  } finally {
+    loading.value = false
+  }
+}
+
+// ฟังก์ชันจัดรูปแบบที่อยู่จาก SQL (แปลง \n เป็น <br>)
+function formatAddress(address) {
+  if (!address) return '-'
+  return address.replace(/\n/g, '<br>')
+}
+
+function formatDate(d) {
+  if (!d) return '-'
+  return new Date(d).toLocaleString('th-TH', {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  })
+}
+
+// การกรองข้อมูล
+const filteredOrders = computed(() => {
+  return orders.value.filter(order => {
+    const matchesSearch = order.order_id.toString().includes(searchQuery.value) || 
+                          (order.address && order.address.toLowerCase().includes(searchQuery.value.toLowerCase()))
+    const matchesType = filterType.value === 'all' || order.Order_type === filterType.value
+    return matchesSearch && matchesType
+  })
+})
+
+const kpiStats = computed(() => {
+  return {
+    total: orders.value.length,
+    ready: orders.value.filter(o => o.Order_type === 'Ready').length,
+    preorder: orders.value.filter(o => o.Order_type === 'Preorder').length
+  }
+})
+
+onMounted(fetchShippingOrders)
+</script>
+
+<template>
+  <div class="shipping-page">
+    <section class="hero-panel">
+      <div class="hero-copy">
+        <p class="eyebrow">Logistics Management</p>
+        <h2>🚚 รายการเตรียมจัดส่ง</h2>
+        <p>ตรวจสอบที่อยู่และรายการสินค้าของออเดอร์ที่ชำระเงินแล้ว เพื่อดำเนินการบรรจุและเรียกขนส่ง</p>
+      </div>
+      <div class="hero-actions">
+        <div class="search-box">
+          <input v-model="searchQuery" type="text" placeholder="ค้นหา รหัสออเดอร์ หรือ ชื่อลูกค้า..." class="search-input" />
+        </div>
+        <button class="hero-btn hero-btn--primary" @click="fetchShippingOrders">🔄 อัปเดตรายการ</button>
+      </div>
+    </section>
+
+    <section class="kpi-grid">
+      <article class="kpi-card" :class="{ 'active': filterType === 'all' }" @click="filterType = 'all'">
+        <p class="kpi-label">ทั้งหมดที่ต้องส่ง</p>
+        <p class="kpi-value">{{ kpiStats.total }}</p>
+      </article>
+      <article class="kpi-card" :class="{ 'active': filterType === 'Ready' }" @click="filterType = 'Ready'">
+        <p class="kpi-label">สินค้าพร้อมส่ง (Ready)</p>
+        <p class="kpi-value" style="color: #10b981">{{ kpiStats.ready }}</p>
+      </article>
+      <article class="kpi-card" :class="{ 'active': filterType === 'Preorder' }" @click="filterType = 'Preorder'">
+        <p class="kpi-label">สินค้าพรีออเดอร์ (Preorder)</p>
+        <p class="kpi-value" style="color: #f59e0b">{{ kpiStats.preorder }}</p>
+      </article>
+    </section>
+
+    <section class="panel table-panel">
+      <header class="panel-head">
+        <h3>📦 รายการคำสั่งซื้อที่รอจัดส่ง</h3>
+      </header>
+
+      <div v-if="loading" class="loading-wrap">
+        <div class="loader"></div>
+        <p>กำลังดึงข้อมูลออเดอร์...</p>
+      </div>
+
+      <div v-else-if="filteredOrders.length === 0" class="empty-state">
+        <p>ไม่มีรายการที่ต้องจัดส่งในขณะนี้</p>
+      </div>
+
+      <div v-else class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>ออเดอร์</th>
+              <th>ประเภท</th>
+              <th>รายการสินค้า</th>
+              <th>ข้อมูลการจัดส่ง</th>
+              <th>ขนส่ง</th>
+              <th>ยอดรวม</th>
+              <th>จัดการ</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="order in filteredOrders" :key="order.order_id">
+              <td><strong>#{{ order.order_id }}</strong><br/><small>{{ formatDate(order.Order_date) }}</small></td>
+              <td>
+                <span :class="order.Order_type === 'Preorder' ? 'status status--pending' : 'status status--paid'">
+                  {{ order.Order_type }}
+                </span>
+              </td>
+              <td>
+                <ul class="item-list">
+                  <li v-for="item in order.details" :key="item.detail_id">
+                    • {{ item.prod_name }} ({{ item.flavor }}) 
+                    <span class="item-qty">x{{ item.qty }}</span>
+                  </li>
+                </ul>
+              </td>
+              <td class="address-cell">
+                <div v-html="formatAddress(order.address)" class="address-text"></div>
+              </td>
+              <td>
+                <span class="carrier-badge" v-if="order.Shipping_Carrier">
+                  {{ order.Shipping_Carrier }}
+                </span>
+                <span v-else class="no-data">ยังไม่ระบุ</span>
+              </td>
+              <td class="price-text">฿{{ Number(order.total_amount).toLocaleString() }}</td>
+              <td>
+                <button class="btn-action">🖨️ พิมพ์ใบแปะหน้า</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</template>
+
+<style scoped>
+/* ดึงโทนสีและดีไซน์จาก SlipManagement.vue */
+.shipping-page {
+  --panel-bg: rgba(255, 255, 255, 0.88);
+  --panel-border: #e8dcf3;
+  --text-main: #432f61;
+  --text-muted: #7a6a96;
+  --pink: #ff93b8;
+  --grape: #a66de6;
+  display: grid;
+  gap: 1.2rem;
+  font-family: 'Kanit', sans-serif;
+}
+
+.hero-panel {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem;
+  border-radius: 20px;
+  border: 1px solid var(--panel-border);
+  background: radial-gradient(circle at right top, rgba(255, 147, 184, 0.2), transparent), var(--panel-bg);
+}
+
+.hero-copy h2 { color: var(--text-main); font-weight: 900; margin: 0.2rem 0; }
+.hero-copy p { color: var(--text-muted); font-size: 0.95rem; }
+
+.search-input {
+  padding: 0.6rem 1rem;
+  border-radius: 12px;
+  border: 1px solid #ddd6fe;
+  width: 250px;
+  margin-right: 10px;
+}
+
+.hero-btn--primary { 
+  color: #fff; 
+  background: linear-gradient(135deg, #b673ee, #ff93b8);
+  border: none;
+  padding: 0.6rem 1.5rem;
+  border-radius: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.kpi-grid { display: grid; gap: 1rem; grid-template-columns: repeat(3, 1fr); }
+.kpi-card { 
+  border-radius: 18px; 
+  border: 1px solid var(--panel-border); 
+  background: var(--panel-bg); 
+  padding: 1.2rem; 
+  cursor: pointer;
+  transition: 0.3s;
+}
+.kpi-card.active { border-color: var(--grape); background: #fdfaff; transform: translateY(-3px); box-shadow: 0 8px 20px rgba(166, 109, 230, 0.1); }
+.kpi-label { font-size: 0.85rem; color: var(--text-muted); font-weight: 600; }
+.kpi-value { font-size: 1.8rem; color: var(--text-main); font-weight: 900; }
+
+.panel { border-radius: 20px; border: 1px solid var(--panel-border); background: var(--panel-bg); padding: 1.5rem; }
+.panel-head h3 { color: var(--text-main); font-weight: 800; margin-bottom: 1rem; }
+
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; padding: 1rem; color: #826ea1; font-size: 0.75rem; text-transform: uppercase; border-bottom: 2px solid #f3e8ff; }
+td { padding: 1rem; border-bottom: 1px solid #f3e8ff; font-size: 0.9rem; vertical-align: top; }
+
+.status { border-radius: 99px; padding: 0.25rem 0.8rem; font-weight: 700; font-size: 0.75rem; }
+.status--pending { background: #fff7ed; color: #c2410c; }
+.status--paid { background: #f0fdf4; color: #15803d; }
+
+.item-list { list-style: none; padding: 0; margin: 0; font-size: 0.85rem; }
+.item-qty { font-weight: 800; color: var(--grape); }
+
+.address-text { line-height: 1.5; color: #4b5563; font-size: 0.85rem; }
+.carrier-badge { background: #f3f4f6; color: #374151; padding: 4px 10px; border-radius: 8px; font-weight: 600; font-size: 0.8rem; }
+
+.price-text { font-weight: 800; color: var(--text-main); }
+
+.btn-action {
+  background: white;
+  border: 1px solid var(--grape);
+  color: var(--grape);
+  padding: 6px 12px;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.2s;
+}
+.btn-action:hover { background: var(--grape); color: white; }
+
+.loading-wrap { text-align: center; padding: 3rem; color: var(--text-muted); }
+</style>
