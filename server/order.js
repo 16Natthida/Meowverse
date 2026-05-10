@@ -257,21 +257,22 @@ router.get('/:order_id', async (req, res) => {
   try {
     const db = getDB(req)
 
-    // ดึงข้อมูลออเดอร์
+    // แก้ไข Query ให้ดึงข้อมูลจากตาราง shipping และ payment ให้ถูกชื่อคอลัมน์
     const [orderRows] = await db.query(
       `SELECT
-         o.order_id,
-         o.user_id,
-         o.Order_date AS order_date,
-         o.total_amount,
-         o.status,
-         o.Order_type,
-         o.deadline,
-         a.username,
-         a.full_name
-       FROM orders o
-       LEFT JOIN accounts a ON o.user_id = a.user_id
-       WHERE o.order_id = ?
+     o.*,
+     s.name AS shipping_name,  -- ดึงข้อมูลจากคอลัมน์ name
+     s.phone AS shipping_phone, -- ดึงข้อมูลจากคอลัมน์ phone
+     s.address,
+     s.Shipping_Carrier,
+     p.slip_img AS slip_url, -- ดึงชื่อไฟล์รูปจากตาราง payment
+     p.payment_method,
+     p.status AS payment_status -- เพิ่มสถานะการชำระเงิน
+   FROM orders o
+   LEFT JOIN shipping s ON o.order_id = s.order_id
+   LEFT JOIN payment p ON o.order_id = p.order_id
+   WHERE o.order_id = ?
+   ORDER BY p.pay_id DESC, s.ship_id DESC
        LIMIT 1`,
       [order_id],
     )
@@ -325,6 +326,15 @@ router.get('/:order_id', async (req, res) => {
       ...order,
       items: detailRows,
       import_fee_total: importFeeTotal,
+      saved_shipping: {
+        name: order.shipping_name || '',
+        phone: order.shipping_phone || '',
+        address: order.address || '',
+        carrier: order.Shipping_Carrier || '',
+        notes: order.notes || '',
+        payment_method: order.payment_method || 'bank_transfer',
+        slip_url: order.slip_url || null
+      }
     })
   } catch (err) {
     console.error('[GET /api/orders/:order_id]', err)
@@ -373,4 +383,45 @@ router.patch('/:order_id/import-fee', async (req, res) => {
   }
 })
 
+router.patch('/:order_id/status', async (req, res) => {
+  const { order_id } = req.params
+  const { status } = req.body // รับค่า 'Invalid slip', 'Paid', หรือ 'Ready_to_Ship'
+  const db = getDB(req)
+
+  try {
+    const sql = `UPDATE orders SET status = ? WHERE order_id = ?`
+    const [result] = await db.query(sql, [status, order_id])
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'ไม่พบรหัสออเดอร์นี้' })
+    }
+
+    res.json({ success: true, message: 'อัปเดตสถานะออเดอร์สำเร็จ' })
+  } catch (err) {
+    console.error('[PATCH /api/orders/:order_id/status]', err)
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการอัปเดตสถานะ' })
+  }
+})
+
+router.patch('/:order_id/status', async (req, res) => {
+  const { order_id } = req.params;
+  const { status } = req.body; // รับค่า 'Invalid slip'
+  const db = getDB(req);
+
+  try {
+    const [result] = await db.query(
+      'UPDATE orders SET status = ? WHERE order_id = ?',
+      [status, order_id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'ไม่พบออเดอร์นี้' });
+    }
+
+    res.json({ success: true, message: 'อัปเดตสถานะออเดอร์เรียบร้อย' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการอัปเดตออเดอร์' });
+  }
+});
 export default router

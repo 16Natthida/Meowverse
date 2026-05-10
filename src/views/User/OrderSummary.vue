@@ -42,6 +42,15 @@ const onFileChange = (e) => {
   }
 }
 
+// เพิ่มต่อจากตัวแปรสลิปเดิม
+const isSlipViewerOpen = ref(false) // สถานะเปิด/ปิดการดูรูปใหญ่
+
+// ฟังก์ชันสำหรับเรียกหน้าต่างเลือกไฟล์
+const triggerFileInput = () => {
+  const fileInput = document.getElementById('slip-file')
+  if (fileInput) fileInput.click()
+}
+
 // ── FETCH ORDER ──
 const fetchOrder = async () => {
   const orderId = route.params.orderId
@@ -61,6 +70,21 @@ const fetchOrder = async () => {
       return
     }
     order.value = data
+
+    if (data.saved_shipping) {
+      shippingInfo.value = {
+        name: data.saved_shipping.name,
+        phone: data.saved_shipping.phone,
+        address: data.saved_shipping.address,
+        carrier: data.saved_shipping.carrier,
+        notes: data.saved_shipping.notes,
+      }
+      selectedPaymentMethod.value = data.saved_shipping.payment_method
+
+    if (data.saved_shipping.slip_url) {
+        slipPreview.value = resolveSlipUrl(data.saved_shipping.slip_url) 
+      }
+    }
   } catch (err) {
     error.value = err.message
   } finally {
@@ -99,7 +123,10 @@ const shippingInfo = ref({
 
 // ── CONFIRM PAYMENT ──
 const confirmPayment = async () => {
-  // 1. ตรวจสอบข้อมูลที่จำเป็น (เฉพาะเมื่อไม่ใช่ Preorder)
+  // ตรวจสอบว่าเป็นออเดอร์ที่ชำระเงินเรียบร้อยแล้ว (Paid) หรือไม่
+  const isPaid = order.value?.status === 'Paid'
+
+  // 1. ตรวจสอบข้อมูลการจัดส่ง (เฉพาะเมื่อไม่ใช่ Preorder)
   if (!isPreorder.value) {
     if (!shippingInfo.value.name || !shippingInfo.value.phone || !shippingInfo.value.address) {
       showNotice('กรุณากรอกข้อมูลการจัดส่งให้ครบถ้วน', 'error')
@@ -107,8 +134,10 @@ const confirmPayment = async () => {
     }
   }
 
-  // 2. ตรวจสอบสลิป (ถ้าไม่ใช่ COD)
-  if (selectedPaymentMethod.value !== 'cash_on_delivery' && !slipFile.value) {
+  // 2. ตรวจสอบสลิป: 
+  // ถ้าไม่ใช่ Paid และไม่ใช่การเก็บเงินปลายทาง (COD) -> จำเป็นต้องมีสลิป
+  // แต่ถ้าสถานะเป็น Paid แล้ว -> ข้ามการตรวจสอบสลิปเพื่อให้บันทึกแค่ที่อยู่ได้
+  if (!isPaid && selectedPaymentMethod.value !== 'cash_on_delivery' && !slipFile.value) {
     showNotice('กรุณาแนบหลักฐานการโอนเงิน', 'error')
     return
   }
@@ -128,12 +157,14 @@ const confirmPayment = async () => {
       formData.append('shipping_address', shippingInfo.value.address)
       formData.append('shipping_carrier', shippingInfo.value.carrier)
       formData.append('notes', shippingInfo.value.notes)
-// ...
     }
 
+    // ข้อมูลทั่วไป
     formData.append('notes', shippingInfo.value.notes)
     formData.append('payment_method', selectedPaymentMethod.value)
 
+    // แนบไฟล์สลิปเฉพาะเมื่อมีการเลือกไฟล์ใหม่ 
+    // (ในกรณี Paid ถ้าผู้ใช้ไม่เลือกไฟล์ใหม่ ระบบจะส่งแค่ข้อมูลที่อยู่ไปอัปเดต)
     if (slipFile.value) {
       formData.append('slip', slipFile.value)
     }
@@ -148,7 +179,12 @@ const confirmPayment = async () => {
       throw new Error(errorBody?.error || errorBody?.message || 'เกิดข้อผิดพลาดในการส่งข้อมูล')
     }
 
-    showNotice('ส่งหลักฐานเรียบร้อย! ขอบคุณที่ใช้บริการ', 'success')
+    // แสดงข้อความสำเร็จแยกตามกรณี
+    const successMessage = isPaid 
+      ? 'บันทึกข้อมูลการจัดส่งเรียบร้อย' 
+      : 'ส่งหลักฐานเรียบร้อย! ขอบคุณที่ใช้บริการ'
+    
+    showNotice(successMessage, 'success')
 
     setTimeout(() => {
       router.push('/')
@@ -170,7 +206,22 @@ function showNotice(msg, type = 'success') {
 }
 
 function goBack() {
-  router.push('/cart')
+  router.push('/order-list')
+}
+
+// ฟังก์ชันจัดการ URL รูปสลิป
+function resolveSlipUrl(path) {
+  if (!path) return null
+  // ถ้าเป็น Blob URL (พรีวิวตอนอัปโหลดใหม่) ให้ส่งกลับได้เลย
+  if (path.startsWith('blob:')) return path
+  // ถ้าเป็น URL เต็มอยู่แล้ว (http/https)
+  if (/^https?:\/\//i.test(path)) return path
+  
+  // กรณีเป็น Path จาก Server (เช่น /uploads/...)
+  // API_BASE_URL ปกติจะเป็น http://localhost:3001/api 
+  // เราต้องการ http://localhost:3001 ต่อด้วย Path รูป
+  const baseUrl = API_BASE_URL.replace('/api', '')
+  return `${baseUrl}${path.startsWith('/') ? '' : '/'}${path}`
 }
 
 onMounted(() => {
@@ -185,32 +236,18 @@ onMounted(() => {
   <div class="order-summary-page">
     <nav class="navbar">
       <button class="back-btn" @click="goBack">
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2.2"
-          class="back-icon"
-        >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" class="back-icon">
           <path d="M19 12H5M12 5l-7 7 7 7" />
         </svg>
-        กลับไปหน้าหลัก
+        ย้อนกลับ
       </button>
       <div class="navbar__logo">
         <span class="logo-icon">🐱</span>
         <span class="logo-text">Meowverse</span>
       </div>
       <div class="navbar__title">
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          class="title-order-icon"
-        >
-          <path
-            d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
-          />
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="title-order-icon">
+          <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
         </svg>
         สรุปออเดอร์
       </div>
@@ -233,209 +270,169 @@ onMounted(() => {
         <button class="btn btn--primary" @click="fetchOrder">ลองใหม่</button>
       </div>
 
-      <div v-else-if="order" class="order-layout">
-        <div class="order-details">
-          <div class="section-card">
-            <h2 class="section-title">📦 รายละเอียดออเดอร์ #{{ order.order_id }}</h2>
-            <div class="order-info">
-              <div class="info-row">
-                <span>วันที่สั่งซื้อ:</span>
-                <span>{{ new Date(order.order_date).toLocaleString('th-TH') }}</span>
-              </div>
-              <div class="info-row">
-                <span>สถานะ:</span>
-                <span :class="['status-badge', `status--${order.status.toLowerCase()}`]">
-                  {{ order.status }}
-                </span>
-              </div>
-            </div>
-
-            <div v-if="readyItems.length > 0" class="order-category">
-              <h3 class="category-title">🟢 พร้อมส่ง</h3>
-              <div class="item-list">
-                <div v-for="item in readyItems" :key="item.detail_id" class="order-item">
-                  <div class="item-img">
-                    <img v-if="item.image" :src="item.image" />
-                    <span v-else>🐾</span>
-                  </div>
-                  <div class="item-info">
-                    <p class="item-name">{{ item.name }}</p>
-                    <p v-if="item.flavor" class="item-flavor">รส {{ item.flavor }}</p>
-                    <p v-if="item.categoryName" class="item-category">หมวดหมู่ {{ item.categoryName }}</p>
-                    <p v-if="item.preorder_round_id" class="item-round">รอบนำเข้า #{{ item.preorder_round_id }}</p>
-                    <p class="item-price-small">฿{{ item.price.toLocaleString() }}</p>
-                  </div>
-                  <div class="item-qty">x{{ item.qty }}</div>
-                  <div class="item-total">฿{{ (item.price * item.qty).toLocaleString() }}</div>
-                </div>
-              </div>
-            </div>
-            <div v-if="preorderItems.length > 0" class="order-category">
-              <h3 class="category-title">🕐 พรีออเดอร์</h3>
-              <div class="item-list">
-                <div v-for="item in preorderItems" :key="item.detail_id" class="order-item">
-                  <div class="item-img">
-                    <img v-if="item.image" :src="item.image" />
-                    <span v-else>🐾</span>
-                  </div>
-                  <div class="item-info">
-                    <p class="item-name">{{ item.name }}</p>
-                    <p v-if="item.flavor" class="item-flavor">รส {{ item.flavor }}</p>
-                    <p v-if="item.categoryName" class="item-category">หมวดหมู่ {{ item.categoryName }}</p>
-                    <p v-if="item.preorder_round_id" class="item-round">รอบนำเข้า #{{ item.preorder_round_id }}</p>
-                    <p class="item-price-small">฿{{ item.price.toLocaleString() }}</p>
-                    <p v-if="item.import_fee" class="item-import-fee">ค่านำเข้า: ฿{{ Number(item.import_fee).toLocaleString() }}</p>
-                  </div>
-                  <div class="item-qty">x{{ item.qty }}</div>
-                  <div class="item-total">฿{{ (item.price * item.qty).toLocaleString() }}</div>
-                </div>
-              </div>
-            </div>
-            <div v-if="unspecifiedItems.length > 0" class="order-category">
-              <h3 class="category-title">📦 รายการสินค้า</h3>
-              <div class="item-list">
-                <div v-for="item in unspecifiedItems" :key="item.detail_id" class="order-item">
-                  <div class="item-img">
-                    <img v-if="item.image" :src="item.image" />
-                    <span v-else>🐾</span>
-                  </div>
-                  <div class="item-info">
-                    <p class="item-name">{{ item.name }}</p>
-                    <p v-if="item.flavor" class="item-flavor">รส {{ item.flavor }}</p>
-                    <p v-if="item.categoryName" class="item-category">หมวดหมู่ {{ item.categoryName }}</p>
-                    <p class="item-price-small">฿{{ item.price.toLocaleString() }}</p>
-                  </div>
-                  <div class="item-qty">x{{ item.qty }}</div>
-                  <div class="item-total">฿{{ (item.price * item.qty).toLocaleString() }}</div>
-                </div>
-              </div>
-            </div>
-            <div
-              v-if="readyItems.length === 0 && preorderItems.length === 0 && unspecifiedItems.length === 0"
-              class="item-list"
-            >
-              <div class="order-item">
-                <div class="item-info">
-                  <p class="item-name">ยังไม่มีสินค้าในออเดอร์</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- ตรวจสอบเงื่อนไขการแสดงผลข้อมูลจัดส่ง -->
-          <div v-if="!isPreorder" class="section-card">
-            <h3 class="section-title">📍 ข้อมูลการจัดส่ง</h3>
-            <div class="form-grid">
-              <div class="form-group">
-                <label class="form-label">ชื่อผู้รับ</label>
-                <input
-                  v-model="shippingInfo.name"
-                  type="text"
-                  class="form-input"
-                  placeholder="ระบุชื่อ-นามสกุล"
-                />
-              </div>
-              <div class="form-group">
-                <label class="form-label">เบอร์โทรศัพท์</label>
-                <input
-                  v-model="shippingInfo.phone"
-                  type="tel"
-                  class="form-input"
-                  placeholder="08x-xxx-xxxx"
-                />
-              </div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">ที่อยู่จัดส่ง</label>
-              <textarea
-                v-model="shippingInfo.address"
-                class="form-textarea"
-                rows="3"
-                placeholder="บ้านเลขที่, ถนน, แขวง/ตำบล..."
-              ></textarea>
-            </div>
-            <div class="form-group">
-              <label class="form-label">หมายเหตุ</label>
-              <textarea v-model="shippingInfo.notes" class="form-textarea" rows="1"></textarea>
-            </div>
-            <div class="form-group">
-  <label class="form-label">บริษัทขนส่งที่ต้องการ</label>
- <div class="form-group">
-  <label class="form-label">บริษัทขนส่ง</label>
-  <select v-model="shippingInfo.carrier" class="form-input">
-    <option value="" disabled>-- กรุณาเลือกบริษัทขนส่ง --</option>
-    <option v-for="item in carriers" :key="item.id" :value="item.id">
-      {{ item.name }}
-    </option>
-  </select>
-</div>
-</div>
-          </div>
+      <div v-else-if="order">
+        
+        <div v-if="order.status === 'Ready_to_Ship'" class="ready-notice">
+          📢 กำลังจัดส่ง กรุณาติดต่อแอดมินในไลน์เพื่อจ่ายค่าส่ง
         </div>
 
-        <div class="payment-section">
-          <div class="section-card">
-            <h3 class="section-title">💳 วิธีการชำระเงิน</h3>
-            <div class="payment-methods">
-              <div
-                v-for="method in paymentMethods"
-                :key="method.id"
-                :class="[
-                  'payment-method',
-                  { 'payment-method--selected': selectedPaymentMethod === method.id },
-                ]"
-                @click="selectedPaymentMethod = method.id"
-              >
-                <span class="method-icon">{{ method.icon }}</span>
-                <span class="method-name">{{ method.name }}</span>
+        <div class="order-layout">
+          <div class="order-details">
+            <div class="section-card">
+              <h2 class="section-title">📦 รายละเอียดออเดอร์ #{{ order.order_id }}</h2>
+              <div class="order-info">
+                <div class="info-row">
+                  <span>วันที่สั่งซื้อ:</span>
+                  <span>{{ new Date(order.Order_date).toLocaleString('th-TH') }}</span>
+                </div>
+                <div class="info-row">
+                  <span>สถานะ:</span>
+                  <span :class="['status-badge', `status--${order.status.replace(/\s+/g, '-').toLowerCase()}`]">
+                    {{ order.status === 'Invalid slip' ? 'สลิปไม่ถูกต้องกรุณาจ่ายเงินใหม่' : order.status }}
+                  </span>
+                </div>
+        </div>
+
+              <div v-if="readyItems.length > 0" class="order-category">
+                <h3 class="category-title">🟢 พร้อมส่ง</h3>
+                <div class="item-list">
+                  <div v-for="item in readyItems" :key="item.detail_id" class="order-item">
+                    <div class="item-img">
+                      <img v-if="item.image" :src="item.image" />
+                      <span v-else>🐾</span>
+                    </div>
+                    <div class="item-info">
+                      <p class="item-name">{{ item.name }}</p>
+                      <p v-if="item.flavor" class="item-flavor">รส {{ item.flavor }}</p>
+                      <p class="item-price-small">฿{{ item.price.toLocaleString() }}</p>
+                    </div>
+                    <div class="item-qty">x{{ item.qty }}</div>
+                    <div class="item-total">฿{{ (item.price * item.qty).toLocaleString() }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="preorderItems.length > 0" class="order-category">
+                <h3 class="category-title">🕐 พรีออเดอร์</h3>
+                <div class="item-list">
+                  <div v-for="item in preorderItems" :key="item.detail_id" class="order-item">
+                    <div class="item-img"><img v-if="item.image" :src="item.image" /><span v-else>🐾</span></div>
+                    <div class="item-info">
+                      <p class="item-name">{{ item.name }}</p>
+                      <p class="item-price-small">฿{{ item.price.toLocaleString() }}</p>
+                    </div>
+                    <div class="item-qty">x{{ item.qty }}</div>
+                    <div class="item-total">฿{{ (item.price * item.qty).toLocaleString() }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="!isPreorder" class="section-card">
+              <h3 class="section-title">📍 ข้อมูลการจัดส่ง</h3>
+              <div class="form-grid">
+                <div class="form-group">
+                  <label class="form-label">ชื่อผู้รับ</label>
+                  <input v-model="shippingInfo.name" type="text" class="form-input" placeholder="ระบุชื่อ-นามสกุล"
+                    :disabled="order.status === 'Cancelled' || order.status === 'Ready_to_Ship'" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">เบอร์โทรศัพท์</label>
+                  <input v-model="shippingInfo.phone" type="tel" class="form-input" placeholder="08x-xxx-xxxx"
+                    :disabled="order.status === 'Cancelled' || order.status === 'Ready_to_Ship'" />
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">ที่อยู่จัดส่ง</label>
+                <textarea v-model="shippingInfo.address" class="form-textarea" rows="3" placeholder="บ้านเลขที่, ถนน..."
+                  :disabled="order.status === 'Cancelled' || order.status === 'Ready_to_Ship'"></textarea>
+              </div>
+              <div class="form-group">
+                <label class="form-label">บริษัทขนส่ง</label>
+                <select v-model="shippingInfo.carrier" class="form-input"
+                  :disabled="order.status === 'Cancelled' || order.status === 'Ready_to_Ship'">
+                  <option value="" disabled>-- กรุณาเลือกบริษัทขนส่ง --</option>
+                  <option v-for="item in carriers" :key="item.id" :value="item.id">{{ item.name }}</option>
+                </select>
               </div>
             </div>
           </div>
 
-          <div v-if="selectedPaymentMethod !== 'cash_on_delivery'" class="section-card slip-card">
-            <h3 class="section-title">📸 แนบหลักฐานการโอน</h3>
-            <div class="upload-area">
-              <input
-                type="file"
-                id="slip-file"
-                accept="image/*"
-                @change="onFileChange"
-                class="hidden-input"
-              />
-              <label for="slip-file" class="upload-label">
-                <div v-if="!slipPreview" class="upload-prompt">
-                  <span>➕ คลิกเพื่ออัปโหลดสลิป</span>
+          <div class="payment-section">
+            <div class="section-card">
+              <h3 class="section-title">💳 วิธีการชำระเงิน</h3>
+              <div class="payment-methods">
+                <div v-for="method in paymentMethods" :key="method.id"
+                  :class="['payment-method', { 'payment-method--selected': selectedPaymentMethod === method.id }]"
+                  @click="(order.status === 'Pending' || order.status === 'Paid') ? selectedPaymentMethod = method.id : null">
+                  <span class="method-icon">{{ method.icon }}</span>
+                  <span class="method-name">{{ method.name }}</span>
                 </div>
-                <div v-else class="preview-box">
-                  <img :src="slipPreview" class="slip-preview" />
-                  <div class="edit-overlay">เปลี่ยนรูปภาพ</div>
-                </div>
-              </label>
+              </div>
             </div>
-          </div>
 
-          <div class="section-card summary-card">
-            <div class="summary-row">
-              <span>ยอดรวมสินค้า</span>
-              <span>฿{{ order.total_amount.toLocaleString() }}</span>
+<div v-if="order.status !== 'Cancelled'" class="section-card slip-card">
+  <h3 class="section-title">📸 หลักฐานการโอน</h3>
+  <div class="upload-area">
+    <input
+      v-if="order.status !== 'Ready_to_Ship'"
+      type="file"
+      id="slip-file"
+      accept="image/*"
+      @change="onFileChange"
+      class="hidden-input"
+    />
+    
+    <div class="upload-container-custom">
+      <div v-if="!slipPreview" class="upload-prompt" @click="triggerFileInput">
+        <span>➕ คลิกเพื่ออัปโหลดสลิป</span>
+      </div>
+
+      <div v-else class="preview-box">
+        <img 
+          :src="slipPreview" 
+          class="slip-preview clickable-image" 
+          @click="isSlipViewerOpen = true"
+          title="คลิกเพื่อดูรูปใหญ่"
+        />
+        <div 
+          v-if="order.status !== 'Ready_to_Ship'" 
+          class="edit-overlay" 
+          @click.stop="triggerFileInput"
+        >
+          เปลี่ยนรูปภาพ
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<transition name="fade">
+  <div v-if="isSlipViewerOpen" class="image-viewer-overlay" @click="isSlipViewerOpen = false">
+    <div class="viewer-content">
+      <button class="viewer-close" @click="isSlipViewerOpen = false">✕</button>
+      <img :src="slipPreview" class="full-slip-image" />
+    </div>
+  </div>
+</transition>
+
+            <div class="section-card summary-card">
+              <div class="summary-row"><span>ยอดรวมสินค้า</span><span>฿{{ order.total_amount.toLocaleString() }}</span></div>
+              <div class="summary-row" v-if="importFeeTotal > 0"><span>ค่านำเข้า</span><span>฿{{ importFeeTotal.toLocaleString() }}</span></div>
+              <hr class="divider" />
+              <div class="summary-row total"><span>ยอดสุทธิ</span><span class="total-amount">฿{{ totalAmountWithImportFee.toLocaleString() }}</span></div>
+              
+<button 
+  v-if="order.status === 'Pending' || order.status === 'Paid' || order.status === 'Invalid slip'" 
+  class="btn-checkout" 
+  @click="confirmPayment" 
+  :disabled="loading"
+>
+  <template v-if="order.status === 'Paid'">บันทึกการแก้ไข</template>
+  <template v-else-if="order.status === 'Invalid slip'">ส่งหลักฐานใหม่</template>
+  <template v-else>ยืนยันและชำระเงิน</template>
+</button>
             </div>
-            <div class="summary-row" v-if="importFeeTotal > 0">
-              <span>ค่านำเข้า</span>
-              <span>฿{{ importFeeTotal.toLocaleString() }}</span>
-            </div>
-            <div class="summary-row">
-              <span>ค่าจัดส่ง</span>
-              <span class="free-text" v-if="!isPreorder">ฟรี</span>
-              <span v-else style="color: #f59e0b; font-weight: bold;">รอประเมินค่านำเข้า</span>
-            </div>
-            <hr class="divider" />
-            <div class="summary-row total">
-              <span>ยอดสุทธิ</span>
-              <span class="total-amount">฿{{ totalAmountWithImportFee.toLocaleString() }}</span>
-            </div>
-            <button class="btn-checkout" @click="confirmPayment" :disabled="loading">
-              {{ loading ? 'กำลังประมวลผล...' : 'ยืนยันและชำระเงิน' }}
-            </button>
           </div>
         </div>
       </div>
@@ -445,6 +442,30 @@ onMounted(() => {
 
 <style scoped>
 /* รักษาสไตล์เดิมไว้ทั้งหมด[cite: 7] */
+.ready-notice {
+  background: #f0f9ff;
+  border: 1px solid #0ea5e9;
+  color: #0369a1;
+  padding: 1rem;
+  border-radius: 12px;
+  margin-bottom: 1.5rem;
+  font-weight: bold;
+  text-align: center;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.02); }
+  100% { transform: scale(1); }
+}
+
+/* ปรับ Input เมื่อโดน Disable ให้ดูจางลงแต่ยังอ่านออก */
+.form-input:disabled, .form-textarea:disabled {
+  background-color: #f3f4f6;
+  color: #6b7280;
+  cursor: not-allowed;
+}
 .order-summary-page {
   --primary: #6f50a0;
   --primary-light: #cda2fb;
@@ -685,6 +706,7 @@ onMounted(() => {
   transition: all 0.2s;
   background: #fff;
   color: var(--text);
+  resize: vertical;
 }
 .form-input:focus,
 .form-textarea:focus {
@@ -822,7 +844,64 @@ onMounted(() => {
   border-radius: 12px;
   font-size: 0.85rem;
 }
+/* ทำให้รูปภาพดูเหมือนกดได้ */
+.clickable-image {
+  cursor: zoom-in;
+  transition: opacity 0.2s;
+}
+.clickable-image:hover {
+  opacity: 0.9;
+}
 
+/* แถบเปลี่ยนรูปให้ดูเป็นปุ่มมากขึ้น */
+.edit-overlay {
+  cursor: pointer;
+  background: rgba(111, 80, 160, 0.9) !important;
+}
+
+/* สไตล์สำหรับตัวดูรูปใหญ่ (Modal Viewer) */
+.image-viewer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  padding: 20px;
+  backdrop-filter: blur(5px);
+}
+.viewer-content {
+  position: relative;
+  max-width: 90%;
+  max-height: 90%;
+}
+.full-slip-image {
+  max-width: 100%;
+  max-height: 85vh;
+  border-radius: 8px;
+  box-shadow: 0 0 30px rgba(0,0,0,0.5);
+  object-fit: contain;
+}
+.viewer-close {
+  position: absolute;
+  top: -40px;
+  right: 0;
+  background: none;
+  border: none;
+  color: white;
+  font-size: 2rem;
+  cursor: pointer;
+}
+/* เพิ่มใน <style scoped> ส่วนสถานะต่างๆ */
+.status--invalid-slip {
+  background: linear-gradient(160deg, #fee2e2, #fca5a5); /* สีแดงอ่อน */
+  color: #7f1d1d;
+  border: 1px solid #f87171;
+}
+/* Animation สำหรับการเปิด/ปิด */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 .btn-checkout {
   width: 100%;
   padding: 14px;
@@ -837,6 +916,9 @@ onMounted(() => {
   box-shadow: 0 4px 12px rgba(111, 80, 160, 0.25);
   transition: all 0.2s;
   font-family: inherit;
+}
+.btn-checkout:not(:disabled) {
+  cursor: pointer;
 }
 .btn-checkout:hover:not(:disabled) {
   transform: translateY(-2px);

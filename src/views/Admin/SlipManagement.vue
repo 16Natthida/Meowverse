@@ -40,18 +40,40 @@ async function fetchPayments() {
   }
 }
 
+// แก้ไขฟังก์ชัน updateStatus ใน SlipManagement.vue
+// แก้ไขฟังก์ชัน updateStatus ใน SlipManagement.vue
 async function updateStatus(payId, status) {
   try {
+    // 1. อัปเดตสถานะในตาราง payment (Pending -> Approved/Rejected)
     const res = await fetch(`${API_BASE}/payments/${payId}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status }),
-    })
-    if (!res.ok) throw new Error('อัปเดตสถานะไม่สำเร็จ')
-    await fetchPayments()
-    selectedSlip.value = null
+    });
+    if (!res.ok) throw new Error('อัปเดตสถานะสลิปไม่สำเร็จ');
+
+    // 2. ถ้าแอดมินกดปฏิเสธ (Rejected) ให้ไปแก้สถานะออเดอร์เป็น 'Invalid slip'
+    if (status === 'Rejected') {
+      const payment = payments.value.find(p => p.pay_id === payId);
+      if (payment && payment.order_id) {
+        // เรียก API ที่เราเพิ่งเพิ่มในข้อ 2
+        const orderRes = await fetch(`${API_BASE}/orders/${payment.order_id}/status`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'Invalid slip' }),
+        });
+
+        if (!orderRes.ok) console.error('ไม่สามารถอัปเดตสถานะออเดอร์ได้');
+      }
+    }
+
+    // รีเฟรชข้อมูลและปิดหน้าต่าง
+    await fetchPayments();
+    selectedSlip.value = null;
+    alert(status === 'Rejected' ? 'ปฏิเสธสลิปและเปลี่ยนสถานะออเดอร์เป็น Invalid slip แล้ว' : 'อนุมัติเรียบร้อย');
   } catch (err) {
-    error.value = err.message
+    error.value = err.message;
+    alert('เกิดข้อผิดพลาด: ' + err.message);
   }
 }
 

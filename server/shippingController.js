@@ -1,12 +1,12 @@
 // ใช้ pool จากไฟล์หลัก หรือเชื่อมต่อใหม่ตามโครงสร้างของคุณ
 const getShippingOrders = async (req, res) => {
-  const pool = req.app.locals.db; // ดึง database pool จาก app
+  const pool = req.app.locals.db; 
   try {
-    // 1. Query JOIN 4 ตาราง เพื่อดึงข้อมูลออเดอร์ ที่อยู่ และชื่อสินค้า
+    // แก้ไข Query โดยเพิ่มเงื่อนไขสับเควรี (Subquery) เพื่อเลือก ship_id ล่าสุด
     const sql = `
       SELECT 
         o.order_id, o.Order_type, o.Order_date, o.total_amount, o.status,
-        s.address, s.Shipping_Carrier,
+        s.name, s.phone, s.address, s.Shipping_Carrier,
         od.detail_id, od.flavor, od.qty,
         p.prod_name
       FROM orders o
@@ -14,6 +14,12 @@ const getShippingOrders = async (req, res) => {
       JOIN order_details od ON o.order_id = od.order_id
       LEFT JOIN products p ON od.prod_id = p.prod_id
       WHERE o.status IN ('Paid', 'Ready_to_Ship')
+        -- เพิ่มเงื่อนไขด้านล่างนี้เพื่อให้ดึงเฉพาะรายการที่อยู่ล่าสุดของออเดอร์นั้นๆ
+        AND s.ship_id = (
+          SELECT MAX(ship_id) 
+          FROM shipping s2 
+          WHERE s2.order_id = o.order_id
+        )
       ORDER BY o.Order_date DESC
     `;
 
@@ -29,6 +35,8 @@ const getShippingOrders = async (req, res) => {
           Order_date: row.Order_date,
           total_amount: row.total_amount,
           status: row.status,
+          name: row.name,  
+          phone: row.phone,
           address: row.address,
           Shipping_Carrier: row.Shipping_Carrier,
           details: [] 

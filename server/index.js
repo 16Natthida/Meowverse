@@ -1986,16 +1986,22 @@ app.get('/api/dashboard/overview', async (_req, res) => {
 app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res) => {
   const { order_id } = req.params
   const { 
-    payment_method, shipping_name, shipping_phone, shipping_address, shipping_carrier, notes } = req.body
+    payment_method, 
+    shipping_name, 
+    shipping_phone, 
+    shipping_address, 
+    shipping_carrier, 
+    notes 
+  } = req.body
   const slip_url = req.file ? `/uploads/${req.file.filename}` : null
 
   const connection = await pool.getConnection()
   try {
     await connection.beginTransaction()
 
-    // 1. ตรวจสอบข้อมูล Order เดิมเพื่อยอดเงินและประเภท
+    // 1. ตรวจสอบข้อมูลออเดอร์และสถานะปัจจุบัน
     const [orderRows] = await connection.query(
-      'SELECT total_amount, Order_type FROM orders WHERE order_id = ?',
+      'SELECT status, total_amount, Order_type FROM orders WHERE order_id = ?',
       [order_id],
     )
 
@@ -2004,30 +2010,62 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     }
 
     const orderData = orderRows[0]
+    const currentStatus = orderData.status
 
-    // 2. บันทึกข้อมูลสลิปลงตาราง payment
-    const paymentType = orderData.Order_type === 'Ready' ? 'Ready pay' : 'Order_fee'
+    // ตรวจสอบว่าออเดอร์ชำระเงินเรียบร้อยแล้วหรือไม่
+    const isPaid = currentStatus === 'Paid'
+
+    // 2. จัดการข้อมูลการจัดส่ง (ตาราง shipping) 
+    // ใช้การ INSERT เสมอเพื่อให้มีประวัติ และเราจะใช้ Query MAX(ship_id) ในหน้า Admin
     await connection.query(
-      `INSERT INTO payment (order_id, type, amount, slip_img, Slip_date, status, payment_method)
-       VALUES (?, ?, ?, ?, NOW(), 'Pending', ?)`,
-      [order_id, paymentType, orderData.total_amount, slip_url, payment_method || null],
+      `INSERT INTO shipping (order_id, name, phone, address, Shipping_Carrier) 
+       VALUES (?, ?, ?, ?, ?)`, 
+      [
+        order_id, 
+        shipping_name, 
+        shipping_phone, 
+        shipping_address, 
+        shipping_carrier || null
+      ]
     )
 
-    // 3. บันทึกที่อยู่ลงตาราง shipping
-    // รวมชื่อ เบอร์โทร และหมายเหตุเข้ากับที่อยู่ เพื่อเก็บในคอลัมน์ address ตามโครงสร้างตาราง
-    const fullAddress = `ชื่อผู้รับ: ${shipping_name}\nโทร: ${shipping_phone}\nที่อยู่: ${shipping_address}\nหมายเหตุ: ${notes || '-'}`
+    if (isPaid) {
+      // --- กรณีสถานะเป็น 'Paid' (จ่ายเงินแล้ว แก้ไขแค่ที่อยู่) ---
+      // หากมีการแนบสลิปมาใหม่ในสถานะ Paid ให้ทำการอัปเดตรูปสลิปล่าสุดในตาราง payment (เผื่อลูกค้าส่งสลิปผิด)
+      if (slip_url) {
+        await connection.query(
+          `UPDATE payment SET slip_img = ?, payment_method = ? 
+           WHERE order_id = ? ORDER BY pay_id DESC LIMIT 1`,
+          [slip_url, payment_method, order_id]
+        )
+      }
+      // ** สำคัญ: ไม่มีการอัปเดต status ในตาราง orders เพื่อให้คงสถานะ 'Paid' ไว้ **
+      // แอดมินจึงไม่ต้องกดอนุมัติซ้ำในหน้า Slip Management
+      
+    } else {
+      // --- กรณีสถานะปกติ (Pending หรือ Invalid slip) ---
 
-    await connection.query(`INSERT INTO shipping (order_id, address, Shipping_Carrier) VALUES (?, ?, ?)`, [
-      order_id, 
-      fullAddress,
-      shipping_carrier || null
-    ])
+      // 3. บันทึกข้อมูลการชำระเงินใหม่ลงตาราง payment
+      const paymentType = orderData.Order_type === 'Ready' ? 'Ready pay' : 'Order_fee'
+      await connection.query(
+        `INSERT INTO payment (order_id, type, amount, slip_img, Slip_date, status, payment_method)
+         VALUES (?, ?, ?, ?, NOW(), 'Pending', ?)`,
+        [order_id, paymentType, orderData.total_amount, slip_url, payment_method || null],
+      )
 
-    // 4. อัปเดตสถานะในตาราง orders เป็น 'Pending'
-    await connection.query(`UPDATE orders SET status = 'Pending' WHERE order_id = ?`, [order_id])
+      // 4. เปลี่ยนสถานะออเดอร์เป็น 'Pending' เพื่อแจ้งแอดมินให้ตรวจสอบหลักฐานใหม่
+      // (กรณีมาจาก Invalid slip สถานะจะถูกดึงกลับมาเป็น Pending)
+      await connection.query(
+        `UPDATE orders SET status = 'Pending' WHERE order_id = ?`, 
+        [order_id]
+      )
+    }
 
     await connection.commit()
-    res.json({ success: true, message: 'ส่งหลักฐานและบันทึกที่อยู่เรียบร้อยแล้ว' })
+    res.json({ 
+      success: true, 
+      message: isPaid ? 'บันทึกการแก้ไขที่อยู่เรียบร้อยแล้ว' : 'ส่งหลักฐานและบันทึกข้อมูลเรียบร้อยแล้ว' 
+    })
   } catch (error) {
     await connection.rollback()
     console.error('Database Error:', error)
