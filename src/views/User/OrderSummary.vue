@@ -53,19 +53,6 @@ const fetchOrder = async () => {
   }
 }
 
-// ── SEPARATE ITEMS BY TYPE ──
-const readyToShipItems = computed(() => {
-  if (!order.value?.items) return []
-  return order.value.items.filter(
-    (item) => item.item_type === 'ready-to-ship' || !item.item_type || item.item_type === 'ready',
-  )
-})
-
-const preorderItems = computed(() => {
-  if (!order.value?.items) return []
-  return order.value.items.filter((item) => item.item_type === 'preorder')
-})
-
 // ── PAYMENT METHODS ──
 const paymentMethods = [
   { id: 'bank_transfer', name: 'โอนเงินผ่านธนาคาร', icon: '🏦' },
@@ -222,43 +209,18 @@ onMounted(() => {
               </div>
             </div>
 
-            <!-- ── READY TO SHIP ITEMS ── -->
-            <div v-if="readyToShipItems.length > 0" class="item-section">
-              <h4 class="item-section-title">✅ พร้อมส่ง</h4>
-              <div class="item-list">
-                <div v-for="item in readyToShipItems" :key="item.detail_id" class="order-item">
-                  <div class="item-img">
-                    <img v-if="item.image" :src="item.image" />
-                    <span v-else>🐾</span>
-                  </div>
-                  <div class="item-info">
-                    <p class="item-name">{{ item.name }}</p>
-                    <p class="item-price-small">฿{{ item.unit_price.toLocaleString() }}</p>
-                    <span v-if="item.flavor" class="item-flavor">{{ item.flavor }}</span>
-                  </div>
-                  <div class="item-qty">x{{ item.qty }}</div>
-                  <div class="item-total">฿{{ (item.unit_price * item.qty).toLocaleString() }}</div>
+            <div class="item-list">
+              <div v-for="item in order.items" :key="item.detail_id" class="order-item">
+                <div class="item-img">
+                  <img v-if="item.image" :src="item.image" />
+                  <span v-else>🐾</span>
                 </div>
-              </div>
-            </div>
-
-            <!-- ── PREORDER ITEMS ── -->
-            <div v-if="preorderItems.length > 0" class="item-section">
-              <h4 class="item-section-title">⏳ พรีออเดอร์</h4>
-              <div class="item-list">
-                <div v-for="item in preorderItems" :key="item.detail_id" class="order-item">
-                  <div class="item-img">
-                    <img v-if="item.image" :src="item.image" />
-                    <span v-else>🐾</span>
-                  </div>
-                  <div class="item-info">
-                    <p class="item-name">{{ item.name }}</p>
-                    <p class="item-price-small">฿{{ item.unit_price.toLocaleString() }}</p>
-                    <span v-if="item.flavor" class="item-flavor">{{ item.flavor }}</span>
-                  </div>
-                  <div class="item-qty">x{{ item.qty }}</div>
-                  <div class="item-total">฿{{ (item.unit_price * item.qty).toLocaleString() }}</div>
+                <div class="item-info">
+                  <p class="item-name">{{ item.name }}</p>
+                  <p class="item-price-small">฿{{ item.unit_price.toLocaleString() }}</p>
                 </div>
+                <div class="item-qty">x{{ item.qty }}</div>
+                <div class="item-total">฿{{ (item.unit_price * item.qty).toLocaleString() }}</div>
               </div>
             </div>
           </div>
@@ -578,35 +540,6 @@ onMounted(() => {
   font-size: 0.95rem;
   min-width: 70px;
   text-align: right;
-}
-.item-flavor {
-  display: inline-block;
-  font-size: 0.75rem;
-  color: #8b7aad;
-  background: #f5f3ff;
-  padding: 2px 8px;
-  border-radius: 4px;
-  margin-top: 4px;
-}
-
-/* Item Sections */
-.item-section {
-  margin-bottom: 1.5rem;
-}
-.item-section-title {
-  font-size: 0.95rem;
-  font-weight: 800;
-  color: var(--primary);
-  margin: 1rem 0 0.8rem 0;
-  padding-bottom: 0.8rem;
-  border-bottom: 2px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.item-list {
-  margin-bottom: 0;
 }
 
 /* Forms */

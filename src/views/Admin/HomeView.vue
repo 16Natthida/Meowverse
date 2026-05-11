@@ -1,8 +1,8 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
-
 const lowStockAlerts = ref([])
 const latestProducts = ref([])
 const dashboardData = ref(null)
@@ -101,6 +101,10 @@ function formatNumber(numberValue) {
 
 function formatChartValue(value) {
   if (activeRange.value === 'value' || activeRange.value === 'orders') {
+    if (activeRange.value === 'value') {
+      return formatCurrency(value)
+    }
+
     return formatCurrency(value)
   }
 
@@ -138,7 +142,15 @@ async function fetchLowStockAlerts() {
 }
 
 async function fetchDashboardOverview() {
-  const response = await fetch(`${API_BASE_URL}/dashboard/overview`)
+  const user = JSON.parse(
+    localStorage.getItem('meowverse-user') || sessionStorage.getItem('meowverse-user') || '{}',
+  )
+  const response = await fetch(`${API_BASE_URL}/dashboard/overview`, {
+    headers: {
+      'x-user-role': user.role || 'admin',
+      'x-user-id': String(user.id || ''),
+    },
+  })
   if (!response.ok) {
     throw new Error(`โหลดข้อมูลแดชบอร์ดไม่สำเร็จ (${response.status})`)
   }
@@ -244,6 +256,27 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="home-page">
+    <section class="hero-panel">
+      <div class="hero-copy">
+        <p class="eyebrow">Meowverse Admin Console</p>
+        <h2>แดชบอร์ดร้าน Pet Shop ที่ดูสถานะได้ครบในหน้าเดียว</h2>
+        <p>
+          ภาพรวมยอดขาย ออเดอร์ และสต็อกคงเหลือแบบเรียลไทม์ เพื่อให้ทีมแอดมินตัดสินใจได้ไว
+          และไม่พลาดสินค้าขาดมือ
+        </p>
+      </div>
+
+      <div class="hero-actions">
+        <RouterLink class="hero-btn hero-btn--primary" to="/admin/products"
+          >จัดการสินค้า</RouterLink
+        >
+        <RouterLink class="hero-btn hero-btn--primary" to="/admin/preorder-rounds"
+          >รอบนำเข้าสินค้า</RouterLink
+        >
+        <a class="hero-btn hero-btn--ghost" href="#stock-alerts">ดูสต็อกใกล้หมด</a>
+      </div>
+    </section>
+
     <section class="kpi-grid">
       <article class="kpi-card kpi-card--highlight">
         <p class="kpi-label">คำสั่งซื้อทั้งหมด</p>
@@ -317,6 +350,27 @@ onBeforeUnmount(() => {
             <p class="bar-label">{{ bar.label }}</p>
           </div>
         </div>
+      </article>
+      <article class="panel panel--alert-summary" id="stock-alerts">
+        <header class="panel-head panel-head--stack">
+          <h3>สรุปสต็อกใกล้หมด</h3>
+          <p v-if="!error">อ้างอิงข้อมูลจากสินค้าในระบบ</p>
+        </header>
+
+        <div v-if="error" class="error-banner">{{ error }}</div>
+
+        <div class="summary-row">
+          <div class="summary-card">
+            <p>สินค้าคงเหลือน้อยกว่า {{ thresholds.lowStock }}</p>
+            <strong>{{ kpi.lowStockCount }}</strong>
+          </div>
+          <div class="summary-card summary-card--critical">
+            <p>เสี่ยงหมดสต็อก (&lt;= {{ thresholds.severeLowStock }})</p>
+            <strong>{{ kpi.severeLowStockCount }}</strong>
+          </div>
+        </div>
+
+        <p v-if="isLoading" class="loading-message">กำลังโหลดข้อมูลสต็อก...</p>
       </article>
     </section>
 
@@ -708,6 +762,7 @@ onBeforeUnmount(() => {
 .dashboard-grid {
   display: grid;
   grid-template-columns: 1fr;
+  grid-template-columns: 1.6fr 1fr;
   gap: 0.85rem;
 }
 
@@ -809,6 +864,10 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
   gap: 0.5rem;
+  height: 220px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(48px, 1fr));
+  gap: 0.35rem;
 }
 
 .bar-wrap {
@@ -1022,7 +1081,6 @@ td {
     min-height: 300px;
   }
 }
-
 /* ── SLIP SECTION ── */
 .slip-section {
   overflow: visible;

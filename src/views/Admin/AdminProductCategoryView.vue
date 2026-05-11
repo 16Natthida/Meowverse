@@ -44,6 +44,8 @@ const form = reactive({
   flavorStock: {},
   imageUrls: [],
   preorderEnabled: false,
+  stock: 0,
+  readyToShipEnabled: true,
 })
 
 const categoryForm = reactive({
@@ -98,6 +100,12 @@ const filteredProducts = computed(() => {
 })
 
 const flavorItems = computed(() => parseFlavorsText(form.flavorsText))
+const totalFlavorStock = computed(() => {
+  if (!form.flavorStock || Object.keys(form.flavorStock).length === 0) {
+    return 0
+  }
+  return Object.values(form.flavorStock).reduce((sum, qty) => sum + Number(qty || 0), 0)
+})
 
 function setNotice(type, message) {
   notice.type = type
@@ -251,6 +259,11 @@ async function submitForm() {
       flavorStock: { ...form.flavorStock },
       imageUrls: [...form.imageUrls],
       preorderEnabled: form.preorderEnabled,
+      readyToShipEnabled: form.readyToShipEnabled,
+      stock:
+        parseFlavorsText(form.flavorsText).length > 0
+          ? totalFlavorStock.value
+          : Number(form.stock) || 0,
     }
 
     if (editingProductId.value) {
@@ -265,9 +278,13 @@ async function submitForm() {
       await store.updateProduct(editingProductId.value, payload)
       setNotice('success', 'อัปเดตสินค้าเรียบร้อยแล้ว')
     } else {
-      // Create mode: new product starts with stock=0, readyToShip=false
-      payload.stock = 0
-      payload.readyToShipEnabled = false
+      // Create mode keeps the form-derived stock and ready-to-ship flag.
+    }
+
+    if (editingProductId.value) {
+      await store.updateProduct(editingProductId.value, payload)
+      setNotice('success', 'อัปเดตสินค้าเรียบร้อยแล้ว')
+    } else {
       await store.createProduct(payload)
       setNotice('success', 'เพิ่มสินค้าเรียบร้อยแล้ว')
     }
@@ -388,6 +405,8 @@ function editProduct(product) {
   form.flavorStock = typeof product.flavorStock === 'object' ? { ...product.flavorStock } : {}
   form.imageUrls = [...(product.imageUrls || [])]
   form.preorderEnabled = Boolean(product.preorderEnabled)
+  form.stock = Number(product.stock) || 0
+  form.readyToShipEnabled = Boolean(product.readyToShipEnabled)
   flavorInput.value = ''
 }
 
@@ -402,12 +421,13 @@ function resetForm() {
   form.flavorStock = {}
   form.imageUrls = []
   form.preorderEnabled = false
+  form.stock = 0
+  form.readyToShipEnabled = true
   flavorInput.value = ''
 
   editingProductId.value = null
   productPanelOpen.value = false
 }
-
 function openAddStockModal(product) {
   selectedProductForStock.value = product
   const parsedFlavors = Array.isArray(product.flavors) ? product.flavors : []
@@ -742,7 +762,7 @@ onMounted(async () => {
         </label>
 
         <label>
-          ราคาพร้อมส่ง *
+          ราคาพร้อมส่ง * ราคา *
           <input v-model.number="form.basePrice" min="0" step="1" type="number" />
         </label>
 
@@ -755,6 +775,35 @@ onMounted(async () => {
             type="number"
             placeholder="ถ้าไม่กรอกจะใช้ราคาพร้อมส่ง"
           />
+          จำนวนคงเหลือ
+          <input
+            v-model.number="form.stock"
+            :disabled="flavorItems.length > 0"
+            :placeholder="
+              flavorItems.length > 0 ? `รวม: ${totalFlavorStock} ชิ้น (คำนวณจากรสชาติ)` : ''
+            "
+            min="0"
+            type="number"
+          />
+          <p v-if="flavorItems.length > 0" class="compact input-hint">
+            ✓ อัตโนมัติรวมจากสต็อกแต่ละรสชาติ = {{ totalFlavorStock }} ชิ้น
+          </p>
+        </label>
+
+        <label v-if="flavorItems.length > 0">
+          สต็อกแต่ละรสชาติ
+          <div class="flavor-stock-inputs">
+            <div v-for="flavor in flavorItems" :key="flavor" class="flavor-stock-row">
+              <span class="flavor-label">{{ flavor }}</span>
+              <input
+                v-model.number="form.flavorStock[flavor]"
+                min="0"
+                type="number"
+                placeholder="0"
+              />
+              <span class="flavor-unit">ชิ้น</span>
+            </div>
+          </div>
         </label>
 
         <label class="upload-field">

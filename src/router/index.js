@@ -40,12 +40,26 @@ const router = createRouter({
       component: LoginView,
     },
     {
+      path: '/preorder-payment/:orderId',
+      component: () => import('../views/User/PreorderPayment.vue'),
+      meta: { requiresAuth: true, roles: ['user'] },
+    },
+    {
+      path: '/admin/slips',
+      component: () => import('../views/Admin/SlipManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/admin/inventory-intake',
+      component: () => import('../views/Admin/InventoryIntakeManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
       path: '/dashboard',
       name: 'userDashboard',
       component: UserDashboard,
       meta: { requiresAuth: true, roles: ['user', 'admin'] },
     },
-    // เปลี่ยนจาก ./ เป็น ../
     { path: '/cart', component: () => import('../views/User/CartPage.vue') },
     {
       path: '/order/:orderId',
@@ -105,12 +119,6 @@ const router = createRouter({
       path: '/admin/preorder-rounds',
       name: 'admin-preorder-rounds',
       component: () => import('../views/Admin/Preorder_lots.vue'),
-      meta: { requiresAuth: true, roles: ['admin'] },
-    },
-    {
-      path: '/admin/inventory-intake',
-      name: 'admin-inventory-intake',
-      component: () => import('../views/Admin/SlipManagement.vue'),
       meta: { requiresAuth: true, roles: ['admin'] },
     },
     {

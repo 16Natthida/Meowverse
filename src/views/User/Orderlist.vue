@@ -1,9 +1,11 @@
 <script setup>
-defineOptions({ name: 'UserOrderList' })
-
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
+
+defineOptions({
+  name: 'UserOrderList',
+})
 
 const router = useRouter()
 const { getUser } = useAuth()

@@ -18,6 +18,13 @@ const app = express()
 const port = Number(process.env.API_PORT) || 3001
 
 const frontendOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:5173'
+const LOCAL_DEV_ORIGINS = [
+  frontendOrigin,
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:5174',
+  'http://127.0.0.1:5174',
+]
 const CATEGORY_NAME_MAX_LENGTH = 100
 const CATEGORY_DETAIL_MAX_LENGTH = 255
 const CATEGORY_MIN_COUNT = 4
@@ -46,6 +53,30 @@ const pool = mysql.createPool({
 
 app.locals.db = pool
 
+let hasPreorderQuantitySoldColumn = null
+async function ensurePreorderQuantitySoldColumn() {
+  if (hasPreorderQuantitySoldColumn !== null) {
+    return hasPreorderQuantitySoldColumn
+  }
+
+  try {
+    const [columns] = await pool.query(
+      `SHOW COLUMNS FROM preorder_round_products LIKE 'quantity_sold'`,
+    )
+    if (columns.length === 0) {
+      await pool.query(
+        `ALTER TABLE preorder_round_products ADD COLUMN quantity_sold INT NOT NULL DEFAULT 0`,
+      )
+    }
+    hasPreorderQuantitySoldColumn = true
+  } catch (error) {
+    console.error('Failed to ensure preorder_round_products.quantity_sold column:', error.message)
+    hasPreorderQuantitySoldColumn = false
+  }
+
+  return hasPreorderQuantitySoldColumn
+}
+
 const uploadStorage = multer.diskStorage({
   destination: (_req, _file, callback) => {
     callback(null, uploadsDir)
@@ -63,6 +94,16 @@ const upload = multer({
 })
 
 app.use(cors({ origin: frontendOrigin }))
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || LOCAL_DEV_ORIGINS.includes(origin)) {
+        return callback(null, true)
+      }
+      return callback(new Error('Not allowed by CORS'))
+    },
+  }),
+)
 app.use(express.json({ limit: '2mb' }))
 app.use('/uploads', express.static(uploadsDir))
 app.use('/api/cart', cartRouter)
@@ -92,25 +133,6 @@ function requireAdmin(req, res, next) {
   }
 
   next()
-}
-
-function normalizeIntakeQuantity(value, fallback = 0) {
-  const quantity = Number(value)
-  if (!Number.isFinite(quantity) || quantity < 0) {
-    return Math.max(0, Number(fallback) || 0)
-  }
-
-  return Math.floor(quantity)
-}
-
-function resolveIntakeStatus(orderedQty, receivedQty) {
-  const ordered = Math.max(0, Number(orderedQty) || 0)
-  const received = Math.max(0, Number(receivedQty) || 0)
-
-  if (ordered === 0) return 'Received'
-  if (received <= 0) return 'Missing'
-  if (received >= ordered) return 'Received'
-  return 'Partial'
 }
 
 async function handleLoginRequest(req, res) {
@@ -295,6 +317,8 @@ function mapProductRow(row, imageUrlMap) {
     flavorStock: flavorStockMap,
     basePrice: Number(row.basePrice) || 0,
     preorderPrice: Number(row.preorderPrice) || 0,
+    price: Number(row.price ?? row.basePrice) || 0,
+    preorderRoundId: row.preorderRoundId ? Number(row.preorderRoundId) : null,
     description: row.description || '',
     flavors: parseFlavorList(row.flavors),
     imageUrls: imageUrlMap.get(row.id) || [],
@@ -352,6 +376,24 @@ async function queryProductsByIds(productIds, connection = pool) {
         p.stock_qty AS stock,
         p.base_price AS basePrice,
         p.preorder_price AS preorderPrice,
+        (
+          SELECT prp.round_price
+          FROM preorder_round_products prp
+          JOIN preorder_rounds r ON r.round_id = prp.round_id
+          WHERE prp.prod_id = p.prod_id
+            AND LOWER(r.status) IN ('active', 'open')
+          ORDER BY r.start_date DESC, r.round_id DESC
+          LIMIT 1
+        ) AS price,
+        (
+          SELECT prp.round_id
+          FROM preorder_round_products prp
+          JOIN preorder_rounds r ON r.round_id = prp.round_id
+          WHERE prp.prod_id = p.prod_id
+            AND LOWER(r.status) IN ('active', 'open')
+          ORDER BY r.start_date DESC, r.round_id DESC
+          LIMIT 1
+        ) AS preorderRoundId,
         p.preorder_enabled AS preorderEnabled,
         p.ready_to_ship_enabled AS readyToShipEnabled
       FROM products p
@@ -388,24 +430,6 @@ async function queryAllProducts(connection = pool) {
   )
   const productIds = idRows.map((row) => row.id)
   return queryProductsByIds(productIds, connection)
-}
-
-async function countTableRows(tableName, connection = pool) {
-  const [tableRows] = await connection.query(
-    `
-      SELECT COUNT(*) AS tableCount
-      FROM information_schema.tables
-      WHERE table_schema = DATABASE() AND table_name = ?
-    `,
-    [tableName],
-  )
-
-  if (Number(tableRows[0]?.tableCount) === 0) {
-    return null
-  }
-
-  const [rows] = await connection.query(`SELECT COUNT(*) AS rowCount FROM ${tableName}`)
-  return Number(rows[0]?.rowCount) || 0
 }
 
 async function upsertProductImages(connection, productId, imageUrls = []) {
@@ -459,8 +483,13 @@ async function ensureAdminSchema() {
       qty INT NOT NULL DEFAULT 1,
       item_type VARCHAR(20) DEFAULT NULL,
       flavor VARCHAR(120) DEFAULT NULL,
+      round_id INT DEFAULT NULL,
+      round_price DECIMAL(10,2) NULL,
+      preorder_round_id INT DEFAULT NULL,
       PRIMARY KEY (cart_id),
       KEY idx_cart_user_id (user_id),
+      KEY idx_cart_round_id (round_id),
+      KEY idx_cart_preorder_round_id (preorder_round_id),
       CONSTRAINT fk_cart_user
         FOREIGN KEY (user_id) REFERENCES accounts (id)
         ON DELETE CASCADE,
@@ -501,6 +530,7 @@ async function ensureAdminSchema() {
       round_id INT NOT NULL,
       prod_id INT NOT NULL,
       quantity_available INT NOT NULL DEFAULT 0,
+      quantity_sold INT NOT NULL DEFAULT 0,
       round_price DECIMAL(10, 2) NULL,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -580,6 +610,12 @@ async function ensureAdminSchema() {
     ADD COLUMN IF NOT EXISTS preorder_price DECIMAL(10,2) NULL AFTER base_price
   `)
 
+  await ensurePreorderQuantitySoldColumn()
+  await pool.query(`
+    ALTER TABLE preorder_round_products
+    ADD COLUMN IF NOT EXISTS quantity_sold INT NOT NULL DEFAULT 0
+  `)
+
   await pool.query(`
     ALTER TABLE cart
     ADD COLUMN IF NOT EXISTS item_type VARCHAR(20) DEFAULT NULL
@@ -601,8 +637,23 @@ async function ensureAdminSchema() {
   `)
 
   await pool.query(`
+    ALTER TABLE cart
+    ADD COLUMN IF NOT EXISTS preorder_round_id INT DEFAULT NULL
+  `)
+
+  await pool.query(`
     ALTER TABLE order_details
     ADD COLUMN IF NOT EXISTS flavor VARCHAR(120) DEFAULT NULL
+  `)
+
+  await pool.query(`
+    ALTER TABLE order_details
+    ADD COLUMN IF NOT EXISTS item_type VARCHAR(20) DEFAULT NULL
+  `)
+
+  await pool.query(`
+    ALTER TABLE order_details
+    ADD COLUMN IF NOT EXISTS preorder_round_id INT DEFAULT NULL
   `)
 
   await pool.query(`
@@ -903,6 +954,9 @@ app.post('/api/products', async (req, res) => {
           (cat_id, prod_name, description, flavors, flavor_stock, stock_qty, base_price, preorder_price, sku, preorder_enabled, ready_to_ship_enabled)
         VALUES
           (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (cat_id, prod_name, description, flavors, flavor_stock, stock_qty, base_price, sku, preorder_enabled, ready_to_ship_enabled)
+        VALUES
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         Number(payload.categoryId),
@@ -1290,7 +1344,8 @@ app.get('/api/products/preorder', async (req, res) => {
 // Public API: Get preorder products in open rounds grouped for users
 app.get('/api/products/preorder', async (req, res) => {
   try {
-    const [productRows] = await pool.query(`
+    const categoryId = req.query.categoryId
+    let sql = `
       SELECT DISTINCT
         p.prod_id AS id,
         p.prod_name AS name,
@@ -1300,6 +1355,7 @@ app.get('/api/products/preorder', async (req, res) => {
         p.stock_qty AS stock,
         p.base_price AS basePrice,
         p.preorder_price AS preorderPrice,
+        COALESCE(prp.round_price, p.base_price) AS price,
         p.preorder_enabled AS preorderEnabled,
         p.ready_to_ship_enabled AS readyToShipEnabled
       FROM preorder_round_products prp
@@ -1307,8 +1363,17 @@ app.get('/api/products/preorder', async (req, res) => {
       JOIN products p ON p.prod_id = prp.prod_id
       LEFT JOIN categories c ON c.cat_id = p.cat_id
       WHERE LOWER(r.status) IN ('active', 'open')
-      ORDER BY c.cat_name ASC, p.prod_name ASC
-    `)
+    `
+    const params = []
+
+    if (categoryId) {
+      sql += ' AND p.cat_id = ?'
+      params.push(Number(categoryId))
+    }
+
+    sql += ' ORDER BY c.cat_name ASC, p.prod_name ASC'
+
+    const [productRows] = await pool.query(sql, params)
 
     const productIds = productRows.map((row) => row.id)
     let imageUrlMap = new Map()
@@ -1340,6 +1405,7 @@ app.get('/api/products/preorder', async (req, res) => {
       stock: Number(row.stock) || 0,
       basePrice: Number(row.basePrice) || 0,
       preorderPrice: Number(row.preorderPrice) || 0,
+      price: Number(row.price) || Number(row.basePrice) || 0,
       imageUrls: imageUrlMap.get(row.id) || [],
       preorderEnabled: Boolean(row.preorderEnabled),
       readyToShipEnabled: Boolean(row.readyToShipEnabled),
@@ -1547,9 +1613,9 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
 
     const round = roundRows[0]
 
-    // Get products in this round
-    const [productRows] = await pool.query(
-      `
+    const hasQuantitySold = await ensurePreorderQuantitySoldColumn()
+    const productQuery = hasQuantitySold
+      ? `
       SELECT
         p.prod_id AS id,
         p.prod_name AS name,
@@ -1560,6 +1626,8 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
         p.base_price AS basePrice,
         p.preorder_price AS preorderPrice,
         prp.quantity_available AS quantityAvailable,
+        COALESCE(prp.quantity_sold, 0) AS quantitySold,
+        (prp.quantity_available - COALESCE(prp.quantity_sold, 0)) AS quantityRemaining,
         prp.round_price AS roundPrice,
         p.preorder_enabled AS preorderEnabled,
         p.ready_to_ship_enabled AS readyToShipEnabled
@@ -1568,9 +1636,31 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
       LEFT JOIN categories c ON c.cat_id = p.cat_id
       WHERE prp.round_id = ?
       ORDER BY p.prod_id DESC
-    `,
-      [roundId],
-    )
+    `
+      : `
+      SELECT
+        p.prod_id AS id,
+        p.prod_name AS name,
+        p.sku AS sku,
+        p.cat_id AS categoryId,
+        c.cat_name AS categoryName,
+        p.stock_qty AS stock,
+        p.base_price AS basePrice,
+        p.preorder_price AS preorderPrice,
+        prp.quantity_available AS quantityAvailable,
+        0 AS quantitySold,
+        prp.quantity_available AS quantityRemaining,
+        prp.round_price AS roundPrice,
+        p.preorder_enabled AS preorderEnabled,
+        p.ready_to_ship_enabled AS readyToShipEnabled
+      FROM preorder_round_products prp
+      JOIN products p ON p.prod_id = prp.prod_id
+      LEFT JOIN categories c ON c.cat_id = p.cat_id
+      WHERE prp.round_id = ?
+      ORDER BY p.prod_id DESC
+    `
+
+    const [productRows] = await pool.query(productQuery, [roundId])
 
     // Get images for all products
     const productIds = productRows.map((row) => row.id)
@@ -1603,6 +1693,8 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
       stock: Number(row.stock) || 0,
       basePrice: Number(row.basePrice) || 0,
       quantityAvailable: Number(row.quantityAvailable) || 0,
+      quantitySold: Number(row.quantitySold) || 0,
+      quantityRemaining: Number(row.quantityRemaining) || 0,
       roundPrice: row.roundPrice ? Number(row.roundPrice) : Number(row.basePrice) || 0,
       imageUrls: imageUrlMap.get(row.id) || [],
       preorderEnabled: Boolean(row.preorderEnabled),
@@ -1754,7 +1846,7 @@ app.delete('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (r
 // Add product to preorder round
 app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, async (req, res) => {
   const roundId = Number(req.params.id)
-  const { productIds, quantities, roundPrices } = req.body || {}
+  const { productIds, quantities, roundPrices, prices } = req.body || {}
 
   if (!Array.isArray(productIds) || productIds.length === 0) {
     res.status(400).json({ message: 'productIds array is required' })
@@ -1771,7 +1863,6 @@ app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, a
       res.status(404).json({ message: 'Preorder round not found' })
       return
     }
-
     const [productRows] = await pool.query(
       'SELECT prod_id AS prodId, base_price AS basePrice FROM products WHERE prod_id IN (?)',
       [productIds.map((pid) => Number(pid))],
@@ -1789,7 +1880,6 @@ app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, a
     const preorderPriceMap = new Map(
       preorderPriceRows.map((row) => [String(row.prodId), Number(row.preorderPrice) || 0]),
     )
-
     const values = productIds.map((pid, index) => [
       roundId,
       Number(pid),
@@ -1797,6 +1887,7 @@ app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, a
       roundPrices && roundPrices[index] !== undefined && roundPrices[index] !== null
         ? Number(roundPrices[index])
         : (preorderPriceMap.get(String(pid)) ?? productPriceMap.get(String(pid)) ?? 0),
+      prices && prices[index] ? Number(prices[index]) : null,
     ])
 
     await pool.query(
@@ -1806,6 +1897,7 @@ app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, a
       ON DUPLICATE KEY UPDATE
         quantity_available = VALUES(quantity_available),
         round_price = COALESCE(VALUES(round_price), round_price)
+      ON DUPLICATE KEY UPDATE quantity_available = VALUES(quantity_available), round_price = VALUES(round_price)
     `,
       [values],
     )
@@ -1847,7 +1939,78 @@ app.delete(
   },
 )
 
-// Update product quantity in preorder round
+// Add product to preorder round
+app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, async (req, res) => {
+  const roundId = Number(req.params.id)
+  const { productIds, quantities, roundPrices, prices } = req.body || {}
+
+  if (!Array.isArray(productIds) || productIds.length === 0) {
+    res.status(400).json({ message: 'productIds array is required' })
+    return
+  }
+
+  try {
+    const [roundRows] = await pool.query(
+      'SELECT round_id FROM preorder_rounds WHERE round_id = ? LIMIT 1',
+      [roundId],
+    )
+
+    if (roundRows.length === 0) {
+      res.status(404).json({ message: 'Preorder round not found' })
+      return
+    }
+
+    const [productRows] = await pool.query(
+      'SELECT prod_id AS prodId, base_price AS basePrice FROM products WHERE prod_id IN (?)',
+      [productIds.map((pid) => Number(pid))],
+    )
+
+    const productPriceMap = new Map(
+      productRows.map((row) => [String(row.prodId), Number(row.basePrice) || 0]),
+    )
+
+    const [preorderPriceRows] = await pool.query(
+      'SELECT prod_id AS prodId, preorder_price AS preorderPrice FROM products WHERE prod_id IN (?)',
+      [productIds.map((pid) => Number(pid))],
+    )
+
+    const preorderPriceMap = new Map(
+      preorderPriceRows.map((row) => [String(row.prodId), Number(row.preorderPrice) || 0]),
+    )
+
+    const values = productIds.map((pid, index) => [
+      roundId,
+      Number(pid),
+      quantities && quantities[index] !== undefined ? Number(quantities[index]) : 0,
+      roundPrices && roundPrices[index] !== undefined && roundPrices[index] !== null
+        ? Number(roundPrices[index])
+        : prices && prices[index] !== undefined && prices[index] !== null
+          ? Number(prices[index])
+          : (preorderPriceMap.get(String(pid)) ?? productPriceMap.get(String(pid)) ?? 0),
+    ])
+
+    await pool.query(
+      `
+      INSERT INTO preorder_round_products (round_id, prod_id, quantity_available, round_price)
+      VALUES ?
+      ON DUPLICATE KEY UPDATE
+        quantity_available = VALUES(quantity_available),
+        round_price = COALESCE(VALUES(round_price), round_price)
+    `,
+      [values],
+    )
+
+    await pool.query(`UPDATE products SET preorder_enabled = 1 WHERE prod_id IN (?)`, [
+      productIds.map((pid) => Number(pid)),
+    ])
+
+    res.json({ message: 'Products added to round successfully' })
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
+
+// Update product quantity and/or price in preorder round
 app.put(
   '/api/preorder-rounds/:id/products/:productId',
   authenticateToken,
@@ -1855,24 +2018,44 @@ app.put(
   async (req, res) => {
     const roundId = Number(req.params.id)
     const productId = Number(req.params.productId)
-    const { quantity } = req.body || {}
+    const { quantity, price } = req.body || {}
 
-    // Allow null to represent "unlimited". Otherwise quantity must be a non-negative number.
-    if (quantity === undefined || (quantity !== null && Number(quantity) < 0)) {
-      res
-        .status(400)
-        .json({ message: 'quantity must be null (unlimited) or a non-negative number' })
+    if (quantity === undefined && price === undefined) {
+      res.status(400).json({ message: 'quantity and/or price must be provided' })
+      return
+    }
+
+    if (quantity !== undefined && quantity !== null && Number(quantity) < 0) {
+      res.status(400).json({ message: 'quantity must be null or a non-negative number' })
+      return
+    }
+
+    if (price !== undefined && price !== null && Number(price) < 0) {
+      res.status(400).json({ message: 'price must be null or a non-negative number' })
       return
     }
 
     try {
+      const updateFields = []
+      const values = []
+
+      if (quantity !== undefined) {
+        updateFields.push('quantity_available = ?')
+        values.push(quantity === null ? null : Number(quantity))
+      }
+
+      if (price !== undefined) {
+        updateFields.push('round_price = ?')
+        values.push(price === null ? null : Number(price))
+      }
+
       const [result] = await pool.query(
         `
       UPDATE preorder_round_products
-      SET quantity_available = ?
+      SET ${updateFields.join(', ')}
       WHERE round_id = ? AND prod_id = ?
     `,
-        [quantity === null ? null : Number(quantity), roundId, productId],
+        [...values, roundId, productId],
       )
 
       if (result.affectedRows === 0) {
@@ -1880,178 +2063,48 @@ app.put(
         return
       }
 
-      res.json({ message: 'Product quantity updated successfully' })
+      res.json({ message: 'Product updated successfully' })
     } catch (error) {
       res.status(500).json({ message: error.message })
     }
   },
 )
 
-app.get('/api/dashboard/overview', async (_req, res) => {
-  try {
-    const lowStockThreshold = 8
-    const severeLowStockThreshold = 2
+// Get stock information for a preorder round
+app.get(
+  '/api/preorder-rounds/:id/stock-info',
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    const roundId = Number(req.params.id)
 
-    const [summaryRows] = await pool.query(
-      `
-      SELECT
-        COUNT(*) AS totalProducts,
-        COALESCE(SUM(stock_qty), 0) AS totalStockUnits,
-        COALESCE(SUM(stock_qty * base_price), 0) AS inventoryValue
-      FROM products
-    `,
-    )
-
-    const [categoryCountRows] = await pool.query(
-      `
-      SELECT COUNT(*) AS totalCategories
-      FROM categories
-    `,
-    )
-
-    const [lowStockRows] = await pool.query(
-      `
-      SELECT
-        COALESCE(SUM(CASE WHEN stock_qty <= ? THEN 1 ELSE 0 END), 0) AS lowStockCount,
-        COALESCE(SUM(CASE WHEN stock_qty <= ? THEN 1 ELSE 0 END), 0) AS severeLowStockCount
-      FROM products
-      WHERE ready_to_ship_enabled = 1 OR preorder_enabled = 1
-    `,
-      [lowStockThreshold, severeLowStockThreshold],
-    )
-
-    const [categoryMetricRows] = await pool.query(
-      `
-      SELECT
-        c.cat_id AS categoryId,
-        c.cat_name AS categoryName,
-        COALESCE(SUM(p.stock_qty), 0) AS totalStock,
-        COALESCE(SUM(p.stock_qty * p.base_price), 0) AS totalValue,
-        COALESCE(SUM(CASE WHEN p.stock_qty <= ? THEN 1 ELSE 0 END), 0) AS lowStockProducts
-      FROM categories c
-      LEFT JOIN products p ON p.cat_id = c.cat_id
-      GROUP BY c.cat_id, c.cat_name
-      ORDER BY totalStock DESC, c.cat_name ASC
-      LIMIT 8
-    `,
-      [lowStockThreshold],
-    )
-
-    const [latestProductRows] = await pool.query(
-      `
-      SELECT
-        p.prod_id AS id,
-        p.prod_name AS name,
-        p.sku AS sku,
-        c.cat_name AS categoryName,
-        p.stock_qty AS stock,
-        p.base_price AS basePrice,
-        p.preorder_enabled AS preorderEnabled,
-        p.ready_to_ship_enabled AS readyToShipEnabled
-      FROM products p
-      LEFT JOIN categories c ON c.cat_id = p.cat_id
-      ORDER BY p.prod_id DESC
-      LIMIT 8
-    `,
-    )
-
-    const orderCountCandidates = ['orders', 'order_headers', 'purchase_orders']
-    let orderCount = null
-
-    for (const tableName of orderCountCandidates) {
-      // First matching table wins so existing databases can expose real order counts.
-      // If the table does not exist, fall through without failing the endpoint.
-      // This keeps the dashboard usable in partial schemas.
-      const count = await countTableRows(tableName)
-      if (count !== null) {
-        orderCount = count
-        break
-      }
-    }
-
-    if (orderCount === null) {
-      const [orderItemCountRows] = await pool.query(
+    try {
+      const [stockInfo] = await pool.query(
         `
-        SELECT COUNT(*) AS rowCount
-        FROM information_schema.tables
-        WHERE table_schema = DATABASE() AND table_name = 'order_items'
-      `,
+      SELECT
+        prod_id,
+        quantity_available,
+        COALESCE(quantity_sold, 0) AS quantity_sold,
+        (quantity_available - COALESCE(quantity_sold, 0)) AS quantity_remaining
+      FROM preorder_round_products
+      WHERE round_id = ?
+      ORDER BY prod_id
+    `,
+        [roundId],
       )
 
-      if (Number(orderItemCountRows[0]?.rowCount) > 0) {
-        const [distinctOrderRows] = await pool.query(
-          'SELECT COUNT(DISTINCT order_id) AS rowCount FROM order_items',
-        )
-        orderCount = Number(distinctOrderRows[0]?.rowCount) || 0
-      }
+      res.json(stockInfo)
+    } catch (error) {
+      res.status(500).json({ message: error.message })
     }
-
-    const summary = summaryRows[0] || {}
-    const categoryCount = categoryCountRows[0] || {}
-    const lowStock = lowStockRows[0] || {}
-
-    // Recent orders for dashboard chart (most recent N orders)
-    const [recentOrderRows] = await pool.query(
-      `
-      SELECT order_id, COALESCE(total_amount, 0) AS total_amount, Order_date
-      FROM orders
-      ORDER BY Order_date DESC, order_id DESC
-      LIMIT 12
-    `,
-    )
-
-    res.json({
-      kpi: {
-        totalProducts: Number(summary.totalProducts) || 0,
-        totalCategories: Number(categoryCount.totalCategories) || 0,
-        totalStockUnits: Number(summary.totalStockUnits) || 0,
-        inventoryValue: Number(summary.inventoryValue) || 0,
-        lowStockCount: Number(lowStock.lowStockCount) || 0,
-        severeLowStockCount: Number(lowStock.severeLowStockCount) || 0,
-        orderCount: orderCount === null ? 0 : orderCount,
-      },
-      charts: {
-        byCategoryStock: categoryMetricRows.map((row) => ({
-          label: row.categoryName,
-          value: Number(row.totalStock) || 0,
-        })),
-        byCategoryValue: categoryMetricRows.map((row) => ({
-          label: row.categoryName,
-          value: Number(row.totalValue) || 0,
-        })),
-        byCategoryLowStock: categoryMetricRows.map((row) => ({
-          label: row.categoryName,
-          value: Number(row.lowStockProducts) || 0,
-        })),
-        byRecentOrders: recentOrderRows.map((row) => ({
-          label: `#${row.order_id}`,
-          value: Number(row.total_amount) || 0,
-        })),
-      },
-      latestProducts: latestProductRows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        sku: row.sku || '',
-        categoryName: row.categoryName || '-',
-        stock: Number(row.stock) || 0,
-        basePrice: Number(row.basePrice) || 0,
-        preorderEnabled: Boolean(row.preorderEnabled),
-        readyToShipEnabled: Boolean(row.readyToShipEnabled),
-      })),
-      thresholds: {
-        lowStock: lowStockThreshold,
-        severeLowStock: severeLowStockThreshold,
-      },
-    })
-  } catch (error) {
-    res.status(500).json({ message: error.message })
-  }
-})
+  },
+)
 
 // POST /api/orders/:order_id/payment
 app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res) => {
   const { order_id } = req.params
   const { payment_method, shipping_name, shipping_phone, shipping_address, notes } = req.body
+  const { shipping_carrier } = req.body
   const slip_url = req.file ? `/uploads/${req.file.filename}` : null
 
   const connection = await pool.getConnection()
@@ -2122,6 +2175,13 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     }
 
     // 7. อัปเดตสถานะในตาราง orders เป็น 'Pending'
+    await connection.query(
+      `INSERT INTO shipping (order_id, address, Shipping_Carrier) VALUES (?, ?, ?)`,
+      [order_id, fullAddress, shipping_carrier || null],
+    )
+
+    // 4. อัปเดตสถานะในตาราง orders เป็น 'Pending'
+
     await connection.query(`UPDATE orders SET status = 'Pending' WHERE order_id = ?`, [order_id])
 
     await connection.commit()
@@ -2142,7 +2202,7 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
 app.get('/api/payments', async (_req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT p.*, o.user_id, a.username
+      `SELECT p.*, o.user_id, o.Order_type, a.username
        FROM payment p
        LEFT JOIN orders o ON p.order_id = o.order_id
        LEFT JOIN accounts a ON o.user_id = a.user_id
@@ -2167,8 +2227,35 @@ app.patch('/api/payments/:pay_id/status', async (req, res) => {
   }
 
   try {
-    await pool.query('UPDATE payment SET status = ? WHERE pay_id = ?', [status, pay_id])
-    res.json({ success: true })
+    const connection = await pool.getConnection()
+    try {
+      await connection.beginTransaction()
+      await connection.query('UPDATE payment SET status = ? WHERE pay_id = ?', [status, pay_id])
+
+      if (status === 'Approved') {
+        const [payRows] = await connection.query(
+          `SELECT p.order_id, o.Order_type FROM payment p LEFT JOIN orders o ON p.order_id = o.order_id WHERE p.pay_id = ? LIMIT 1`,
+          [pay_id],
+        )
+
+        if (payRows.length > 0) {
+          const { order_id, Order_type } = payRows[0]
+          const newOrderStatus = Order_type === 'Preorder' ? 'Wait_for_Import_Fee' : 'Paid'
+          await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [
+            newOrderStatus,
+            order_id,
+          ])
+        }
+      }
+
+      await connection.commit()
+      res.json({ success: true })
+    } catch (error) {
+      await connection.rollback()
+      res.status(500).json({ error: error.message })
+    } finally {
+      connection.release()
+    }
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -2568,6 +2655,175 @@ app.post(
     }
   },
 )
+
+// ─────────────────────────────────────────────
+// GET /api/dashboard/overview
+// ส่วนหลัก dashboard data
+// ─────────────────────────────────────────────
+app.get('/api/dashboard/overview', authenticateToken, requireAdmin, async (_req, res) => {
+  try {
+    // KPI: จำนวนสินค้า หมวด สต็อก ฯลฯ
+    const [productCountRows] = await pool.query('SELECT COUNT(*) AS total FROM products')
+    const totalProducts = Number(productCountRows?.[0]?.total) || 0
+
+    const [categoryCountRows] = await pool.query('SELECT COUNT(*) AS total FROM categories')
+    const totalCategories = Number(categoryCountRows?.[0]?.total) || 0
+
+    const [stockRows] = await pool.query('SELECT SUM(stock_qty) AS total FROM products')
+    const totalStockUnits = Number(stockRows?.[0]?.total) || 0
+
+    const [inventoryValueRows] = await pool.query(
+      'SELECT SUM(stock_qty * base_price) AS total FROM products',
+    )
+    const inventoryValue = Number(inventoryValueRows?.[0]?.total) || 0
+
+    const [lowStockRows] = await pool.query(
+      'SELECT COUNT(*) AS total FROM products WHERE stock_qty <= 8',
+    )
+    const lowStockCount = Number(lowStockRows?.[0]?.total) || 0
+
+    const [severeLowStockRows] = await pool.query(
+      'SELECT COUNT(*) AS total FROM products WHERE stock_qty <= 2',
+    )
+    const severeLowStockCount = Number(severeLowStockRows?.[0]?.total) || 0
+
+    const [orderCountRows] = await pool.query('SELECT COUNT(*) AS total FROM orders')
+    const orderCount = Number(orderCountRows?.[0]?.total) || 0
+
+    const kpi = {
+      totalProducts,
+      totalCategories,
+      totalStockUnits,
+      inventoryValue,
+      lowStockCount,
+      severeLowStockCount,
+      orderCount,
+    }
+
+    const thresholds = {
+      lowStock: 8,
+      severeLowStock: 2,
+    }
+
+    // Chart data: สต็อกรายหมวดหมู่
+    const [categoryStockRows] = await pool.query(
+      `
+      SELECT
+        c.cat_name AS label,
+        SUM(p.stock_qty) AS value
+      FROM products p
+      LEFT JOIN categories c ON c.cat_id = p.cat_id
+      GROUP BY c.cat_id, c.cat_name
+      ORDER BY value DESC
+      `,
+    )
+
+    const byCategoryStock = categoryStockRows.map((row) => ({
+      label: row.label || 'ไม่มีหมวดหมู่',
+      value: Number(row.value) || 0,
+    }))
+
+    // Chart data: มูลค่าสต็อกรายหมวดหมู่
+    const [categoryValueRows] = await pool.query(
+      `
+      SELECT
+        c.cat_name AS label,
+        SUM(p.stock_qty * p.base_price) AS value
+      FROM products p
+      LEFT JOIN categories c ON c.cat_id = p.cat_id
+      GROUP BY c.cat_id, c.cat_name
+      ORDER BY value DESC
+      `,
+    )
+
+    const byCategoryValue = categoryValueRows.map((row) => ({
+      label: row.label || 'ไม่มีหมวดหมู่',
+      value: Number(row.value) || 0,
+    }))
+
+    // Chart data: สินค้าเสี่ยง/ใกล้หมดรายหมวดหมู่
+    const [categoryLowStockRows] = await pool.query(
+      `
+      SELECT
+        c.cat_name AS label,
+        COUNT(*) AS value
+      FROM products p
+      LEFT JOIN categories c ON c.cat_id = p.cat_id
+      WHERE p.stock_qty <= 8
+      GROUP BY c.cat_id, c.cat_name
+      ORDER BY value DESC
+      `,
+    )
+
+    const byCategoryLowStock = categoryLowStockRows.map((row) => ({
+      label: row.label || 'ไม่มีหมวดหมู่',
+      value: Number(row.value) || 0,
+    }))
+
+    // Chart data: ยอดขายรายคำสั่งซื้อ (top 5)
+    const [recentOrdersRows] = await pool.query(
+      `
+      SELECT
+        CONCAT('Order #', o.order_id) AS label,
+        SUM(o.total_amount) AS value
+      FROM orders o
+      GROUP BY o.order_id
+      ORDER BY o.order_id DESC
+      LIMIT 5
+      `,
+    )
+
+    const byRecentOrders = recentOrdersRows.map((row) => ({
+      label: row.label || 'ไม่มีออเดอร์',
+      value: Number(row.value) || 0,
+    }))
+
+    // ล่าสุด 10 สินค้า
+    const [latestProductsRows] = await pool.query(
+      `
+      SELECT
+        p.prod_id AS id,
+        p.prod_name AS name,
+        p.sku,
+        c.cat_id AS categoryId,
+        c.cat_name AS categoryName,
+        p.stock_qty AS stock,
+        p.base_price AS basePrice
+      FROM products p
+      LEFT JOIN categories c ON c.cat_id = p.cat_id
+      ORDER BY p.prod_id DESC
+      LIMIT 10
+      `,
+    )
+
+    const latestProducts = latestProductsRows.map((row) => ({
+      id: row.id,
+      name: row.name || '-',
+      sku: row.sku || '',
+      categoryId: row.categoryId,
+      categoryName: row.categoryName || '-',
+      stock: Number(row.stock) || 0,
+      basePrice: Number(row.basePrice) || 0,
+      imageUrls: [],
+    }))
+
+    const charts = {
+      byCategoryStock,
+      byCategoryValue,
+      byCategoryLowStock,
+      byRecentOrders,
+    }
+
+    res.json({
+      kpi,
+      thresholds,
+      charts,
+      latestProducts,
+    })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
 
 // ─────────────────────────────────────────────
 // GET /api/admin/user-stats

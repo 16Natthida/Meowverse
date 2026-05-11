@@ -5,27 +5,34 @@ import { useAuth } from '../../composables/useAuth'
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 const { getUser } = useAuth()
 
-const intakeOrders = ref([])
-const loading = ref(false)
-const errorMessage = ref('')
-const selectedOrderId = ref(null)
-const saving = ref(false)
-const saveMessage = ref('')
-const note = ref('')
-const receivedDraft = ref({})
-const moveExcessToStock = ref(true)
-const decrementPreorderPool = ref(true)
-
 const currentUser = computed(() => getUser())
 
-const selectedOrder = computed(() => {
-  return (
-    intakeOrders.value.find((order) => Number(order.order_id) === Number(selectedOrderId.value)) ||
-    null
-  )
+const payments = ref([])
+const slipLoading = ref(false)
+const slipError = ref('')
+const selectedSlip = ref(null)
+const selectedOrderDetail = ref(null)
+const selectedOrderLoading = ref(false)
+const selectedOrderError = ref('')
+const importFeeInput = ref('')
+const filterStatus = ref('all')
+
+const filteredPayments = computed(() => {
+  if (filterStatus.value === 'all') return payments.value
+  return payments.value.filter((payment) => payment.status === filterStatus.value)
 })
 
-const selectedSummary = computed(() => selectedOrder.value?.summary || null)
+const statusConfig = {
+  Pending: { text: 'รอตรวจสอบ', color: '#f59e0b', bg: '#fffbeb' },
+  Approved: { text: 'อนุมัติแล้ว', color: '#10b981', bg: '#ecfdf5' },
+  Rejected: { text: 'ปฏิเสธ', color: '#ef4444', bg: '#fef2f2' },
+}
+
+const paymentMethodLabel = {
+  bank_transfer: '🏦 โอนธนาคาร',
+  promptpay: '📱 พร้อมเพย์',
+  cash_on_delivery: '💵 เก็บปลายทาง',
+}
 
 function authHeaders() {
   const user = currentUser.value || {}
@@ -55,7 +62,7 @@ function formatMoney(value) {
   }).format(Number(value) || 0)
 }
 
-function resolveStatusClass(status) {
+function resolveIntakeStatusClass(status) {
   const key = String(status || '').toLowerCase()
   if (key.includes('ready')) return 'badge badge--ready'
   if (key.includes('partial')) return 'badge badge--partial'
@@ -63,7 +70,7 @@ function resolveStatusClass(status) {
   return 'badge badge--pending'
 }
 
-function resolveStatusLabel(status) {
+function resolveIntakeStatusLabel(status) {
   const key = String(status || '').toLowerCase()
   if (key === 'ready_to_ship') return 'พร้อมจัดส่ง'
   if (key === 'partially_received') return 'รับไม่ครบ'
@@ -73,301 +80,405 @@ function resolveStatusLabel(status) {
   return status || 'Pending'
 }
 
-function setSelectedOrder(orderId) {
-  selectedOrderId.value = orderId
-  saveMessage.value = ''
-  note.value = ''
-
-  const order = intakeOrders.value.find((item) => Number(item.order_id) === Number(orderId))
-  const draft = {}
-
-  for (const item of order?.items || []) {
-    draft[item.detail_id] = Number(item.received_qty) || 0
-  }
-
-  receivedDraft.value = draft
+function resolveSlipUrl(value) {
+  const url = String(value || '').trim()
+  if (!url) return ''
+  if (/^https?:\/\//i.test(url)) return url
+  return url.startsWith('/') ? url : `/${url}`
 }
 
-function updateDraft(detailId, rawValue) {
-  const value = Number(rawValue)
-  receivedDraft.value = {
-    ...receivedDraft.value,
-    [detailId]: Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0,
-  }
-}
-
-async function fetchIntakeOrders() {
-  loading.value = true
-  errorMessage.value = ''
+async function fetchPayments() {
+  slipLoading.value = true
+  slipError.value = ''
 
   try {
-    const res = await fetch(`${API_BASE_URL}/admin/inventory-intake/orders`, {
-      headers: authHeaders(),
+    const response = await fetch(`${API_BASE_URL}/payments`)
+    if (!response.ok) {
+      throw new Error('โหลดข้อมูลสลิปไม่สำเร็จ')
+    }
+    payments.value = await response.json()
+  } catch (error) {
+    slipError.value = error instanceof Error ? error.message : 'เกิดข้อผิดพลาด'
+  } finally {
+    slipLoading.value = false
+  }
+}
+
+async function updatePaymentStatus(payId, status) {
+  try {
+    const response = await fetch(`${API_BASE_URL}/payments/${payId}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
     })
 
-    if (!res.ok) {
-      throw new Error(`โหลดรายการรับสินค้าไม่สำเร็จ (${res.status})`)
+    if (!response.ok) {
+      throw new Error('อัปเดตสถานะไม่สำเร็จ')
     }
 
-    intakeOrders.value = await res.json()
-
-    if (!selectedOrderId.value && intakeOrders.value.length > 0) {
-      setSelectedOrder(intakeOrders.value[0].order_id)
-    }
+    await fetchPayments()
+    selectedSlip.value = null
+    selectedOrderDetail.value = null
+    importFeeInput.value = ''
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'เกิดข้อผิดพลาด'
-  } finally {
-    loading.value = false
+    slipError.value = error instanceof Error ? error.message : 'เกิดข้อผิดพลาด'
   }
 }
 
-async function processIntake() {
-  if (!selectedOrder.value) return
-
-  saving.value = true
-  saveMessage.value = ''
+async function fetchOrderDetails(orderId) {
+  selectedOrderLoading.value = true
+  selectedOrderError.value = ''
+  selectedOrderDetail.value = null
 
   try {
-    const payload = {
-      note: note.value.trim(),
-      move_excess_to_stock: moveExcessToStock.value,
-      decrement_preorder_pool: decrementPreorderPool.value,
-      items: (selectedOrder.value.items || []).map((item) => ({
-        detail_id: item.detail_id,
-        received_qty: Number(receivedDraft.value[item.detail_id] ?? 0),
-      })),
+    const response = await fetch(`${API_BASE_URL}/orders/${orderId}`)
+    if (!response.ok) {
+      throw new Error(`ไม่สามารถโหลดข้อมูลออเดอร์ได้ (${response.status})`)
     }
+    selectedOrderDetail.value = await response.json()
+    importFeeInput.value = selectedOrderDetail.value.import_fee_total || ''
+  } catch (error) {
+    selectedOrderError.value = error instanceof Error ? error.message : 'เกิดข้อผิดพลาด'
+  } finally {
+    selectedOrderLoading.value = false
+  }
+}
 
-    const res = await fetch(
-      `${API_BASE_URL}/admin/inventory-intake/${selectedOrder.value.order_id}/process`,
+async function openSlip(payment) {
+  selectedSlip.value = payment
+  selectedOrderDetail.value = null
+  importFeeInput.value = ''
+  selectedOrderError.value = ''
+
+  if (payment.Order_type === 'Preorder') {
+    await fetchOrderDetails(payment.order_id)
+  }
+}
+
+function closeSlip() {
+  selectedSlip.value = null
+  selectedOrderDetail.value = null
+  selectedOrderError.value = ''
+  importFeeInput.value = ''
+}
+
+async function saveImportFee() {
+  if (!selectedSlip.value) return
+
+  const fee = Number(importFeeInput.value)
+  if (Number.isNaN(fee) || fee < 0) {
+    selectedOrderError.value = 'กรุณากรอกค่านำเข้าที่เป็นตัวเลข 0 ขึ้นไป'
+    return
+  }
+
+  try {
+    selectedOrderError.value = ''
+    const response = await fetch(
+      `${API_BASE_URL}/orders/${selectedSlip.value.order_id}/import-fee`,
       {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify(payload),
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ import_fee: fee }),
       },
     )
 
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) {
-      throw new Error(data.error || data.message || `บันทึกการรับสินค้าไม่สำเร็จ (${res.status})`)
+    if (!response.ok) {
+      const body = await response.json().catch(() => null)
+      throw new Error(body?.error || 'ไม่สามารถบันทึกค่านำเข้าได้')
     }
 
-    saveMessage.value = `บันทึกสำเร็จ ยอดคืน: ${formatMoney(data.refund_amount || 0)}`
-    await fetchIntakeOrders()
-
-    const refreshedOrder = intakeOrders.value.find(
-      (order) => Number(order.order_id) === Number(data.order_id),
-    )
-    if (refreshedOrder) {
-      setSelectedOrder(refreshedOrder.order_id)
-    }
+    await fetchPayments()
+    await fetchOrderDetails(selectedSlip.value.order_id)
   } catch (error) {
-    saveMessage.value = error instanceof Error ? error.message : 'เกิดข้อผิดพลาด'
-  } finally {
-    saving.value = false
+    selectedOrderError.value = error instanceof Error ? error.message : 'เกิดข้อผิดพลาด'
   }
 }
 
-onMounted(fetchIntakeOrders)
+const countByStatus = (status) =>
+  payments.value.filter((payment) => payment.status === status).length
+
+onMounted(() => {
+  fetchPayments()
+})
 </script>
 
 <template>
-  <div class="intake-page">
-    <header class="page-header">
-      <div>
-        <p class="eyebrow">Admin Inventory Intake</p>
-        <h1>รับสินค้าเข้าและตรวจนับรายการที่ขาด</h1>
-        <p class="subtitle">
-          เลือกออเดอร์พรีออเดอร์ กรอกจำนวนรับจริงทีละชิ้น แล้วให้ระบบคำนวณยอดขาด สต็อกที่เพิ่ม
-          และยอดคืนอัตโนมัติ
-        </p>
+  <div class="admin-support-page">
+    <section class="hero-panel">
+      <div class="hero-copy">
+        <p class="eyebrow">Admin Operations</p>
+        <h1>จัดการสลิปการชำระเงิน</h1>
+        <p>ตรวจสอบ อนุมัติ และบันทึกค่านำเข้าสำหรับออเดอร์พรีออเดอร์ โดยดูหลักฐานการโอนเงิน</p>
+      </div>
+    </section>
+
+    <section class="kpi-grid">
+      <article class="kpi-card">
+        <p class="kpi-label">สลิปรอตรวจสอบ</p>
+        <p class="kpi-value">{{ countByStatus('Pending') }}</p>
+      </article>
+      <article class="kpi-card">
+        <p class="kpi-label">อนุมัติแล้ว</p>
+        <p class="kpi-value">{{ countByStatus('Approved') }}</p>
+      </article>
+      <article class="kpi-card">
+        <p class="kpi-label">ปฏิเสธแล้ว</p>
+        <p class="kpi-value">{{ countByStatus('Rejected') }}</p>
+      </article>
+    </section>
+
+    <section class="panel">
+      <header class="panel-head panel-head--stacked">
+        <div>
+          <h2>จัดการสลิปการชำระเงิน</h2>
+          <p>ตรวจสอบ อนุมัติ และบันทึกค่านำเข้าสำหรับออเดอร์พรีออเดอร์</p>
+        </div>
+        <button class="ghost-btn" type="button" @click="fetchPayments">รีเฟรช</button>
+      </header>
+
+      <div class="filter-row">
+        <button
+          class="filter-btn"
+          :class="{ active: filterStatus === 'all' }"
+          @click="filterStatus = 'all'"
+        >
+          ทั้งหมด
+        </button>
+        <button
+          class="filter-btn"
+          :class="{ active: filterStatus === 'Pending' }"
+          @click="filterStatus = 'Pending'"
+        >
+          รอตรวจสอบ
+        </button>
+        <button
+          class="filter-btn"
+          :class="{ active: filterStatus === 'Approved' }"
+          @click="filterStatus = 'Approved'"
+        >
+          อนุมัติแล้ว
+        </button>
+        <button
+          class="filter-btn"
+          :class="{ active: filterStatus === 'Rejected' }"
+          @click="filterStatus = 'Rejected'"
+        >
+          ปฏิเสธแล้ว
+        </button>
       </div>
 
-      <div class="header-meta">
-        <div class="meta-card">
-          <span class="meta-label">ออเดอร์รอรับ</span>
-          <strong>{{ intakeOrders.length }}</strong>
-        </div>
-        <div class="meta-card">
-          <span class="meta-label">ผู้ใช้งาน</span>
-          <strong>{{ currentUser?.username || 'Admin' }}</strong>
-        </div>
+      <div v-if="slipError" class="state-box state-box--error">{{ slipError }}</div>
+      <p v-if="slipLoading" class="loading-message">กำลังโหลดข้อมูลสลิป...</p>
+
+      <div v-else-if="filteredPayments.length === 0" class="empty-box">
+        ไม่พบรายการสลิปชำระเงินในขณะนี้
       </div>
-    </header>
 
-    <div v-if="loading" class="state-box">กำลังโหลดรายการรับสินค้า...</div>
-    <div v-else-if="errorMessage" class="state-box state-box--error">{{ errorMessage }}</div>
+      <div v-else class="table-scroll">
+        <table class="slip-table">
+          <thead>
+            <tr>
+              <th>รหัสชำระ</th>
+              <th>ออเดอร์</th>
+              <th>ประเภท</th>
+              <th>ยอดเงิน</th>
+              <th>วิธีชำระ</th>
+              <th>วันที่</th>
+              <th>สถานะ</th>
+              <th>หลักฐาน</th>
+              <th>จัดการ</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="payment in filteredPayments" :key="payment.pay_id">
+              <td>#{{ payment.pay_id }}</td>
+              <td>
+                <strong>#{{ payment.order_id }}</strong>
+              </td>
+              <td>
+                <span
+                  :class="
+                    payment.Order_type === 'Preorder'
+                      ? 'status status--pending'
+                      : 'status status--paid'
+                  "
+                >
+                  {{ payment.Order_type === 'Preorder' ? 'Preorder' : 'Ready Stock' }}
+                </span>
+              </td>
+              <td>
+                ฿{{ Number(payment.amount).toLocaleString('th-TH', { minimumFractionDigits: 2 }) }}
+              </td>
+              <td>
+                {{ paymentMethodLabel[payment.payment_method] || payment.payment_method || '-' }}
+              </td>
+              <td>{{ formatDate(payment.Slip_date) }}</td>
+              <td>
+                <span
+                  class="status-pill"
+                  :style="{
+                    color: (statusConfig[payment.status] || {}).color,
+                    background: (statusConfig[payment.status] || {}).bg,
+                  }"
+                >
+                  {{ (statusConfig[payment.status] || {}).text || payment.status }}
+                </span>
+              </td>
+              <td>
+                <button v-if="payment.slip_img" class="slip-view-btn" @click="openSlip(payment)">
+                  ดูสลิป 🖼️
+                </button>
+                <span v-else class="no-slip">ไม่มีไฟล์</span>
+              </td>
+              <td>
+                <div v-if="payment.status === 'Pending'" class="action-btns">
+                  <button
+                    class="btn-approve"
+                    @click="updatePaymentStatus(payment.pay_id, 'Approved')"
+                  >
+                    ✓ อนุมัติ
+                  </button>
+                  <button
+                    class="btn-reject"
+                    @click="updatePaymentStatus(payment.pay_id, 'Rejected')"
+                  >
+                    ✕ ปฏิเสธ
+                  </button>
+                </div>
+                <span v-else class="done-text">ดำเนินการแล้ว</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
 
-    <div v-else class="intake-grid">
-      <section class="panel list-panel">
-        <div class="panel-header">
-          <h2>รายการออเดอร์ที่รอรับ</h2>
-          <button class="ghost-btn" type="button" @click="fetchIntakeOrders">รีเฟรช</button>
-        </div>
-
-        <div v-if="intakeOrders.length === 0" class="empty-box">
-          ยังไม่มีออเดอร์พรีออเดอร์สำหรับตรวจรับ
-        </div>
-
-        <div v-else class="order-list">
-          <button
-            v-for="order in intakeOrders"
-            :key="order.order_id"
-            type="button"
-            :class="['order-card', { active: Number(selectedOrderId) === Number(order.order_id) }]"
-            @click="setSelectedOrder(order.order_id)"
-          >
-            <div class="order-card__top">
-              <strong>#{{ order.order_id }}</strong>
-              <span
-                :class="resolveStatusClass(order.summary?.fully_received ? 'ready' : order.status)"
-              >
-                {{
-                  resolveStatusLabel(order.summary?.fully_received ? 'ready_to_ship' : order.status)
-                }}
-              </span>
-            </div>
-            <div class="order-card__body">
-              <p>{{ order.full_name || order.username || 'ไม่ระบุชื่อ' }}</p>
-              <small>{{ formatDate(order.order_date) }}</small>
-            </div>
-            <div class="order-card__footer">
-              <span>{{ order.summary?.total_items || 0 }} รายการ</span>
-              <span>{{ formatMoney(order.total_amount) }}</span>
-            </div>
-          </button>
-        </div>
-      </section>
-
-      <section class="panel detail-panel">
-        <template v-if="selectedOrder">
-          <div class="panel-header panel-header--stacked">
-            <div>
-              <h2>ตรวจรับออเดอร์ #{{ selectedOrder.order_id }}</h2>
-              <p>
-                ลูกค้า: {{ selectedOrder.full_name || selectedOrder.username || '-' }} ·
-                {{ formatDate(selectedOrder.order_date) }}
-              </p>
-            </div>
-
-            <div class="summary-strip">
-              <div>
-                <span>ยอดสั่ง</span>
-                <strong>{{
-                  formatMoney(selectedSummary?.ordered_amount || selectedOrder.total_amount)
-                }}</strong>
-              </div>
-              <div>
-                <span>ยอดรับจริง</span>
-                <strong>{{ formatMoney(selectedSummary?.received_amount || 0) }}</strong>
-              </div>
-              <div>
-                <span>ยอดคืน</span>
-                <strong>{{ formatMoney(selectedSummary?.missing_amount || 0) }}</strong>
-              </div>
-            </div>
+    <transition name="fade">
+      <div v-if="selectedSlip" class="slip-modal-overlay" @click.self="closeSlip">
+        <div class="slip-modal">
+          <div class="slip-modal-head">
+            <h3>สลิปออเดอร์ #{{ selectedSlip.order_id }}</h3>
+            <button class="close-btn" type="button" @click="closeSlip">✕</button>
           </div>
 
-          <div class="items-table">
-            <div class="items-head">
-              <span>สินค้า</span>
-              <span>สั่ง</span>
-              <span>รับจริง</span>
-              <span>ขาด</span>
-              <span>สถานะ</span>
-            </div>
+          <div class="slip-modal-body">
+            <img :src="resolveSlipUrl(selectedSlip.slip_img)" class="slip-img-full" alt="slip" />
 
-            <div v-for="item in selectedOrder.items" :key="item.detail_id" class="items-row">
-              <div class="product-col">
-                <div class="product-thumb">{{ item.image_url ? '📦' : '🐾' }}</div>
-                <div>
-                  <strong>{{ item.product_name }}</strong>
-                  <p v-if="item.flavor">{{ item.flavor }}</p>
-                  <small>฿{{ Number(item.unit_price || 0).toLocaleString('th-TH') }} / ชิ้น</small>
+            <div v-if="selectedSlip.Order_type === 'Preorder'" class="import-fee-panel">
+              <h4>ค่านำเข้า</h4>
+              <p class="import-fee-note">
+                สำหรับพรีออเดอร์ แอดมินสามารถบันทึกค่านำเข้าเพื่อแจ้งลูกค้าต่อได้
+              </p>
+
+              <div v-if="selectedOrderLoading" class="state-wrap">
+                <p>กำลังโหลดข้อมูลออเดอร์...</p>
+              </div>
+
+              <div v-else>
+                <div v-if="selectedOrderError" class="error-box">{{ selectedOrderError }}</div>
+                <div v-else-if="selectedOrderDetail">
+                  <div class="import-fee-summary">
+                    <p>ยอดรวมสินค้า: {{ formatMoney(selectedOrderDetail.total_amount) }}</p>
+                    <p>
+                      ค่านำเข้าปัจจุบัน:
+                      {{ formatMoney(selectedOrderDetail.import_fee_total || 0) }}
+                    </p>
+                  </div>
+
+                  <div class="form-group">
+                    <label for="import-fee-input">ใส่ค่านำเข้า</label>
+                    <input
+                      id="import-fee-input"
+                      v-model="importFeeInput"
+                      class="form-input"
+                      min="0"
+                      placeholder="0.00"
+                      step="0.01"
+                      type="number"
+                    />
+                  </div>
                 </div>
               </div>
-
-              <div>{{ item.ordered_qty }}</div>
-
-              <div>
-                <input
-                  :value="receivedDraft[item.detail_id] ?? 0"
-                  class="qty-input"
-                  min="0"
-                  type="number"
-                  @input="updateDraft(item.detail_id, $event.target.value)"
-                />
-              </div>
-
-              <div>
-                <template v-if="Number(receivedDraft[item.detail_id] ?? 0) > item.ordered_qty">
-                  เกิน {{ Number(receivedDraft[item.detail_id] ?? 0) - item.ordered_qty }}
-                </template>
-                <template v-else>
-                  {{ Math.max(item.ordered_qty - Number(receivedDraft[item.detail_id] ?? 0), 0) }}
-                </template>
-              </div>
-
-              <div>
-                <span :class="resolveStatusClass(item.arrival_status)">
-                  {{ resolveStatusLabel(item.arrival_status) }}
-                </span>
-              </div>
             </div>
           </div>
 
-          <label class="note-field">
-            หมายเหตุการตรวจรับ
-            <textarea
-              v-model="note"
-              rows="3"
-              placeholder="เช่น ของมาครบยกเว้นรายการ A 2 ชิ้น"
-            ></textarea>
-          </label>
-
-          <div class="transfer-options">
-            <label class="option">
-              <input type="checkbox" v-model="moveExcessToStock" />
-              ถ้ารับมาเกิน ให้ย้ายส่วนเกินเป็นสต็อกพร้อมส่ง
-            </label>
-            <label class="option">
-              <input type="checkbox" v-model="decrementPreorderPool" />
-              เมื่อตรวจรับพรีออเดอร์ ให้ลดจำนวนในรอบพรีออเดอร์อัตโนมัติ
-            </label>
-          </div>
-
-          <div class="action-row">
-            <button class="primary-btn" type="button" :disabled="saving" @click="processIntake">
-              {{ saving ? 'กำลังบันทึก...' : 'บันทึกผลตรวจรับ' }}
+          <div v-if="selectedSlip.status === 'Pending'" class="slip-modal-foot">
+            <button
+              class="btn-approve"
+              type="button"
+              @click="updatePaymentStatus(selectedSlip.pay_id, 'Approved')"
+            >
+              ✓ อนุมัติสลิป
             </button>
-            <p v-if="saveMessage" class="save-message">{{ saveMessage }}</p>
+            <button
+              class="btn-reject"
+              type="button"
+              @click="updatePaymentStatus(selectedSlip.pay_id, 'Rejected')"
+            >
+              ✕ ปฏิเสธ
+            </button>
+            <button
+              v-if="selectedSlip.Order_type === 'Preorder'"
+              class="btn-approve"
+              type="button"
+              @click="saveImportFee"
+            >
+              💰 บันทึกค่านำเข้า
+            </button>
           </div>
-        </template>
-
-        <div v-else class="empty-box empty-box--tall">
-          เลือกรายการออเดอร์ทางซ้ายเพื่อเริ่มตรวจรับสินค้า
+          <div v-else class="slip-modal-foot">
+            <span
+              class="status-pill"
+              :style="{
+                color: (statusConfig[selectedSlip.status] || {}).color,
+                background: (statusConfig[selectedSlip.status] || {}).bg,
+              }"
+            >
+              {{ (statusConfig[selectedSlip.status] || {}).text || selectedSlip.status }}
+            </span>
+            <button
+              v-if="selectedSlip.Order_type === 'Preorder'"
+              class="btn-approve"
+              type="button"
+              @click="saveImportFee"
+            >
+              💰 บันทึกค่านำเข้า
+            </button>
+          </div>
         </div>
-      </section>
-    </div>
+      </div>
+    </transition>
   </div>
 </template>
 
 <style scoped>
-.intake-page {
+.admin-support-page {
   min-height: 100vh;
   padding: 2rem;
   background:
     radial-gradient(circle at top left, rgba(255, 183, 214, 0.25), transparent 28%),
     radial-gradient(circle at top right, rgba(180, 145, 255, 0.18), transparent 26%), #faf7ff;
   color: #2c2440;
+  display: grid;
+  gap: 1rem;
 }
 
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  align-items: end;
-  margin-bottom: 1.5rem;
+.hero-panel,
+.panel,
+.kpi-card,
+.state-box,
+.empty-box,
+.slip-modal {
+  box-shadow: 0 18px 32px rgba(140, 99, 174, 0.08);
+}
+
+.hero-panel {
+  padding: 1.1rem 1.2rem;
+  border-radius: 18px;
+  border: 1px solid rgba(160, 126, 191, 0.14);
+  background:
+    radial-gradient(circle at right top, rgba(255, 147, 184, 0.32), transparent 52%),
+    rgba(255, 255, 255, 0.88);
 }
 
 .eyebrow {
@@ -379,51 +490,97 @@ onMounted(fetchIntakeOrders)
   font-weight: 700;
 }
 
-h1,
-h2,
-p {
-  margin: 0;
+.hero-copy h1,
+.panel-head h2,
+.panel-head h3 {
+  color: #432f61;
+  font-weight: 900;
 }
 
-.subtitle {
-  margin-top: 0.55rem;
+.hero-copy h1 {
+  font-size: clamp(1.4rem, 2vw, 1.9rem);
+}
+
+.hero-copy p {
+  margin-top: 0.45rem;
   color: #6b5a84;
-  max-width: 780px;
   line-height: 1.6;
 }
 
-.header-meta {
-  display: flex;
-  gap: 0.85rem;
-  flex-wrap: wrap;
+.kpi-grid {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
 }
 
-.meta-card {
-  min-width: 140px;
-  padding: 0.9rem 1rem;
-  background: rgba(255, 255, 255, 0.8);
-  border: 1px solid rgba(170, 133, 204, 0.18);
-  border-radius: 18px;
-  box-shadow: 0 18px 32px rgba(140, 99, 174, 0.08);
+.kpi-card {
+  border-radius: 15px;
+  border: 1px solid rgba(160, 126, 191, 0.14);
+  background: rgba(255, 255, 255, 0.88);
+  padding: 0.9rem;
 }
 
-.meta-label {
-  display: block;
-  font-size: 0.78rem;
-  color: #8f7ca8;
-  margin-bottom: 0.3rem;
+.kpi-label {
+  font-size: 0.76rem;
+  color: #8d7aad;
+  font-weight: 700;
 }
 
-.state-box {
-  padding: 1rem 1.1rem;
-  background: #fff;
+.kpi-value {
+  font-size: 1.5rem;
+  color: #432f61;
+  font-weight: 900;
+  margin-top: 0.15rem;
+}
+
+.panel {
   border-radius: 16px;
-  box-shadow: 0 12px 28px rgba(140, 99, 174, 0.08);
+  border: 1px solid rgba(160, 126, 191, 0.14);
+  background: rgba(255, 255, 255, 0.92);
+  padding: 0.95rem;
 }
 
-.state-box--error {
-  color: #b42318;
-  border: 1px solid #fda29b;
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.7rem;
+  align-items: center;
+  margin-bottom: 0.8rem;
+}
+
+.panel-head--stacked {
+  flex-direction: column;
+  align-items: start;
+}
+
+.panel-head p {
+  color: #8d7cad;
+  font-size: 0.8rem;
+  margin-top: 0.25rem;
+}
+
+.ghost-btn,
+.primary-btn,
+.filter-btn,
+.btn-approve,
+.btn-reject,
+.slip-view-btn {
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.ghost-btn {
+  background: #f3ecff;
+  color: #7d4db2;
+  padding: 0.8rem 1.1rem;
+}
+
+.primary-btn {
+  background: linear-gradient(135deg, #a55eea, #ff7eb6);
+  color: #fff;
+  padding: 0.8rem 1.1rem;
 }
 
 .intake-grid {
@@ -432,241 +589,86 @@ p {
   gap: 1rem;
 }
 
-.panel {
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(160, 126, 191, 0.14);
-  border-radius: 22px;
-  box-shadow: 0 20px 36px rgba(140, 99, 174, 0.08);
-  overflow: hidden;
-}
-
-.panel-header {
-  display: flex;
-  justify-content: space-between;
+.order-list {
+  display: grid;
   gap: 0.8rem;
-  align-items: center;
-  padding: 1.1rem 1.2rem;
-  border-bottom: 1px solid rgba(160, 126, 191, 0.12);
 }
 
-.panel-header--stacked {
-  align-items: start;
-  flex-direction: column;
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.85rem;
 }
 
-.panel-header p {
-  color: #7f6c99;
-  margin-top: 0.35rem;
-}
-
-.ghost-btn,
-.primary-btn {
-  border: 0;
-  border-radius: 999px;
-  padding: 0.8rem 1.1rem;
-  cursor: pointer;
-  font-weight: 700;
-}
-
-.ghost-btn {
+.filter-btn {
   background: #f3ecff;
   color: #7d4db2;
+  padding: 0.55rem 0.85rem;
 }
 
-.primary-btn {
+.filter-btn.active {
   background: linear-gradient(135deg, #a55eea, #ff7eb6);
   color: #fff;
 }
 
-.list-panel {
-  min-height: 72vh;
+.table-scroll {
+  overflow-x: auto;
 }
 
-.order-list {
-  display: grid;
-  gap: 0.8rem;
-  padding: 1rem;
-}
-
-.order-card {
+.slip-table {
   width: 100%;
-  text-align: left;
-  border: 1px solid rgba(160, 126, 191, 0.15);
-  background: #fff;
-  border-radius: 18px;
-  padding: 1rem;
-  cursor: pointer;
-  transition:
-    transform 0.2s,
-    box-shadow 0.2s,
-    border-color 0.2s;
+  min-width: 900px;
+  border-collapse: collapse;
 }
 
-.order-card:hover,
-.order-card.active {
-  transform: translateY(-1px);
-  border-color: rgba(165, 94, 234, 0.35);
-  box-shadow: 0 14px 28px rgba(140, 99, 174, 0.12);
-}
-
-.order-card__top,
-.order-card__footer {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.7rem;
-  align-items: center;
-}
-
-.order-card__body {
-  margin: 0.7rem 0;
-}
-
-.order-card__body p {
-  margin-bottom: 0.2rem;
-  font-weight: 700;
-}
-
-.order-card__body small,
-.order-card__footer {
-  color: #87759d;
-}
-
-.detail-panel {
-  padding-bottom: 1rem;
-}
-
-.summary-strip {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.7rem;
-  width: 100%;
-}
-
-.summary-strip > div {
-  padding: 0.85rem 0.95rem;
-  background: linear-gradient(180deg, #faf5ff, #fff);
-  border-radius: 18px;
-  border: 1px solid rgba(160, 126, 191, 0.12);
-}
-
-.summary-strip span {
-  display: block;
-  font-size: 0.75rem;
-  color: #8d7aa7;
-  margin-bottom: 0.25rem;
-}
-
-.items-table {
-  padding: 1rem 1.2rem 0.6rem;
-}
-
-.items-head,
-.items-row {
-  display: grid;
-  grid-template-columns: 1.3fr 80px 110px 80px 110px;
-  gap: 0.75rem;
-  align-items: center;
-}
-
-.items-head {
-  padding-bottom: 0.75rem;
+.slip-table th,
+.slip-table td {
+  padding: 0.7rem;
+  border-bottom: 1px solid #eee7f7;
   font-size: 0.8rem;
-  color: #8d7aa7;
-  font-weight: 700;
+  text-align: left;
+}
+
+.slip-table th {
+  color: #826ea1;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
+  font-size: 0.72rem;
 }
 
-.items-row {
-  padding: 0.85rem 0;
-  border-top: 1px solid rgba(160, 126, 191, 0.12);
-}
-
-.product-col {
-  display: flex;
-  align-items: center;
-  gap: 0.8rem;
-}
-
-.product-thumb {
-  width: 48px;
-  height: 48px;
-  border-radius: 16px;
-  display: grid;
-  place-items: center;
-  background: #f5efff;
-  font-size: 1.1rem;
-}
-
-.product-col strong {
-  display: block;
-}
-
-.product-col p,
-.product-col small {
-  color: #8a78a4;
-}
-
-.qty-input {
-  width: 100%;
-  padding: 0.65rem 0.8rem;
-  border-radius: 14px;
-  border: 1px solid #d8c7ee;
-  background: #fff;
-}
-
-.note-field {
-  display: block;
-  padding: 0 1.2rem 0.8rem;
-  color: #6e5f86;
-}
-
-.note-field textarea {
-  display: block;
-  width: 100%;
-  margin-top: 0.45rem;
-  border-radius: 18px;
-  border: 1px solid #d8c7ee;
-  padding: 0.9rem;
-  resize: vertical;
-  min-height: 100px;
-}
-
-.action-row {
-  display: flex;
-  align-items: center;
-  gap: 0.9rem;
-  padding: 0 1.2rem 1rem;
-  flex-wrap: wrap;
-}
-
-.save-message {
-  color: #7d4db2;
-  font-weight: 700;
-}
-
-.empty-box {
-  padding: 1.4rem;
-  margin: 1rem;
-  border-radius: 18px;
-  background: #fbf8ff;
-  color: #836da0;
-  text-align: center;
-}
-
-.empty-box--tall {
-  min-height: 280px;
-  display: grid;
-  place-items: center;
-}
-
+.status,
+.status-pill,
 .badge {
   display: inline-flex;
   align-items: center;
-  padding: 0.34rem 0.72rem;
   border-radius: 999px;
-  font-size: 0.76rem;
   font-weight: 700;
+}
+
+.status {
+  padding: 0.2rem 0.6rem;
+  font-size: 0.7rem;
+}
+
+.status--pending {
+  background: #ffe7d5;
+  color: #b55a1f;
+}
+
+.status--paid {
+  background: #ddf7ee;
+  color: #277a62;
+}
+
+.status-pill {
+  padding: 3px 12px;
+  font-size: 0.75rem;
+}
+
+.badge {
+  padding: 0.34rem 0.72rem;
+  font-size: 0.76rem;
 }
 
 .badge--pending {
@@ -689,34 +691,160 @@ p {
   color: #b42318;
 }
 
-@media (max-width: 1100px) {
-  .intake-grid {
-    grid-template-columns: 1fr;
-  }
+.slip-view-btn {
+  background: #f8f2ff;
+  border: 1px solid #dbc8f4;
+  color: #6f50a0;
+  padding: 0.4rem 0.8rem;
+}
 
-  .list-panel {
-    min-height: auto;
-  }
+.btn-approve {
+  background: #ecfdf5;
+  color: #059669;
+  border: 1px solid #6ee7b7;
+  padding: 0.45rem 0.8rem;
+}
+
+.btn-reject {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fca5a5;
+  padding: 0.45rem 0.8rem;
+}
+
+.done-text,
+.no-slip {
+  color: #8f7ca8;
+  font-size: 0.78rem;
+}
+
+.action-btns {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.slip-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.slip-modal {
+  background: #fff;
+  border-radius: 20px;
+  width: min(720px, 100%);
+  overflow: hidden;
+}
+
+.slip-modal-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 1rem;
+  border-bottom: 1px solid #eee;
+}
+
+.slip-modal-body {
+  padding: 1rem;
+}
+
+.slip-img-full {
+  width: 100%;
+  max-height: 420px;
+  object-fit: contain;
+  background: #faf8ff;
+  border-radius: 14px;
+}
+
+.slip-modal-foot {
+  padding: 1rem;
+  border-top: 1px solid #eee;
+  display: flex;
+  gap: 0.6rem;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.import-fee-panel {
+  margin-top: 1rem;
+  padding: 1rem;
+  border-top: 1px solid #f3e8ff;
+  background: #faf5ff;
+  border-radius: 12px;
+}
+
+.import-fee-panel h4 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  color: #5b21b6;
+}
+
+.import-fee-note,
+.import-fee-summary {
+  color: #6d28d9;
+}
+
+.import-fee-summary {
+  margin: 0.8rem 0;
+  line-height: 1.5;
+}
+
+.import-fee-summary p {
+  margin: 0;
+}
+
+.form-group {
+  margin-top: 0.8rem;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: #4c1d95;
+  font-weight: 700;
+}
+
+.error-box {
+  margin-top: 0.75rem;
+  color: #b42318;
+  background: #fff1f0;
+  border: 1px solid #fda29b;
+  border-radius: 12px;
+  padding: 0.7rem;
+}
+
+.state-wrap {
+  padding: 0.85rem 0;
+  color: #7d4db2;
+}
+
+.close-btn {
+  background: transparent;
+  border: 0;
+  font-size: 1.25rem;
+  cursor: pointer;
+  color: #7d6b96;
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 
 @media (max-width: 760px) {
-  .page-header {
-    flex-direction: column;
-    align-items: start;
-  }
-
-  .summary-strip,
-  .items-head,
-  .items-row {
-    grid-template-columns: 1fr;
-  }
-
-  .items-head {
-    display: none;
-  }
-
-  .items-row > div {
-    padding: 0.1rem 0;
+  .admin-support-page {
+    padding: 1rem;
   }
 }
 </style>
