@@ -77,6 +77,47 @@ async function ensurePreorderQuantitySoldColumn() {
   return hasPreorderQuantitySoldColumn
 }
 
+function resolveIntakeStatus(orderedQty, receivedQty) {
+  const ordered = Math.max(Number(orderedQty) || 0, 0)
+  const received = Math.max(Number(receivedQty) || 0, 0)
+
+  if (ordered <= 0) {
+    return 'Pending'
+  }
+
+  if (received <= 0) {
+    return 'missing'
+  }
+
+  if (received >= ordered) {
+    return 'ready_to_ship'
+  }
+
+  return 'partially_received'
+}
+
+function normalizeIntakeQuantity(value, fallback = 0) {
+  // Ensure we return a non-negative integer.
+  // Accept numbers or numeric strings (with commas or other chars) and clamp to >= 0.
+  if (value === undefined || value === null || value === '') {
+    return Math.max(0, Number(fallback) || 0)
+  }
+
+  // If it's already a number, coerce and truncate
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(0, Math.trunc(value))
+  }
+
+  // Try parsing strings: remove non-numeric characters except dot and minus
+  const cleaned = String(value).replace(/[^0-9.-]+/g, '')
+  const parsed = Number(cleaned)
+  if (!Number.isFinite(parsed) || Number.isNaN(parsed)) {
+    return Math.max(0, Number(fallback) || 0)
+  }
+
+  return Math.max(0, Math.trunc(parsed))
+}
+
 const uploadStorage = multer.diskStorage({
   destination: (_req, _file, callback) => {
     callback(null, uploadsDir)
@@ -93,7 +134,7 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
 })
 
-app.use(cors({ origin: frontendOrigin }))
+// CORS: allow requests from LOCAL_DEV_ORIGINS and enable credentials for cookies/auth
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -102,6 +143,7 @@ app.use(
       }
       return callback(new Error('Not allowed by CORS'))
     },
+    credentials: true,
   }),
 )
 app.use(express.json({ limit: '2mb' }))
@@ -355,6 +397,67 @@ function parseFlavorList(value) {
 function serializeFlavorList(value) {
   const flavors = parseFlavorList(value)
   return flavors.length > 0 ? JSON.stringify(flavors) : null
+}
+
+function parseFlavorStockMap(value) {
+  if (!value) {
+    return {}
+  }
+
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {}
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed).map(([flavor, qty]) => [
+        String(flavor || '').trim(),
+        Number(qty) || 0,
+      ]),
+    )
+  } catch {
+    return {}
+  }
+}
+
+function getFlavorStockTotal(flavorStockMap) {
+  return Object.values(flavorStockMap || {}).reduce((sum, qty) => sum + (Number(qty) || 0), 0)
+}
+
+async function adjustProductStock(connection, productId, deltaQty, flavor = '') {
+  const [rows] = await connection.query(
+    'SELECT stock_qty, flavor_stock FROM products WHERE prod_id = ? LIMIT 1 FOR UPDATE',
+    [productId],
+  )
+
+  if (rows.length === 0) {
+    return false
+  }
+
+  const currentStock = Number(rows[0].stock_qty) || 0
+  const flavorKey = String(flavor || '').trim()
+  const flavorStockMap = parseFlavorStockMap(rows[0].flavor_stock)
+
+  if (flavorKey && Object.keys(flavorStockMap).length > 0 && flavorKey in flavorStockMap) {
+    const nextFlavorQty = Math.max(0, (Number(flavorStockMap[flavorKey]) || 0) + Number(deltaQty))
+    flavorStockMap[flavorKey] = nextFlavorQty
+    const nextTotal = getFlavorStockTotal(flavorStockMap)
+
+    await connection.query(
+      'UPDATE products SET stock_qty = ?, flavor_stock = ? WHERE prod_id = ?',
+      [nextTotal, JSON.stringify(flavorStockMap), productId],
+    )
+
+    return true
+  }
+
+  const nextStock = Math.max(0, currentStock + Number(deltaQty))
+  await connection.query('UPDATE products SET stock_qty = ? WHERE prod_id = ?', [
+    nextStock,
+    productId,
+  ])
+  return true
 }
 
 async function queryProductsByIds(productIds, connection = pool) {
@@ -2167,10 +2270,12 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     // 6. ลดสต็อกสำหรับสินค้าที่พร้อมส่งเมื่อชำระเงินสำเร็จ
     if (String(orderData.Order_type || '').toLowerCase() === 'ready') {
       for (const detail of detailRows) {
-        await connection.query('UPDATE products SET stock_qty = stock_qty - ? WHERE prod_id = ?', [
-          detail.qty,
+        await adjustProductStock(
+          connection,
           detail.prod_id,
-        ])
+          -Number(detail.qty) || 0,
+          detail.flavor,
+        )
       }
     }
 
@@ -2183,6 +2288,15 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     // 4. อัปเดตสถานะในตาราง orders เป็น 'Pending'
 
     await connection.query(`UPDATE orders SET status = 'Pending' WHERE order_id = ?`, [order_id])
+
+    // 8. ลบรายการในตะกร้าหลังชำระเงินสำเร็จ
+    const [userIdRows] = await connection.query('SELECT user_id FROM orders WHERE order_id = ?', [
+      order_id,
+    ])
+    if (userIdRows.length > 0) {
+      const userId = userIdRows[0].user_id
+      await connection.query('DELETE FROM cart WHERE user_id = ?', [userId])
+    }
 
     await connection.commit()
     res.json({ success: true, message: 'ส่งหลักฐานและบันทึกที่อยู่เรียบร้อยแล้ว' })
@@ -2400,6 +2514,497 @@ app.get('/api/admin/inventory-intake/orders', authenticateToken, requireAdmin, a
 })
 
 // ─────────────────────────────────────────────
+// GET /api/admin/inventory-intake/rounds
+// ดึงรายการรอบพรีออเดอร์ที่รอรับสินค้าเข้า พร้อมสรุปรวมทั้งรอบ
+// ─────────────────────────────────────────────
+app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, async (req, res) => {
+  const statusFilter = String(req.query.status || '').trim()
+
+  try {
+    let roundSql = `
+      SELECT
+        pr.round_id,
+        pr.round_name,
+        pr.status AS round_status,
+        pr.start_date,
+        pr.end_date
+      FROM preorder_rounds pr
+    `
+    const roundParams = []
+
+    if (statusFilter) {
+      roundSql += ' WHERE LOWER(pr.status) = ?'
+      roundParams.push(statusFilter.toLowerCase())
+    }
+
+    roundSql += ' ORDER BY pr.round_id DESC'
+
+    const [roundRows] = await pool.query(roundSql, roundParams)
+
+    let detailSql = `
+      SELECT
+        od.preorder_round_id AS round_id,
+        o.order_id,
+        o.user_id,
+        o.total_amount,
+        o.status AS order_status,
+        o.Order_date AS order_date,
+        a.username,
+        a.full_name,
+        od.detail_id,
+        od.prod_id,
+        od.flavor,
+        od.Price AS unit_price,
+        od.qty AS ordered_qty,
+        COALESCE(od.received_qty, 0) AS received_qty,
+        COALESCE(od.arrival_status, 'Pending') AS arrival_status,
+        p.prod_name AS product_name,
+        p.stock_qty AS stock_qty,
+        COALESCE(
+          (
+            SELECT pi.image_url
+            FROM product_images pi
+            WHERE pi.prod_id = od.prod_id
+            ORDER BY pi.sort_order ASC, pi.img_id ASC
+            LIMIT 1
+          ),
+          ''
+        ) AS image_url
+      FROM order_details od
+      JOIN orders o ON o.order_id = od.order_id
+      LEFT JOIN accounts a ON a.user_id = o.user_id
+      LEFT JOIN products p ON p.prod_id = od.prod_id
+      WHERE LOWER(o.Order_type) = 'preorder'
+        AND od.preorder_round_id IS NOT NULL
+    `
+    const detailParams = []
+
+    if (statusFilter) {
+      detailSql += ' AND LOWER(o.status) = ?'
+      detailParams.push(statusFilter.toLowerCase())
+    }
+
+    detailSql +=
+      ' ORDER BY od.preorder_round_id DESC, o.Order_date DESC, o.order_id DESC, od.detail_id ASC'
+
+    const [rows] = await pool.query(detailSql, detailParams)
+
+    const roundMap = new Map()
+
+    for (const roundRow of roundRows) {
+      const roundId = Number(roundRow.round_id)
+      if (!roundId) continue
+
+      roundMap.set(roundId, {
+        round_id: roundId,
+        round_name: roundRow.round_name || `รอบ #${roundId}`,
+        round_status: roundRow.round_status || 'active',
+        start_date: roundRow.start_date || null,
+        end_date: roundRow.end_date || null,
+        ordersMap: new Map(),
+        itemsMap: new Map(),
+      })
+    }
+
+    for (const row of rows) {
+      const roundId = Number(row.round_id)
+      if (!roundId) continue
+
+      if (!roundMap.has(roundId)) {
+        roundMap.set(roundId, {
+          round_id: roundId,
+          round_name: `รอบ #${roundId}`,
+          round_status: 'active',
+          start_date: null,
+          end_date: null,
+          ordersMap: new Map(),
+          itemsMap: new Map(),
+        })
+      }
+
+      const round = roundMap.get(roundId)
+      const orderId = Number(row.order_id)
+
+      if (!round.ordersMap.has(orderId)) {
+        round.ordersMap.set(orderId, {
+          order_id: orderId,
+          user_id: Number(row.user_id) || null,
+          username: row.username || '',
+          full_name: row.full_name || '',
+          status: row.order_status || 'Pending',
+          order_date: row.order_date,
+          total_amount: Number(row.total_amount) || 0,
+          item_count: 0,
+          total_qty: 0,
+        })
+      }
+
+      const orderedQty = Number(row.ordered_qty) || 0
+      const receivedQty = Number(row.received_qty) || 0
+      const unitPrice = Number(row.unit_price) || 0
+      const lineKey = `${row.prod_id}|${String(row.flavor || '').trim()}|${unitPrice}`
+
+      const order = round.ordersMap.get(orderId)
+      order.item_count += 1
+      order.total_qty += orderedQty
+
+      if (!round.itemsMap.has(lineKey)) {
+        round.itemsMap.set(lineKey, {
+          detail_id: lineKey,
+          line_key: lineKey,
+          prod_id: Number(row.prod_id),
+          product_name: row.product_name || 'สินค้า',
+          flavor: row.flavor || '',
+          ordered_qty: 0,
+          received_qty: 0,
+          arrival_status: 'Pending',
+          stock_qty: Number(row.stock_qty) || 0,
+          unit_price: unitPrice,
+          image_url: row.image_url || '',
+          detail_ids: [],
+          order_ids: new Set(),
+        })
+      }
+
+      const item = round.itemsMap.get(lineKey)
+      item.ordered_qty += orderedQty
+      item.received_qty += receivedQty
+      item.detail_ids.push(Number(row.detail_id))
+      item.order_ids.add(orderId)
+      item.arrival_status = resolveIntakeStatus(item.ordered_qty, item.received_qty)
+    }
+
+    const rounds = Array.from(roundMap.values()).map((round) => {
+      const orders = Array.from(round.ordersMap.values()).sort((a, b) => {
+        const aTime = new Date(a.order_date || 0).getTime()
+        const bTime = new Date(b.order_date || 0).getTime()
+        if (aTime !== bTime) return bTime - aTime
+        return Number(b.order_id) - Number(a.order_id)
+      })
+
+      const items = Array.from(round.itemsMap.values()).map((item) => {
+        const missingQty = Math.max(item.ordered_qty - item.received_qty, 0)
+        const lineTotal = item.ordered_qty * item.unit_price
+        const receivedTotal = item.received_qty * item.unit_price
+
+        return {
+          ...item,
+          order_count: item.order_ids.size,
+          order_ids: Array.from(item.order_ids),
+          missing_qty: missingQty,
+          line_total: lineTotal,
+          received_total: receivedTotal,
+          refund_amount: missingQty * item.unit_price,
+        }
+      })
+
+      const orderedAmount = items.reduce((sum, item) => sum + item.line_total, 0)
+      const receivedAmount = items.reduce((sum, item) => sum + item.received_total, 0)
+      const missingAmount = Math.max(orderedAmount - receivedAmount, 0)
+      const totalQty = items.reduce((sum, item) => sum + (Number(item.ordered_qty) || 0), 0)
+
+      return {
+        round_id: round.round_id,
+        round_name: round.round_name,
+        round_status: round.round_status,
+        start_date: round.start_date,
+        end_date: round.end_date,
+        orders,
+        items,
+        summary: {
+          total_orders: orders.length,
+          total_lines: items.length,
+          total_qty: totalQty,
+          ordered_amount: orderedAmount,
+          received_amount: receivedAmount,
+          missing_amount: missingAmount,
+          fully_received: items.length > 0 && items.every((item) => item.missing_qty === 0),
+        },
+      }
+    })
+
+    res.json(rounds)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ─────────────────────────────────────────────
+// POST /api/admin/inventory-intake/rounds/:round_id/process
+// รับสินค้าเข้าตามรอบพรีออเดอร์ โดยรวมทุกออเดอร์ในรอบเดียวกัน
+// ─────────────────────────────────────────────
+app.post(
+  '/api/admin/inventory-intake/rounds/:round_id/process',
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    const roundId = Number(req.params.round_id)
+    const payload = req.body || {}
+    const receivedItems = Array.isArray(payload.items) ? payload.items : []
+    const note = String(payload.note || '').trim()
+    const moveExcessToStock =
+      payload.move_excess_to_stock !== undefined ? Boolean(payload.move_excess_to_stock) : true
+
+    if (!roundId) {
+      return res.status(400).json({ error: 'round_id is required' })
+    }
+
+    const connection = await pool.getConnection()
+
+    try {
+      await connection.beginTransaction()
+
+      const [roundRows] = await connection.query(
+        `SELECT round_id, round_name, status, start_date, end_date
+         FROM preorder_rounds
+         WHERE round_id = ?
+         LIMIT 1`,
+        [roundId],
+      )
+
+      if (roundRows.length === 0) {
+        await connection.rollback()
+        return res.status(404).json({ error: 'ไม่พบรอบพรีออเดอร์' })
+      }
+
+      const [detailRows] = await connection.query(
+        `SELECT
+           od.detail_id,
+           od.order_id,
+           od.prod_id,
+           od.flavor,
+           od.Price AS unit_price,
+           od.qty AS ordered_qty,
+           COALESCE(od.received_qty, 0) AS received_qty,
+           COALESCE(od.arrival_status, 'Pending') AS arrival_status,
+           o.total_amount,
+           o.status AS order_status,
+           o.Order_date AS order_date,
+           a.username,
+           a.full_name
+         FROM order_details od
+         JOIN orders o ON o.order_id = od.order_id
+         LEFT JOIN accounts a ON a.user_id = o.user_id
+         WHERE od.preorder_round_id = ?
+           AND LOWER(o.Order_type) = 'preorder'
+         ORDER BY o.Order_date ASC, o.order_id ASC, od.detail_id ASC`,
+        [roundId],
+      )
+
+      if (detailRows.length === 0) {
+        await connection.rollback()
+        return res.status(400).json({ error: 'ไม่มีรายการสินค้าในรอบนี้' })
+      }
+
+      const requestMap = new Map(
+        receivedItems.map((item) => [
+          String(item.detail_id || item.line_key || '').trim(),
+          normalizeIntakeQuantity(item.received_qty, 0),
+        ]),
+      )
+
+      const lineGroups = new Map()
+      for (const detail of detailRows) {
+        const unitPrice = Number(detail.unit_price) || 0
+        const lineKey = `${detail.prod_id}|${String(detail.flavor || '').trim()}|${unitPrice}`
+        if (!lineGroups.has(lineKey)) {
+          lineGroups.set(lineKey, [])
+        }
+        lineGroups.get(lineKey).push(detail)
+      }
+
+      const detailResults = []
+      const orderSummaryMap = new Map()
+
+      for (const [lineKey, lineDetails] of lineGroups.entries()) {
+        const requestedReceived = requestMap.get(lineKey) || 0
+        let remaining = requestedReceived
+
+        for (const detail of lineDetails) {
+          const orderedQty = Math.max(0, Number(detail.ordered_qty) || 0)
+          const currentReceived = Math.max(0, Number(detail.received_qty) || 0)
+          const availableToApply = Math.max(orderedQty - currentReceived, 0)
+          const appliedToOrder = Math.min(remaining, availableToApply)
+          const finalReceivedQty = currentReceived + appliedToOrder
+          const excessQty = Math.max(remaining - appliedToOrder, 0)
+          const missingQty = Math.max(orderedQty - finalReceivedQty, 0)
+          const unitPrice = Number(detail.unit_price) || 0
+          const arrivalStatus = resolveIntakeStatus(orderedQty, finalReceivedQty)
+
+          remaining -= appliedToOrder
+
+          await connection.query(
+            `UPDATE order_details
+             SET received_qty = ?, arrival_status = ?
+             WHERE detail_id = ?`,
+            [finalReceivedQty, arrivalStatus, detail.detail_id],
+          )
+
+          if (!orderSummaryMap.has(Number(detail.order_id))) {
+            orderSummaryMap.set(Number(detail.order_id), {
+              order_id: Number(detail.order_id),
+              order_status: detail.order_status || 'Pending',
+              order_date: detail.order_date,
+              username: detail.username || '',
+              full_name: detail.full_name || '',
+              ordered_amount: 0,
+              received_amount: 0,
+              refund_amount: 0,
+              items: [],
+            })
+          }
+
+          const orderSummary = orderSummaryMap.get(Number(detail.order_id))
+          const lineOrderedAmount = orderedQty * unitPrice
+          const lineReceivedAmount = finalReceivedQty * unitPrice
+          const lineRefundAmount = missingQty * unitPrice
+
+          orderSummary.ordered_amount += lineOrderedAmount
+          orderSummary.received_amount += lineReceivedAmount
+          orderSummary.refund_amount += lineRefundAmount
+          orderSummary.items.push({
+            detail_id: Number(detail.detail_id),
+            prod_id: Number(detail.prod_id),
+            flavor: detail.flavor || '',
+            ordered_qty: orderedQty,
+            received_qty: finalReceivedQty,
+            excess_qty: excessQty,
+            missing_qty: missingQty,
+            unit_price: unitPrice,
+            arrival_status: arrivalStatus,
+          })
+
+          detailResults.push({
+            detail_id: Number(detail.detail_id),
+            prod_id: Number(detail.prod_id),
+            ordered_qty: orderedQty,
+            received_qty: finalReceivedQty,
+            excess_qty: excessQty,
+            missing_qty: missingQty,
+            unit_price: unitPrice,
+            refund_amount: lineRefundAmount,
+            arrival_status: arrivalStatus,
+            order_id: Number(detail.order_id),
+          })
+        }
+
+        if (remaining > 0 && moveExcessToStock) {
+          const firstDetail = lineDetails[0]
+          await adjustProductStock(connection, firstDetail.prod_id, remaining, firstDetail.flavor)
+        }
+      }
+
+      const [statusRows] = await connection.query(
+        `SELECT
+           od.order_id,
+           COALESCE(SUM(od.qty * od.Price), 0) AS ordered_amount,
+           COALESCE(SUM(COALESCE(od.received_qty, 0) * od.Price), 0) AS received_amount,
+           COALESCE(SUM((od.qty - COALESCE(od.received_qty, 0)) * od.Price), 0) AS refund_amount,
+           SUM(CASE WHEN COALESCE(od.received_qty, 0) = 0 THEN 1 ELSE 0 END) AS missing_items,
+           SUM(CASE WHEN COALESCE(od.received_qty, 0) > 0 AND COALESCE(od.received_qty, 0) < od.qty THEN 1 ELSE 0 END) AS partial_items,
+           SUM(CASE WHEN COALESCE(od.received_qty, 0) >= od.qty THEN 1 ELSE 0 END) AS completed_items,
+           COUNT(*) AS total_items
+         FROM order_details od
+         WHERE od.preorder_round_id = ?
+         GROUP BY od.order_id`,
+        [roundId],
+      )
+
+      for (const row of statusRows) {
+        const fullReceived = Number(row.completed_items) === Number(row.total_items)
+        const allMissing = Number(row.missing_items) === Number(row.total_items)
+        const newStatus = fullReceived
+          ? 'Ready_to_Ship'
+          : allMissing
+            ? 'Missing'
+            : 'Partially_Received'
+
+        await connection.query(
+          'UPDATE orders SET total_amount = ?, status = ? WHERE order_id = ?',
+          [
+            Math.max(Number(row.ordered_amount) - Number(row.refund_amount) + 0, 0),
+            newStatus,
+            row.order_id,
+          ],
+        )
+      }
+
+      for (const [orderId, summary] of orderSummaryMap.entries()) {
+        const newStatus =
+          summary.items.length > 0 && summary.items.every((item) => item.missing_qty === 0)
+            ? 'Ready_to_Ship'
+            : summary.items.every((item) => item.received_qty === 0)
+              ? 'Missing'
+              : 'Partially_Received'
+
+        const [sessionResult] = await connection.query(
+          `INSERT INTO inventory_intake_sessions
+           (order_id, admin_user_id, expected_amount, received_amount, refund_amount, status, note)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            orderId,
+            req.user?.id || null,
+            summary.ordered_amount,
+            summary.received_amount,
+            summary.refund_amount,
+            newStatus,
+            note ? `ROUND #${roundId}${note ? ` · ${note}` : ''}` : `ROUND #${roundId}`,
+          ],
+        )
+
+        for (const item of summary.items) {
+          await connection.query(
+            `INSERT INTO inventory_intake_session_items
+             (intake_id, detail_id, prod_id, ordered_qty, received_qty, excess_qty, missing_qty, unit_price, refund_amount, arrival_status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              sessionResult.insertId,
+              item.detail_id,
+              item.prod_id,
+              item.ordered_qty,
+              item.received_qty,
+              item.excess_qty,
+              item.missing_qty,
+              item.unit_price,
+              item.missing_qty * item.unit_price,
+              item.arrival_status,
+            ],
+          )
+        }
+      }
+
+      await connection.commit()
+
+      const orderedAmount = detailResults.reduce(
+        (sum, item) => sum + item.ordered_qty * item.unit_price,
+        0,
+      )
+      const receivedAmount = detailResults.reduce(
+        (sum, item) => sum + item.received_qty * item.unit_price,
+        0,
+      )
+      const refundAmount = detailResults.reduce((sum, item) => sum + item.refund_amount, 0)
+
+      res.json({
+        success: true,
+        round_id: roundId,
+        order_count: orderSummaryMap.size,
+        ordered_amount: orderedAmount,
+        received_amount: receivedAmount,
+        refund_amount: refundAmount,
+        items: detailResults,
+      })
+    } catch (error) {
+      await connection.rollback()
+      console.error('[POST /api/admin/inventory-intake/rounds/:round_id/process]', error)
+      res.status(500).json({ error: error.message })
+    } finally {
+      connection.release()
+    }
+  },
+)
+
+// ─────────────────────────────────────────────
 // POST /api/admin/inventory-intake/:order_id/process
 // รับจำนวนสินค้าจริง, อัปเดตสต็อก, ลดยอดขาด และบันทึกผลตรวจรับ
 // ─────────────────────────────────────────────
@@ -2517,57 +3122,23 @@ app.post(
         )
 
         // Handle inventory movements:
-        // - For Preorder orders: decrement preorder_round_products.quantity_available when configured
-        // - For Ready orders: add appliedToOrder back into products.stock_qty (receive into warehouse)
+        // - Preorder orders: no pool decrement (preorder is fulfilled after payment/round close)
+        // - Ready orders: add appliedToOrder back into products.stock_qty (receive into warehouse)
         // - Excess (beyond ordered) can be optionally added to products.stock_qty
         const orderType = String(order.Order_type || '').toLowerCase()
 
         if (orderType === 'preorder') {
-          if (decrementPreorderPool && appliedToOrder > 0) {
-            // Try to decrement preorder pool for this product (if configured)
-            try {
-              const [prpRows] = await connection.query(
-                'SELECT link_id, quantity_available FROM preorder_round_products WHERE prod_id = ? LIMIT 1 FOR UPDATE',
-                [detail.prod_id],
-              )
-              if (prpRows.length > 0) {
-                const currentAvail = Number(prpRows[0].quantity_available) || 0
-                const newAvail = Math.max(0, currentAvail - appliedToOrder)
-                await connection.query(
-                  'UPDATE preorder_round_products SET quantity_available = ? WHERE link_id = ?',
-                  [newAvail, prpRows[0].link_id],
-                )
-              }
-            } catch (err) {
-              // Non-fatal — continue processing but log
-              console.warn(
-                'Failed to decrement preorder pool for prod_id',
-                detail.prod_id,
-                err.message,
-              )
-            }
-          }
-
           // For preorder, do not add appliedToOrder into products.stock_qty (it's allocated to orders)
           if (excessQty > 0 && moveExcessToStock) {
-            await connection.query(
-              'UPDATE products SET stock_qty = stock_qty + ? WHERE prod_id = ?',
-              [excessQty, detail.prod_id],
-            )
+            await adjustProductStock(connection, detail.prod_id, excessQty, detail.flavor)
           }
         } else {
           // Ready-to-ship orders: receiving increases product stock by applied amount
           if (appliedToOrder > 0) {
-            await connection.query(
-              'UPDATE products SET stock_qty = stock_qty + ? WHERE prod_id = ?',
-              [appliedToOrder, detail.prod_id],
-            )
+            await adjustProductStock(connection, detail.prod_id, appliedToOrder, detail.flavor)
           }
           if (excessQty > 0 && moveExcessToStock) {
-            await connection.query(
-              'UPDATE products SET stock_qty = stock_qty + ? WHERE prod_id = ?',
-              [excessQty, detail.prod_id],
-            )
+            await adjustProductStock(connection, detail.prod_id, excessQty, detail.flavor)
           }
         }
 
@@ -2851,6 +3422,92 @@ app.get('/api/admin/user-stats', authenticateToken, requireAdmin, async (_req, r
       totalAdmins,
       totalAccounts: totalUsers + totalAdmins,
     })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ─────────────────────────────────────────────
+// GET /api/admin/orders
+// ดึงรายการออเดอร์ทั้งหมดสำหรับแอดมิน
+// ─────────────────────────────────────────────
+app.get('/api/admin/orders', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const searchQuery = String(req.query.search || '').trim()
+    const statusFilter = String(req.query.status || '').trim()
+    const typeFilter = String(req.query.type || '')
+      .trim()
+      .toLowerCase()
+
+    let query = `
+      SELECT
+        o.order_id,
+        o.user_id,
+        o.total_amount,
+        o.status,
+        o.deadline,
+        o.Order_type,
+        o.Order_date,
+        a.username,
+        a.full_name,
+        COUNT(od.detail_id) AS item_count,
+        COALESCE(SUM(od.qty), 0) AS total_qty
+      FROM orders o
+      LEFT JOIN accounts a ON o.user_id = a.user_id
+      LEFT JOIN order_details od ON od.order_id = o.order_id
+      WHERE 1=1
+    `
+
+    const params = []
+
+    if (searchQuery) {
+      const searchPattern = `%${searchQuery}%`
+      query += ' AND (CAST(o.order_id AS CHAR) LIKE ? OR a.username LIKE ? OR a.full_name LIKE ?)'
+      params.push(searchPattern, searchPattern, searchPattern)
+    }
+
+    if (statusFilter) {
+      query += ' AND LOWER(o.status) = ?'
+      params.push(statusFilter.toLowerCase())
+    }
+
+    if (typeFilter === 'preorder') {
+      query += " AND LOWER(o.Order_type) = 'preorder'"
+    } else if (typeFilter === 'ready') {
+      query += " AND LOWER(o.Order_type) = 'ready'"
+    }
+
+    query += `
+      GROUP BY
+        o.order_id,
+        o.user_id,
+        o.total_amount,
+        o.status,
+        o.deadline,
+        o.Order_type,
+        o.Order_date,
+        a.username,
+        a.full_name
+      ORDER BY o.Order_date DESC, o.order_id DESC
+    `
+
+    const [rows] = await pool.query(query, params)
+
+    res.json(
+      rows.map((row) => ({
+        order_id: Number(row.order_id),
+        user_id: Number(row.user_id) || null,
+        username: row.username || '',
+        full_name: row.full_name || '',
+        total_amount: Number(row.total_amount) || 0,
+        status: row.status || 'Pending',
+        deadline: row.deadline || null,
+        Order_type: row.Order_type || 'Ready',
+        Order_date: row.Order_date || null,
+        item_count: Number(row.item_count) || 0,
+        total_qty: Number(row.total_qty) || 0,
+      })),
+    )
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
