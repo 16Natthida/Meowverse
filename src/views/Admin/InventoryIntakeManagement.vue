@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useAuth } from '../../composables/useAuth'
+import translateError from '../../utils/translateError'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 const { getUser } = useAuth()
@@ -16,12 +17,11 @@ const intakeMessage = ref('')
 const intakeNote = ref('')
 const receivedDraft = ref({})
 const moveExcessToStock = ref(true)
-const decrementPreorderPool = ref(true)
 
 const selectedIntakeOrder = computed(() => {
   return (
     intakeOrders.value.find(
-      (order) => Number(order.order_id) === Number(selectedIntakeOrderId.value),
+      (order) => Number(order.round_id) === Number(selectedIntakeOrderId.value),
     ) || null
   )
 })
@@ -79,7 +79,7 @@ function setSelectedIntakeOrder(orderId) {
   intakeMessage.value = ''
   intakeNote.value = ''
 
-  const order = intakeOrders.value.find((item) => Number(item.order_id) === Number(orderId))
+  const order = intakeOrders.value.find((item) => Number(item.round_id) === Number(orderId))
   const draft = {}
 
   for (const item of order?.items || []) {
@@ -87,6 +87,13 @@ function setSelectedIntakeOrder(orderId) {
   }
 
   receivedDraft.value = draft
+}
+
+function clearSelectedIntakeOrder() {
+  selectedIntakeOrderId.value = null
+  intakeMessage.value = ''
+  intakeNote.value = ''
+  receivedDraft.value = {}
 }
 
 function updateDraft(detailId, rawValue) {
@@ -97,12 +104,21 @@ function updateDraft(detailId, rawValue) {
   }
 }
 
+const itemsNeedingAttention = computed(() => {
+  if (!selectedIntakeOrder.value) return []
+  return selectedIntakeOrder.value.items.filter((item) => {
+    const received = Number(receivedDraft.value[item.detail_id] ?? 0)
+    const ordered = Number(item.ordered_qty)
+    return received < ordered
+  })
+})
+
 async function fetchIntakeOrders() {
   intakeLoading.value = true
   intakeError.value = ''
 
   try {
-    const response = await fetch(`${API_BASE_URL}/admin/inventory-intake/orders`, {
+    const response = await fetch(`${API_BASE_URL}/admin/inventory-intake/rounds?status=closed`, {
       headers: authHeaders(),
     })
 
@@ -112,11 +128,14 @@ async function fetchIntakeOrders() {
 
     intakeOrders.value = await response.json()
 
-    if (!selectedIntakeOrderId.value && intakeOrders.value.length > 0) {
-      setSelectedIntakeOrder(intakeOrders.value[0].order_id)
+    const stillExists = intakeOrders.value.some(
+      (order) => Number(order.round_id) === Number(selectedIntakeOrderId.value),
+    )
+    if (!stillExists) {
+      clearSelectedIntakeOrder()
     }
   } catch (error) {
-    intakeError.value = error instanceof Error ? error.message : 'เกิดข้อผิดพลาด'
+    intakeError.value = translateError(error)
   } finally {
     intakeLoading.value = false
   }
@@ -132,7 +151,6 @@ async function processIntake() {
     const payload = {
       note: intakeNote.value.trim(),
       move_excess_to_stock: moveExcessToStock.value,
-      decrement_preorder_pool: decrementPreorderPool.value,
       items: (selectedIntakeOrder.value.items || []).map((item) => ({
         detail_id: item.detail_id,
         received_qty: Number(receivedDraft.value[item.detail_id] ?? 0),
@@ -140,7 +158,7 @@ async function processIntake() {
     }
 
     const response = await fetch(
-      `${API_BASE_URL}/admin/inventory-intake/${selectedIntakeOrder.value.order_id}/process`,
+      `${API_BASE_URL}/admin/inventory-intake/rounds/${selectedIntakeOrder.value.round_id}/process`,
       {
         method: 'POST',
         headers: authHeaders(),
@@ -159,13 +177,13 @@ async function processIntake() {
     await fetchIntakeOrders()
 
     const refreshedOrder = intakeOrders.value.find(
-      (order) => Number(order.order_id) === Number(data.order_id),
+      (order) => Number(order.round_id) === Number(data.round_id),
     )
     if (refreshedOrder) {
-      setSelectedIntakeOrder(refreshedOrder.order_id)
+      setSelectedIntakeOrder(refreshedOrder.round_id)
     }
   } catch (error) {
-    intakeMessage.value = error instanceof Error ? error.message : 'เกิดข้อผิดพลาด'
+    intakeMessage.value = translateError(error)
   } finally {
     savingIntake.value = false
   }
@@ -181,14 +199,16 @@ onMounted(() => {
     <section class="hero-panel">
       <div class="hero-copy">
         <p class="eyebrow">Admin Operations</p>
-        <h1>รับสินค้าเข้าและตรวจนับรายการที่ขาด</h1>
-        <p>เลือกออเดอร์พรีออเดอร์และกรอกจำนวนรับจริงทีละรายการ ระบบจะคำนวณรายการที่ขาดอัตโนมัติ</p>
+        <h1>รับสินค้าเข้าตามรอบพรีออเดอร์</h1>
+        <p>
+          เลือก “รอบ” แล้วกรอกจำนวนรับจริงรวมทั้งรอบ ระบบจะคำนวณสินค้ารวมและรายการที่ขาดอัตโนมัติ
+        </p>
       </div>
     </section>
 
     <section class="kpi-grid">
       <article class="kpi-card">
-        <p class="kpi-label">ออเดอร์รอรับ</p>
+        <p class="kpi-label">รอบรอรับ</p>
         <p class="kpi-value">{{ intakeOrders.length }}</p>
       </article>
     </section>
@@ -196,8 +216,8 @@ onMounted(() => {
     <section class="panel">
       <header class="panel-head">
         <div>
-          <h2>รับสินค้าเข้าและตรวจนับรายการที่ขาด</h2>
-          <p>เลือกออเดอร์พรีออเดอร์และกรอกจำนวนรับจริงทีละรายการ</p>
+          <h2>รับสินค้าเข้าตามรอบและตรวจนับสินค้ารวม</h2>
+          <p>เลือก “รอบพรีออเดอร์” แล้วกรอกจำนวนรับจริงแบบรวมทั้งรอบ</p>
         </div>
         <button class="ghost-btn" type="button" @click="fetchIntakeOrders">รีเฟรช</button>
       </header>
@@ -208,41 +228,45 @@ onMounted(() => {
       <div v-else class="intake-grid">
         <aside class="order-list-panel">
           <div v-if="intakeOrders.length === 0" class="empty-box">
-            ยังไม่มีออเดอร์พรีออเดอร์สำหรับตรวจรับ
+            ยังไม่มีรอบพรีออเดอร์สำหรับตรวจรับ
           </div>
 
           <div v-else class="order-list">
             <button
               v-for="order in intakeOrders"
-              :key="order.order_id"
+              :key="order.round_id"
               type="button"
               :class="[
                 'order-card',
-                { active: Number(selectedIntakeOrderId) === Number(order.order_id) },
+                { active: Number(selectedIntakeOrderId) === Number(order.round_id) },
               ]"
-              @click="setSelectedIntakeOrder(order.order_id)"
+              @click="setSelectedIntakeOrder(order.round_id)"
             >
               <div class="order-card__top">
-                <strong>#{{ order.order_id }}</strong>
+                <strong>รอบ #{{ order.round_id }}</strong>
                 <span
                   :class="
-                    resolveIntakeStatusClass(order.summary?.fully_received ? 'ready' : order.status)
+                    resolveIntakeStatusClass(
+                      order.summary?.fully_received ? 'ready' : order.round_status || order.status,
+                    )
                   "
                 >
                   {{
                     resolveIntakeStatusLabel(
-                      order.summary?.fully_received ? 'ready_to_ship' : order.status,
+                      order.summary?.fully_received
+                        ? 'ready_to_ship'
+                        : order.round_status || order.status,
                     )
                   }}
                 </span>
               </div>
               <div class="order-card__body">
-                <p>{{ order.full_name || order.username || 'ไม่ระบุชื่อ' }}</p>
-                <small>{{ formatDate(order.order_date) }}</small>
+                <p>{{ order.round_name || `รอบ #${order.round_id}` }}</p>
+                <small>{{ formatDate(order.start_date || order.end_date) }}</small>
               </div>
               <div class="order-card__footer">
-                <span>{{ order.summary?.total_items || 0 }} รายการ</span>
-                <span>{{ formatMoney(order.total_amount) }}</span>
+                <span>{{ order.summary?.total_qty || 0 }} ชิ้น</span>
+                <span>{{ order.summary?.total_orders || 0 }} ออเดอร์</span>
               </div>
             </button>
           </div>
@@ -252,22 +276,18 @@ onMounted(() => {
           <template v-if="selectedIntakeOrder">
             <div class="panel-head panel-head--stacked">
               <div>
-                <h3>ตรวจรับออเดอร์ #{{ selectedIntakeOrder.order_id }}</h3>
+                <h3>ตรวจรับรอบ #{{ selectedIntakeOrder.round_id }}</h3>
                 <p>
-                  ลูกค้า:
-                  {{ selectedIntakeOrder.full_name || selectedIntakeOrder.username || '-' }} ·
-                  {{ formatDate(selectedIntakeOrder.order_date) }}
+                  {{ selectedIntakeOrder.round_name || `รอบ #${selectedIntakeOrder.round_id}` }} ·
+                  {{ selectedIntakeSummary?.total_orders || 0 }} ออเดอร์ ·
+                  {{ selectedIntakeSummary?.total_qty || 0 }} ชิ้น
                 </p>
               </div>
 
               <div class="summary-strip">
                 <div>
-                  <span>ยอดสั่ง</span>
-                  <strong>{{
-                    formatMoney(
-                      selectedIntakeSummary?.ordered_amount || selectedIntakeOrder.total_amount,
-                    )
-                  }}</strong>
+                  <span>ยอดรวมในรอบ</span>
+                  <strong>{{ formatMoney(selectedIntakeSummary?.ordered_amount || 0) }}</strong>
                 </div>
                 <div>
                   <span>ยอดรับจริง</span>
@@ -283,22 +303,22 @@ onMounted(() => {
             <div class="items-table">
               <div class="items-head">
                 <span>สินค้า</span>
-                <span>สั่ง</span>
+                <span>รวมสั่ง</span>
                 <span>รับจริง</span>
                 <span>ขาด</span>
                 <span>สถานะ</span>
               </div>
 
-              <div
-                v-for="item in selectedIntakeOrder.items"
-                :key="item.detail_id"
-                class="items-row"
-              >
+              <div v-if="itemsNeedingAttention.length > 0" class="items-section-header">
+                <p class="section-title">⏳ รายการที่ยังขาด</p>
+              </div>
+
+              <div v-for="item in itemsNeedingAttention" :key="item.detail_id" class="items-row">
                 <div class="product-col">
                   <div class="product-thumb">{{ item.image_url ? '📦' : '🐾' }}</div>
                   <div>
                     <strong>{{ item.product_name }}</strong>
-                    <p v-if="item.flavor">{{ item.flavor }}</p>
+                    <p v-if="item.flavor">รสชาติ: {{ item.flavor }}</p>
                     <small
                       >฿{{ Number(item.unit_price || 0).toLocaleString('th-TH') }} / ชิ้น</small
                     >
@@ -332,6 +352,46 @@ onMounted(() => {
                   </span>
                 </div>
               </div>
+
+              <div
+                v-if="itemsNeedingAttention.length === 0 && selectedIntakeOrder.items.length === 0"
+                class="empty-items-box"
+              >
+                รอบนี้ยังไม่มีออเดอร์ให้ตรวจรับ
+              </div>
+
+              <template v-if="selectedIntakeOrder.items.length - itemsNeedingAttention.length > 0">
+                <div class="items-section-header">
+                  <p class="section-title">✅ เรียบร้อยแล้ว</p>
+                </div>
+
+                <div
+                  v-for="item in selectedIntakeOrder.items"
+                  :key="'done-' + item.detail_id"
+                  v-show="Number(receivedDraft[item.detail_id] ?? 0) >= item.ordered_qty"
+                  class="items-row items-row--completed"
+                >
+                  <div class="product-col">
+                    <div class="product-thumb">{{ item.image_url ? '📦' : '🐾' }}</div>
+                    <div>
+                      <strong>{{ item.product_name }}</strong>
+                      <p v-if="item.flavor">รสชาติ: {{ item.flavor }}</p>
+                      <small
+                        >฿{{ Number(item.unit_price || 0).toLocaleString('th-TH') }} / ชิ้น</small
+                      >
+                    </div>
+                  </div>
+
+                  <div>{{ item.ordered_qty }}</div>
+                  <div>{{ receivedDraft[item.detail_id] ?? 0 }}</div>
+                  <div>0</div>
+                  <div>
+                    <span :class="resolveIntakeStatusClass('ready')">
+                      {{ resolveIntakeStatusLabel('ready_to_ship') }}
+                    </span>
+                  </div>
+                </div>
+              </template>
             </div>
 
             <label class="note-field">
@@ -348,10 +408,6 @@ onMounted(() => {
                 <input type="checkbox" v-model="moveExcessToStock" />
                 ถ้ารับมาเกิน ให้ย้ายส่วนเกินเป็นสต็อกพร้อมส่ง
               </label>
-              <label class="option">
-                <input type="checkbox" v-model="decrementPreorderPool" />
-                เมื่อตรวจรับพรีออเดอร์ ให้ลดจำนวนในรอบพรีออเดอร์อัตโนมัติ
-              </label>
             </div>
 
             <div class="action-row">
@@ -367,9 +423,7 @@ onMounted(() => {
             </div>
           </template>
 
-          <div v-else class="empty-box empty-box--tall">
-            เลือกรายการออเดอร์ทางซ้ายเพื่อเริ่มตรวจรับสินค้า
-          </div>
+          <div v-else class="empty-box empty-box--tall">เลือกรอบทางซ้ายเพื่อเริ่มตรวจรับสินค้า</div>
         </main>
       </div>
     </section>
@@ -732,6 +786,31 @@ onMounted(() => {
 .badge--missing {
   background: #fde2e1;
   color: #b42318;
+}
+
+.items-section-header {
+  padding: 1rem 0 0.5rem;
+  border-top: 2px solid rgba(160, 126, 191, 0.2);
+  margin-top: 1rem;
+}
+
+.section-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #432f61;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.items-row--completed {
+  opacity: 0.6;
+  background: rgba(230, 245, 240, 0.4);
+}
+
+.items-row--completed .product-col {
+  opacity: 0.75;
 }
 
 @media (max-width: 900px) {

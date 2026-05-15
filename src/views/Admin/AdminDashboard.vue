@@ -73,7 +73,7 @@ function handleMenuClick(itemName) {
   activeMenu.value = itemName
   const routeMap = {
     Dashboard: '/admin/home',
-    Orders: '/admin/home',
+    Orders: '/admin/orders',
     Products: '/admin/products',
     'Inventory Intake': '/admin/inventory-intake',
     Categories: '/admin/products',

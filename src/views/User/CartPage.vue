@@ -15,6 +15,7 @@ const notice = ref({ msg: '', type: '' })
 const updatingId = ref(null)
 const deletingId = ref(null)
 const activeCartView = ref('ready')
+const isCheckingOut = ref(false)
 
 function resolveUserId(user) {
   return user?.id ?? user?.user_id ?? null
@@ -36,22 +37,35 @@ const fetchCart = async () => {
     const data = await res.json()
     // รองรับทั้ง array และ { items: [...] }
     const arr = Array.isArray(data) ? data : (data.items ?? data.data ?? [])
-    cartItems.value = arr.map((item) => ({
-      cart_id: item.cart_id,
-      user_id: item.user_id,
-      prod_id: item.prod_id,
-      pre_item_id: item.pre_item_id,
-      qty: Number(item.qty) || 1,
-      // product info joined from backend
-      name: item.name ?? item.prod_name ?? item.product_name ?? 'สินค้า',
-      price: Number(item.price ?? item.basePrice ?? item.unit_price ?? 0),
-      image: item.image ?? item.imageUrl ?? item.imageUrls?.[0] ?? item.images?.[0] ?? null,
-      flavor: item.flavor ?? '',
-      isPreorder: Boolean(item.pre_item_id) || item.item_type === 'preorder',
-      stock: Number(item.stock ?? 999),
-      preorderRemaining:
-        item.preorder_remaining == null ? null : Math.max(0, Number(item.preorder_remaining) || 0),
-    }))
+    cartItems.value = arr
+      // ตัดข้อมูลเสียหายออก (เช่น ข้อความเตือนหรือข้อมูลผิด)
+      .filter((item) => {
+        const itemQty = Number(item.qty) || 0
+        const itemName = String(item.name ?? item.prod_name ?? '')
+        // ตัดข้อมูลเสียหาย: qty=0 หรือ name มีคำเตือน
+        if (itemQty === 0 || itemName.includes('เตือน') || itemName.includes('สะเละ')) {
+          return false
+        }
+        return true
+      })
+      .map((item) => ({
+        cart_id: item.cart_id,
+        user_id: item.user_id,
+        prod_id: item.prod_id,
+        pre_item_id: item.pre_item_id,
+        qty: Number(item.qty) || 1,
+        // product info joined from backend
+        name: item.name ?? item.prod_name ?? item.product_name ?? 'สินค้า',
+        price: Number(item.price ?? item.basePrice ?? item.unit_price ?? 0),
+        image: item.image ?? item.imageUrl ?? item.imageUrls?.[0] ?? item.images?.[0] ?? null,
+        flavor: item.flavor ?? '',
+        isPreorder: Boolean(item.pre_item_id) || item.item_type === 'preorder',
+        stock: Number(item.stock ?? 999),
+        preorderRemaining:
+          item.preorder_remaining == null
+            ? null
+            : Math.max(0, Number(item.preorder_remaining) || 0),
+      }))
 
     const hasReadyItems = cartItems.value.some((item) => !item.isPreorder)
     const hasPreorderItems = cartItems.value.some((item) => item.isPreorder)
@@ -70,7 +84,7 @@ const fetchCart = async () => {
 // ── UPDATE QTY ──
 const updateQty = async (item, newQty) => {
   if (newQty < 1) return
-  if (newQty > item.stock) {
+  if (!item.isPreorder && newQty > item.stock) {
     showNotice(`สต็อกมีเพียง ${item.stock} ชิ้น`, 'warn')
     return
   }
@@ -170,10 +184,12 @@ const checkout = async () => {
     return
   }
 
-  if (cartItems.value.length === 0) {
-    showNotice('ตะกร้าสินค้าว่างเปล่า', 'error')
+  if (activeItems.value.length === 0) {
+    showNotice('กรุณาเลือกสินค้าที่ต้องการชำระเงิน', 'error')
     return
   }
+
+  isCheckingOut.value = true
 
   try {
     // ส่งเฉพาะรายการของแท็บที่กำลังเลือก (frontend จะส่ง subset ให้ backend)
@@ -205,12 +221,45 @@ const checkout = async () => {
 
     showNotice('สร้างออเดอร์สำเร็จ! กำลังไปหน้ากรอกข้อมูลจัดส่ง...', 'success')
 
-    // ไปหน้าแนบสลิป/กรอกข้อมูลการจัดส่งเสมอ
+    // Redirect: if order contains preorder items, go to preorder payment page,
+    // otherwise go to regular order summary (where payment/slip is attached)
+    const newOrderId = data.order_id || data.order_ids?.[0]
+    const newOrderType = String(data.order_type || data.orderType || '').toLowerCase()
+
     setTimeout(() => {
-      router.push(`/order/${data.order_id || data.order_ids?.[0]}`)
+      if (newOrderType === 'preorder') {
+        router.push(`/preorder-payment/${newOrderId}`)
+      } else {
+        // Ready stock: go to dedicated ready payment page
+        router.push(`/ready-payment/${newOrderId}`)
+      }
     }, 1500)
   } catch (err) {
-    showNotice(err.message, 'error')
+    console.error('[checkout] Error:', err)
+    const msg = String(err?.message || err || '')
+
+    // ถ้าเป็นข้อความสต็อกจาก backend ให้แสดงข้อความที่เป็นมิตรกว่า
+    try {
+      // Use a more forgiving regex to match backend stock messages
+      // Avoid Unicode code-point escapes which caused "Invalid escape" in some browsers
+      const stockRegex = /สินค้า\s*"?([^"]+?)"?\s*มีสต.?อกไม่เพียงพอ\s*\(?เหลือ\s*(\d+)\s*ชิ้น\)?/i
+      const m = msg.match(stockRegex)
+      if (m) {
+        const prod = m[1].trim()
+        const remain = Number(m[2])
+        showNotice(`สต็อกไม่เพียงพอ: ${prod} (เหลือ ${remain} ชิ้น)`, 'error')
+      } else if (/สต็อก|หมดสต็อก|ไม่เพียงพอ/i.test(msg)) {
+        // generic stock-related fallback
+        showNotice('มีสินค้าในตะกร้าที่สต็อกไม่เพียงพอ โปรดปรับจำนวนหรือเอาออก', 'error')
+      } else {
+        showNotice(`เกิดข้อผิดพลาด: ${msg}`, 'error')
+      }
+    } catch (parseErr) {
+      console.error('Error parsing checkout error message', parseErr)
+      showNotice('เกิดข้อผิดพลาดระหว่างสร้างออเดอร์', 'error')
+    }
+  } finally {
+    isCheckingOut.value = false
   }
 }
 
@@ -495,10 +544,6 @@ onMounted(fetchCart)
                   <p class="item-name">{{ item.name }}</p>
                   <p v-if="item.flavor" class="item-flavor">รสชาติ: {{ item.flavor }}</p>
                   <p class="item-price-unit">฿{{ Number(item.price).toLocaleString() }} / ชิ้น</p>
-                  <p v-if="item.preorderRemaining !== null" class="item-remaining">
-                    เหลือ {{ item.preorderRemaining }} ชิ้น
-                  </p>
-                  <p v-else class="item-remaining">จำนวนไม่จำกัด</p>
                 </div>
 
                 <!-- Qty controls -->
@@ -538,7 +583,9 @@ onMounted(fetchCart)
 
                   <button
                     class="qty-btn"
-                    :disabled="item.qty >= item.stock || updatingId === item.cart_id"
+                    :disabled="
+                      (!item.isPreorder && item.qty >= item.stock) || updatingId === item.cart_id
+                    "
                     @click="updateQty(item, item.qty + 1)"
                   >
                     <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
@@ -618,8 +665,28 @@ onMounted(fetchCart)
               </div>
             </div>
 
-            <button class="btn-checkout" :disabled="activeItems.length === 0" @click="checkout">
+            <button
+              class="btn-checkout"
+              :disabled="activeItems.length === 0 || isCheckingOut"
+              @click="checkout"
+            >
               <svg
+                v-if="isCheckingOut"
+                class="spin"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                width="18"
+                height="18"
+              >
+                <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.3)" stroke-width="3" />
+                <path d="M12 2a10 10 0 0110 10" stroke="white" stroke-width="3" />
+              </svg>
+              <svg
+                v-else
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -631,7 +698,7 @@ onMounted(fetchCart)
               >
                 <path d="M5 12h14M12 5l7 7-7 7" />
               </svg>
-              {{ checkoutLabel }}
+              {{ isCheckingOut ? 'กำลังสร้างออเดอร์...' : checkoutLabel }}
             </button>
 
             <button class="btn-continue" @click="goBack">← เลือกสินค้าเพิ่ม</button>
@@ -745,6 +812,7 @@ onMounted(fetchCart)
   top: 66px;
   right: 1.5rem;
   z-index: 200;
+  pointer-events: none;
   display: flex;
   align-items: center;
   gap: 0.5rem;

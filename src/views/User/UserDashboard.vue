@@ -24,6 +24,7 @@ const selectedProduct = ref(null)
 const selectedFlavor = ref('')
 const selectedPreviewIndex = ref(0)
 const detailQty = ref(1)
+const batchSelections = ref([]) // [{ flavor, qty }]
 const defaultBannerImageUrl = '/images/cat.jpg'
 const heroBannerImage = ref(defaultBannerImageUrl)
 const defaultLogoImageUrl = ''
@@ -120,6 +121,12 @@ const fetchProducts = async () => {
     const data = await res.json()
     const arr = Array.isArray(data) ? data : (data.data ?? data.products ?? [])
     products.value = arr.map((p) => ({
+      preorderRoundId:
+        p.preorderRoundId != null
+          ? Number(p.preorderRoundId)
+          : p.preorder_round_id != null
+            ? Number(p.preorder_round_id)
+            : null,
       preorderEnabled: Boolean(p.preorderEnabled ?? p.isPreorder ?? false),
       readyToShipEnabled:
         p.readyToShipEnabled != null || p.isReadyToShip != null
@@ -140,7 +147,9 @@ const fetchProducts = async () => {
       categoryId: p.categoryId != null ? Number(p.categoryId) : null,
       categoryName: p.categoryName ?? '',
       stock: p.stock ?? 0,
-      isPreorder: Boolean(p.preorderEnabled ?? p.isPreorder ?? false),
+      isPreorder:
+        Boolean(p.preorderEnabled ?? p.isPreorder ?? false) &&
+        (p.preorderRoundId != null || p.preorder_round_id != null),
       isReadyToShip:
         p.readyToShipEnabled != null || p.isReadyToShip != null
           ? Boolean(p.readyToShipEnabled ?? p.isReadyToShip)
@@ -338,6 +347,22 @@ const selectedFlavorStock = computed(() => {
   return getFlavorStock(selectedFlavor.value)
 })
 
+function removeBatchSelection(index) {
+  batchSelections.value.splice(index, 1)
+}
+
+async function addBatchToCart() {
+  if (!selectedProduct.value || batchSelections.value.length === 0) return
+  for (const sel of batchSelections.value) {
+    try {
+      await addToCart(selectedProduct.value, sel.flavor, sel.qty)
+    } catch (e) {
+      console.error('addBatchToCart error', e)
+    }
+  }
+  batchSelections.value = []
+}
+
 let noticeTimer = null
 function showNotice(msg, type = 'success') {
   cartNotice.value = { msg, type }
@@ -386,6 +411,23 @@ function getProductPrice(product) {
   return product.price
 }
 
+function getTotalStock(product) {
+  if (!product) return 0
+
+  const flavorStock = product.flavorStock
+  if (flavorStock && typeof flavorStock === 'object' && !Array.isArray(flavorStock)) {
+    const totalFromFlavor = Object.values(flavorStock).reduce(
+      (sum, qty) => sum + (Number(qty) || 0),
+      0,
+    )
+    if (totalFromFlavor > 0 || (product.flavors?.length ?? 0) > 0) {
+      return totalFromFlavor
+    }
+  }
+
+  return Number(product.stock) || 0
+}
+
 function isOutOfStockForCurrentType(product) {
   const itemType = getEffectiveItemType(product)
   if (!itemType) {
@@ -396,7 +438,7 @@ function isOutOfStockForCurrentType(product) {
     return false
   }
 
-  return Number(product?.stock) === 0
+  return getTotalStock(product) === 0
 }
 
 function getProductTypeLabel(product) {
@@ -785,9 +827,13 @@ onMounted(async () => {
               </div>
               <span
                 v-if="getEffectiveItemType(product) !== 'preorder'"
-                :class="['stock-badge', getStockStatusClass(product.stock)]"
+                :class="['stock-badge', getStockStatusClass(getTotalStock(product))]"
               >
-                สต็อก {{ product.stock }} ชิ้น
+                {{
+                  product.flavors?.length
+                    ? `สต็อกรวม ${getTotalStock(product)} ชิ้น`
+                    : `สต็อก ${getTotalStock(product)} ชิ้น`
+                }}
               </span>
             </div>
 
@@ -893,7 +939,11 @@ onMounted(async () => {
                 </button>
               </div>
 
-              <span v-if="selectedProduct.isPreorder" class="detail-badge">พรีออเดอร์</span>
+              <span
+                v-if="getCardBadge(selectedProduct)"
+                :class="['detail-badge', getCardBadge(selectedProduct).className]"
+                >{{ getCardBadge(selectedProduct).label }}</span
+              >
             </div>
 
             <div class="detail-content">
@@ -983,7 +1033,7 @@ onMounted(async () => {
                     {{
                       getEffectiveItemType(selectedProduct) === 'preorder'
                         ? 'สั่งตามยอดจอง'
-                        : `${selectedProduct.flavors?.length ? selectedFlavorStock : selectedProduct.stock} ชิ้น`
+                        : `${selectedProduct.flavors?.length ? selectedFlavorStock : getTotalStock(selectedProduct)} ชิ้น`
                     }}
                   </strong>
                 </div>
@@ -992,6 +1042,40 @@ onMounted(async () => {
                   <strong class="detail-meta__value">{{
                     getProductTypeLabel(selectedProduct)
                   }}</strong>
+                </div>
+                <div
+                  v-if="
+                    getEffectiveItemType(selectedProduct) !== 'preorder' &&
+                    selectedProduct.flavors?.length
+                  "
+                  class="detail-meta"
+                >
+                  <span class="detail-meta__label">สต็อกรวม</span>
+                  <strong class="detail-meta__value"
+                    >{{ getTotalStock(selectedProduct) }} ชิ้น</strong
+                  >
+                </div>
+              </div>
+              <!-- Batch selection: collect multiple flavor+qty pairs before adding all to cart -->
+              <div v-if="batchSelections.length" class="batch-selection">
+                <p class="detail-option-label">รายการชุดพรีออเดอร์ที่เตรียมส่ง</p>
+                <div class="batch-list">
+                  <div v-for="(sel, idx) in batchSelections" :key="idx" class="batch-item">
+                    <span>{{ sel.flavor }} × {{ sel.qty }}</span>
+                    <button
+                      type="button"
+                      class="btn-remove-small"
+                      @click="removeBatchSelection(idx)"
+                    >
+                      ลบ
+                    </button>
+                  </div>
+                </div>
+                <div class="batch-actions">
+                  <button class="btn btn--primary" @click="addBatchToCart">
+                    เพิ่มทั้งหมดลงตะกร้า
+                  </button>
+                  <button class="btn btn--outline" @click="batchSelections = []">ยกเลิกชุด</button>
                 </div>
               </div>
 
@@ -1010,6 +1094,7 @@ onMounted(async () => {
                       : 'เพิ่มลงตะกร้า'
                   }}
                 </button>
+                <!-- batch "save to set" button removed per request -->
                 <button class="btn btn--outline detail-action-btn" @click="closeProductDetail">
                   ปิดหน้าต่าง
                 </button>
@@ -1056,7 +1141,7 @@ onMounted(async () => {
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
-  z-index: 100;
+  z-index: 1000;
   box-shadow: 0 2px 16px rgba(89, 61, 125, 0.08);
   backdrop-filter: blur(8px);
 }
@@ -1263,6 +1348,7 @@ onMounted(async () => {
   top: 66px;
   right: 1.5rem;
   z-index: 200;
+  pointer-events: none;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -1526,6 +1612,7 @@ onMounted(async () => {
   padding: 1.15rem 1rem 1.35rem;
   box-shadow: 0 10px 28px rgba(89, 61, 125, 0.08);
 }
+
 .products__header {
   margin-bottom: 0.8rem;
 }

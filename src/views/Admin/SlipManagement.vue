@@ -1,11 +1,8 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { useAuth } from '../../composables/useAuth'
+import translateError from '../../utils/translateError'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
-const { getUser } = useAuth()
-
-const currentUser = computed(() => getUser())
 
 const payments = ref([])
 const slipLoading = ref(false)
@@ -15,11 +12,42 @@ const selectedOrderDetail = ref(null)
 const selectedOrderLoading = ref(false)
 const selectedOrderError = ref('')
 const importFeeInput = ref('')
+const typeFilter = ref('all')
 const filterStatus = ref('all')
+const showStatusFilters = ref(false)
 
 const filteredPayments = computed(() => {
-  if (filterStatus.value === 'all') return payments.value
-  return payments.value.filter((payment) => payment.status === filterStatus.value)
+  return payments.value.filter((payment) => {
+    const matchesStatus =
+      filterStatus.value === 'all' || String(payment.status || '') === filterStatus.value
+    const matchesType =
+      typeFilter.value === 'all' ||
+      String(payment.Order_type || '').toLowerCase() === typeFilter.value
+    return matchesStatus && matchesType
+  })
+})
+
+const typeCount = computed(() => ({
+  all: payments.value.length,
+  preorder: payments.value.filter(
+    (payment) => String(payment.Order_type || '').toLowerCase() === 'preorder',
+  ).length,
+  ready: payments.value.filter(
+    (payment) => String(payment.Order_type || '').toLowerCase() === 'ready',
+  ).length,
+}))
+
+const currentTypeLabel = computed(() => {
+  if (typeFilter.value === 'preorder') return 'พรีออเดอร์'
+  if (typeFilter.value === 'ready') return 'พร้อมส่ง'
+  return 'ทั้งหมด'
+})
+
+const currentStatusLabel = computed(() => {
+  if (filterStatus.value === 'Pending') return 'รอตรวจสอบ'
+  if (filterStatus.value === 'Approved') return 'อนุมัติแล้ว'
+  if (filterStatus.value === 'Rejected') return 'ปฏิเสธแล้ว'
+  return 'ทั้งหมด'
 })
 
 const statusConfig = {
@@ -28,19 +56,10 @@ const statusConfig = {
   Rejected: { text: 'ปฏิเสธ', color: '#ef4444', bg: '#fef2f2' },
 }
 
+// Cash-on-delivery removed — do not show as an option
 const paymentMethodLabel = {
   bank_transfer: '🏦 โอนธนาคาร',
   promptpay: '📱 พร้อมเพย์',
-  cash_on_delivery: '💵 เก็บปลายทาง',
-}
-
-function authHeaders() {
-  const user = currentUser.value || {}
-  return {
-    'Content-Type': 'application/json',
-    'x-user-role': String(user.role || '').toLowerCase() || 'admin',
-    'x-user-id': String(user.user_id || user.id || ''),
-  }
 }
 
 function formatDate(value) {
@@ -62,29 +81,16 @@ function formatMoney(value) {
   }).format(Number(value) || 0)
 }
 
-function resolveIntakeStatusClass(status) {
-  const key = String(status || '').toLowerCase()
-  if (key.includes('ready')) return 'badge badge--ready'
-  if (key.includes('partial')) return 'badge badge--partial'
-  if (key.includes('missing')) return 'badge badge--missing'
-  return 'badge badge--pending'
-}
-
-function resolveIntakeStatusLabel(status) {
-  const key = String(status || '').toLowerCase()
-  if (key === 'ready_to_ship') return 'พร้อมจัดส่ง'
-  if (key === 'partially_received') return 'รับไม่ครบ'
-  if (key === 'missing') return 'ขาดสินค้า'
-  if (key === 'received') return 'รับครบ'
-  if (key === 'partial') return 'รับบางส่วน'
-  return status || 'Pending'
-}
-
 function resolveSlipUrl(value) {
   const url = String(value || '').trim()
   if (!url) return ''
   if (/^https?:\/\//i.test(url)) return url
   return url.startsWith('/') ? url : `/${url}`
+}
+
+function resetFilters() {
+  typeFilter.value = 'all'
+  filterStatus.value = 'all'
 }
 
 async function fetchPayments() {
@@ -98,7 +104,7 @@ async function fetchPayments() {
     }
     payments.value = await response.json()
   } catch (error) {
-    slipError.value = error instanceof Error ? error.message : 'เกิดข้อผิดพลาด'
+    slipError.value = translateError(error)
   } finally {
     slipLoading.value = false
   }
@@ -121,7 +127,7 @@ async function updatePaymentStatus(payId, status) {
     selectedOrderDetail.value = null
     importFeeInput.value = ''
   } catch (error) {
-    slipError.value = error instanceof Error ? error.message : 'เกิดข้อผิดพลาด'
+    slipError.value = translateError(error)
   }
 }
 
@@ -138,7 +144,7 @@ async function fetchOrderDetails(orderId) {
     selectedOrderDetail.value = await response.json()
     importFeeInput.value = selectedOrderDetail.value.import_fee_total || ''
   } catch (error) {
-    selectedOrderError.value = error instanceof Error ? error.message : 'เกิดข้อผิดพลาด'
+    selectedOrderError.value = translateError(error)
   } finally {
     selectedOrderLoading.value = false
   }
@@ -236,35 +242,63 @@ onMounted(() => {
         <button class="ghost-btn" type="button" @click="fetchPayments">รีเฟรช</button>
       </header>
 
-      <div class="filter-row">
-        <button
-          class="filter-btn"
-          :class="{ active: filterStatus === 'all' }"
-          @click="filterStatus = 'all'"
-        >
-          ทั้งหมด
-        </button>
-        <button
-          class="filter-btn"
-          :class="{ active: filterStatus === 'Pending' }"
-          @click="filterStatus = 'Pending'"
-        >
-          รอตรวจสอบ
-        </button>
-        <button
-          class="filter-btn"
-          :class="{ active: filterStatus === 'Approved' }"
-          @click="filterStatus = 'Approved'"
-        >
-          อนุมัติแล้ว
-        </button>
-        <button
-          class="filter-btn"
-          :class="{ active: filterStatus === 'Rejected' }"
-          @click="filterStatus = 'Rejected'"
-        >
-          ปฏิเสธแล้ว
-        </button>
+      <div class="filter-shell">
+        <div class="filter-shell__top">
+          <div class="filter-summary-row">
+            <span class="filter-summary-label">ตัวกรองปัจจุบัน</span>
+            <div class="filter-summary-chips">
+              <span class="summary-chip">ประเภท: {{ currentTypeLabel }}</span>
+              <span class="summary-chip">สถานะ: {{ currentStatusLabel }}</span>
+            </div>
+          </div>
+
+          <button
+            class="ghost-btn filter-shell__toggle"
+            type="button"
+            @click="showStatusFilters = !showStatusFilters"
+          >
+            ตัวกรอง
+            <span class="filter-shell__toggle-badge">{{ typeCount.all }}</span>
+          </button>
+        </div>
+
+        <transition name="filter-drop">
+          <div v-if="showStatusFilters" class="filter-popover">
+            <div class="filter-grid">
+              <div class="filter-field">
+                <label for="type-filter">ประเภทสลิป</label>
+                <select id="type-filter" v-model="typeFilter" class="filter-select">
+                  <option value="all">ทั้งหมด ({{ typeCount.all }})</option>
+                  <option value="preorder">พรีออเดอร์ ({{ typeCount.preorder }})</option>
+                  <option value="ready">พร้อมส่ง ({{ typeCount.ready }})</option>
+                </select>
+              </div>
+
+              <div class="filter-field">
+                <label for="status-filter">สถานะการตรวจ</label>
+                <select id="status-filter" v-model="filterStatus" class="filter-select">
+                  <option value="all">ทั้งหมด</option>
+                  <option value="Pending">รอตรวจสอบ</option>
+                  <option value="Approved">อนุมัติแล้ว</option>
+                  <option value="Rejected">ปฏิเสธแล้ว</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="filter-actions">
+              <button class="ghost-btn filter-secondary-btn" type="button" @click="resetFilters">
+                ล้างตัวกรอง
+              </button>
+              <button
+                class="primary-btn filter-secondary-btn"
+                type="button"
+                @click="showStatusFilters = false"
+              >
+                เสร็จแล้ว
+              </button>
+            </div>
+          </div>
+        </transition>
       </div>
 
       <div v-if="slipError" class="state-box state-box--error">{{ slipError }}</div>
@@ -594,22 +628,234 @@ onMounted(() => {
   gap: 0.8rem;
 }
 
-.filter-row {
+.filter-panel {
+  display: grid;
+  gap: 0.9rem;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border: 1px solid rgba(230, 218, 244, 0.95);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at top right, rgba(255, 231, 243, 0.58), transparent 30%),
+    linear-gradient(180deg, rgba(250, 247, 255, 0.94), rgba(255, 255, 255, 0.99));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.filter-shell {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.filter-shell__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.filter-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.filter-summary-label {
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #9a88b2;
+}
+
+.filter-summary-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.summary-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.38rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(125, 77, 178, 0.08);
+  color: #6d4c9c;
+  font-size: 0.76rem;
+  font-weight: 700;
+  border: 1px solid rgba(125, 77, 178, 0.1);
+}
+
+.filter-shell__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.75rem 1rem;
+  background: rgba(243, 236, 255, 0.95);
+  border: 1px solid #e3d5f7;
+  color: #6c4a99;
+  box-shadow: 0 10px 20px rgba(124, 92, 160, 0.08);
+}
+
+.filter-shell__toggle-badge {
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 0.45rem;
+  border-radius: 999px;
+  background: #fff;
+  color: #7d4db2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.filter-popover {
+  border-radius: 18px;
+  border: 1px solid rgba(230, 218, 244, 0.95);
+  background: rgba(255, 255, 255, 0.98);
+  padding: 1rem;
+  box-shadow: 0 18px 30px rgba(129, 103, 164, 0.12);
+}
+
+.filter-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.filter-field {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.filter-field label {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #5d447e;
+}
+
+.filter-select {
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid #e2d5f3;
+  background: #fbf9ff;
+  color: #4d3b6c;
+  padding: 0.82rem 0.95rem;
+  outline: none;
+}
+
+.filter-select:focus {
+  border-color: #b38ae4;
+  box-shadow: 0 0 0 3px rgba(165, 94, 234, 0.12);
+}
+
+.filter-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 0.95rem;
+  flex-wrap: wrap;
+}
+
+.filter-secondary-btn {
+  padding: 0.72rem 1rem;
+}
+
+.filter-chip-group {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin-bottom: 0.85rem;
+}
+
+.filter-chip-group--status .filter-btn {
+  color: #5d447e;
+}
+
+.filter-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #e6d8f6 18%, #e6d8f6 82%, transparent);
 }
 
 .filter-btn {
-  background: #f3ecff;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  background: #fff;
   color: #7d4db2;
-  padding: 0.55rem 0.85rem;
+  padding: 0.58rem 0.9rem;
+  border: 1px solid #e6daf4;
+  box-shadow: 0 4px 12px rgba(124, 92, 160, 0.05);
+}
+
+.filter-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.filter-dot--all {
+  color: #7d4db2;
+}
+
+.filter-dot--pending {
+  color: #f59e0b;
+}
+
+.filter-dot--approved {
+  color: #10b981;
+}
+
+.filter-dot--rejected {
+  color: #ef4444;
+}
+
+.filter-btn:hover {
+  border-color: #d5c1ea;
 }
 
 .filter-btn.active {
   background: linear-gradient(135deg, #a55eea, #ff7eb6);
   color: #fff;
+  border-color: transparent;
+  box-shadow: 0 10px 20px rgba(165, 94, 234, 0.2);
+}
+
+.filter-count {
+  min-width: 1.65rem;
+  height: 1.35rem;
+  padding: 0 0.45rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.filter-btn:not(.active) .filter-count {
+  background: #f7f0ff;
+  color: #7d4db2;
+}
+
+.filter-drop-enter-active,
+.filter-drop-leave-active {
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+
+.filter-drop-enter-from,
+.filter-drop-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 
 .table-scroll {

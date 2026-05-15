@@ -2535,6 +2535,10 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
     if (statusFilter) {
       roundSql += ' WHERE LOWER(pr.status) = ?'
       roundParams.push(statusFilter.toLowerCase())
+    } else {
+      // Intake should only be done after the round is closed.
+      roundSql += ' WHERE LOWER(pr.status) = ?'
+      roundParams.push('closed')
     }
 
     roundSql += ' ORDER BY pr.round_id DESC'
@@ -2572,6 +2576,7 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
         ) AS image_url
       FROM order_details od
       JOIN orders o ON o.order_id = od.order_id
+      JOIN preorder_rounds pr ON pr.round_id = od.preorder_round_id
       LEFT JOIN accounts a ON a.user_id = o.user_id
       LEFT JOIN products p ON p.prod_id = od.prod_id
       WHERE LOWER(o.Order_type) = 'preorder'
@@ -2580,8 +2585,11 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
     const detailParams = []
 
     if (statusFilter) {
-      detailSql += ' AND LOWER(o.status) = ?'
+      detailSql += ' AND LOWER(pr.status) = ?'
       detailParams.push(statusFilter.toLowerCase())
+    } else {
+      detailSql += ' AND LOWER(pr.status) = ?'
+      detailParams.push('closed')
     }
 
     detailSql +=
@@ -2765,6 +2773,14 @@ app.post(
       if (roundRows.length === 0) {
         await connection.rollback()
         return res.status(404).json({ error: 'ไม่พบรอบพรีออเดอร์' })
+      }
+
+      const normalizedRoundStatus = String(roundRows[0].status || '')
+        .trim()
+        .toLowerCase()
+      if (normalizedRoundStatus !== 'closed') {
+        await connection.rollback()
+        return res.status(400).json({ error: 'ยังไม่สามารถตรวจรับได้ เนื่องจากรอบนี้ยังไม่ปิด' })
       }
 
       const [detailRows] = await connection.query(
@@ -3074,10 +3090,6 @@ app.post(
       // Flags for behavior: move excess to ready-to-ship stock; decrement preorder pool
       const moveExcessToStock =
         payload.move_excess_to_stock !== undefined ? Boolean(payload.move_excess_to_stock) : true
-      const decrementPreorderPool =
-        payload.decrement_preorder_pool !== undefined
-          ? Boolean(payload.decrement_preorder_pool)
-          : true
 
       const processResults = []
       let orderedAmount = 0

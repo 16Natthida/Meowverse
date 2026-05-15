@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
@@ -54,10 +54,11 @@ const fetchOrder = async () => {
 }
 
 // ── PAYMENT METHODS ──
+
+// Removed cash-on-delivery option per request
 const paymentMethods = [
   { id: 'bank_transfer', name: 'โอนเงินผ่านธนาคาร', icon: '🏦' },
   { id: 'promptpay', name: 'พร้อมเพย์', icon: '📱' },
-  { id: 'cash_on_delivery', name: 'เก็บเงินปลายทาง', icon: '💵' },
 ]
 
 const selectedPaymentMethod = ref('bank_transfer')
@@ -78,8 +79,8 @@ const confirmPayment = async () => {
     return
   }
 
-  // 2. ตรวจสอบสลิป (ถ้าไม่ใช่ COD)
-  if (selectedPaymentMethod.value !== 'cash_on_delivery' && !slipFile.value) {
+  // 2. ตรวจสอบสลิป
+  if (!slipFile.value) {
     showNotice('กรุณาแนบหลักฐานการโอนเงิน', 'error')
     return
   }
@@ -129,7 +130,42 @@ function showNotice(msg, type = 'success') {
 }
 
 function goBack() {
-  router.push('/cart')
+  router.push('/order-list')
+}
+
+// ── STATUS MESSAGE ──
+function getStatusMessage() {
+  if (!order.value) return ''
+
+  const status = String(order.value.status || '').toLowerCase()
+  const statusMap = {
+    pending: 'รอชำระเงิน - กรุณาส่งหลักฐานการโอนเงิน',
+    paid: 'ชำระแล้ว - รอแอดมินตรวจสอบและจัดส่ง',
+    wait_for_import_fee: 'รอค่านำเข้า - กรุณารอสักครู่',
+    ready_to_ship: 'พร้อมจัดส่ง - ใกล้ถึงมือคุณแล้ว',
+    cancelled: 'ยกเลิกแล้ว',
+  }
+
+  return statusMap[status] || status
+}
+
+function getStatusLabel() {
+  if (!order.value) return ''
+
+  const status = String(order.value.status || '').toLowerCase()
+  const statusLabelMap = {
+    pending: 'รอชำระเงิน',
+    paid: 'ชำระแล้ว',
+    wait_for_import_fee: 'รอค่านำเข้า',
+    ready_to_ship: 'พร้อมจัดส่ง',
+    cancelled: 'ยกเลิกแล้ว',
+  }
+
+  return statusLabelMap[status] || status
+}
+
+function shouldShowPaymentForm() {
+  return order.value && String(order.value.status || '').toLowerCase() === 'pending'
 }
 
 onMounted(() => {
@@ -142,187 +178,132 @@ onMounted(() => {
 
 <template>
   <div class="order-summary-page">
+    <!-- Navbar -->
     <nav class="navbar">
-      <button class="back-btn" @click="goBack">
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2.2"
-          class="back-icon"
-        >
-          <path d="M19 12H5M12 5l-7 7 7 7" />
-        </svg>
-        กลับไปหน้าหลัก
-      </button>
-      <div class="navbar__logo">
-        <span class="logo-icon">🐱</span>
-        <span class="logo-text">Meowverse</span>
-      </div>
-      <div class="navbar__title">
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          class="title-order-icon"
-        >
-          <path
-            d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
-          />
-        </svg>
-        สรุปออเดอร์
+      <div class="navbar-content">
+        <button class="back-btn" @click="goBack">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M19 12H5M12 5l-7 7 7 7" />
+          </svg>
+        </button>
+        <div class="navbar__brand">
+          <span class="brand-icon">🐱</span>
+          <span class="brand-text">Meowverse</span>
+        </div>
+        <div class="navbar__spacer"></div>
       </div>
     </nav>
 
-    <transition name="slide-down">
+    <!-- Notice -->
+    <transition name="slideDown">
       <div v-if="notice.msg" :class="['notice', `notice--${notice.type}`]">
         <span class="notice-msg">{{ notice.msg }}</span>
       </div>
     </transition>
 
-    <div class="content">
-      <div v-if="loading && !order" class="state-wrap">
+    <!-- Main Content -->
+    <div class="main-content">
+      <!-- Loading State -->
+      <div v-if="loading && !order" class="state-container">
         <div class="loader"></div>
-        <p>กำลังดำเนินการ...</p>
+        <p class="loading-text">กำลังโหลดข้อมูล...</p>
       </div>
 
-      <div v-else-if="error" class="state-wrap">
-        <div class="error-box">{{ error }}</div>
-        <button class="btn btn--primary" @click="fetchOrder">ลองใหม่</button>
+      <!-- Error State -->
+      <div v-else-if="error" class="state-container">
+        <div class="error-icon">⚠️</div>
+        <p class="error-text">{{ error }}</p>
+        <button class="btn-retry" @click="fetchOrder">ลองใหม่</button>
       </div>
 
-      <div v-else-if="order" class="order-layout">
-        <div class="order-details">
-          <div class="section-card">
-            <h2 class="section-title">📦 รายละเอียดออเดอร์ #{{ order.order_id }}</h2>
-            <div class="order-info">
-              <div class="info-row">
-                <span>วันที่สั่งซื้อ:</span>
-                <span>{{ new Date(order.order_date).toLocaleString('th-TH') }}</span>
-              </div>
-              <div class="info-row">
-                <span>สถานะ:</span>
-                <span :class="['status-badge', `status--${order.status.toLowerCase()}`]">
-                  {{ order.status }}
-                </span>
-              </div>
+      <!-- Order Details -->
+      <div v-else-if="order" class="order-container">
+        <!-- Header Card -->
+        <div class="header-card">
+          <div class="header-top">
+            <div class="order-number">
+              <span class="order-label">ออเดอร์ #</span>
+              <span class="order-id">{{ order.order_id }}</span>
             </div>
-
-            <div class="item-list">
-              <div v-for="item in order.items" :key="item.detail_id" class="order-item">
-                <div class="item-img">
-                  <img v-if="item.image" :src="item.image" />
-                  <span v-else>🐾</span>
-                </div>
-                <div class="item-info">
-                  <p class="item-name">{{ item.name }}</p>
-                  <p class="item-price-small">฿{{ item.unit_price.toLocaleString() }}</p>
-                </div>
-                <div class="item-qty">x{{ item.qty }}</div>
-                <div class="item-total">฿{{ (item.unit_price * item.qty).toLocaleString() }}</div>
-              </div>
+            <div :class="['status-badge', `status--${order.status.toLowerCase()}`]">
+              {{ getStatusLabel() }}
             </div>
           </div>
-
-          <div class="section-card">
-            <h3 class="section-title">📍 ข้อมูลการจัดส่ง</h3>
-            <div class="form-grid">
-              <div class="form-group">
-                <label class="form-label">ชื่อผู้รับ</label>
-                <input
-                  v-model="shippingInfo.name"
-                  type="text"
-                  class="form-input"
-                  placeholder="ระบุชื่อ-นามสกุล"
-                />
+          <div class="header-info">
+            <div class="info-item">
+              <span class="info-icon">📅</span>
+              <div class="info-text">
+                <span class="info-label">วันที่สั่งซื้อ</span>
+                <span class="info-value">{{
+                  new Date(order.Order_date || order.order_date).toLocaleString('th-TH')
+                }}</span>
               </div>
-              <div class="form-group">
-                <label class="form-label">เบอร์โทรศัพท์</label>
-                <input
-                  v-model="shippingInfo.phone"
-                  type="tel"
-                  class="form-input"
-                  placeholder="08x-xxx-xxxx"
-                />
-              </div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">ที่อยู่จัดส่ง</label>
-              <textarea
-                v-model="shippingInfo.address"
-                class="form-textarea"
-                rows="3"
-                placeholder="บ้านเลขที่, ถนน, แขวง/ตำบล..."
-              ></textarea>
-            </div>
-            <div class="form-group">
-              <label class="form-label">หมายเหตุ</label>
-              <textarea v-model="shippingInfo.notes" class="form-textarea" rows="1"></textarea>
             </div>
           </div>
         </div>
 
-        <div class="payment-section">
-          <div class="section-card">
-            <h3 class="section-title">💳 วิธีการชำระเงิน</h3>
-            <div class="payment-methods">
-              <div
-                v-for="method in paymentMethods"
-                :key="method.id"
-                :class="[
-                  'payment-method',
-                  { 'payment-method--selected': selectedPaymentMethod === method.id },
-                ]"
-                @click="selectedPaymentMethod = method.id"
-              >
-                <span class="method-icon">{{ method.icon }}</span>
-                <span class="method-name">{{ method.name }}</span>
+        <!-- Status Message -->
+        <div class="status-message-card">
+          <span class="message-icon">ℹ️</span>
+          <span class="message-text">{{ getStatusMessage() }}</span>
+        </div>
+
+        <!-- Items Card -->
+        <div class="items-card">
+          <h2 class="card-title">🛍️ สินค้าที่สั่ง</h2>
+
+          <div class="items-grid-header">
+            <div class="header-cell col-product">สินค้า</div>
+            <div class="header-cell col-price">ราคา</div>
+            <div class="header-cell col-qty">จำนวน</div>
+            <div class="header-cell col-total">รวม</div>
+          </div>
+
+          <div class="items-grid">
+            <div v-for="item in order.items" :key="item.detail_id" class="grid-row">
+              <div class="cell col-product">
+                <div class="product-cell">
+                  <div class="product-image">
+                    <img v-if="item.image" :src="item.image" :alt="item.name" />
+                    <span v-else class="no-image">🐾</span>
+                  </div>
+                  <div class="product-info">
+                    <p class="product-name">{{ item.name }}</p>
+                    <p v-if="item.flavor" class="product-flavor">{{ item.flavor }}</p>
+                  </div>
+                </div>
+              </div>
+              <div class="cell col-price">
+                <span class="price-value">฿{{ Number(item.Price).toLocaleString() }}</span>
+              </div>
+              <div class="cell col-qty">
+                <span class="qty-badge">{{ item.qty }}</span>
+              </div>
+              <div class="cell col-total">
+                <span class="total-value"
+                  >฿{{ (Number(item.Price) * Number(item.qty)).toLocaleString() }}</span
+                >
               </div>
             </div>
           </div>
 
-          <div v-if="selectedPaymentMethod !== 'cash_on_delivery'" class="section-card slip-card">
-            <h3 class="section-title">📸 แนบหลักฐานการโอน</h3>
-            <div class="upload-area">
-              <input
-                type="file"
-                id="slip-file"
-                accept="image/*"
-                @change="onFileChange"
-                class="hidden-input"
-              />
-              <label for="slip-file" class="upload-label">
-                <div v-if="!slipPreview" class="upload-prompt">
-                  <span>➕ คลิกเพื่ออัปโหลดสลิป</span>
-                </div>
-                <div v-else class="preview-box">
-                  <img :src="slipPreview" class="slip-preview" />
-                  <div class="edit-overlay">เปลี่ยนรูปภาพ</div>
-                </div>
-              </label>
-            </div>
-          </div>
-
-          <div class="section-card summary-card">
+          <!-- Summary -->
+          <div class="items-summary">
             <div class="summary-row">
-              <span>ยอดรวมสินค้า</span>
-              <span>฿{{ order.total_amount.toLocaleString() }}</span>
+              <span class="summary-label">ยอดรวม</span>
+              <span class="summary-total">
+                ฿{{
+                  order.items
+                    .reduce((sum, item) => sum + Number(item.Price) * Number(item.qty), 0)
+                    .toLocaleString()
+                }}
+              </span>
             </div>
-            <div class="summary-row">
-              <span>ค่าจัดส่ง</span>
-              <span class="free-text">ฟรี</span>
-            </div>
-            <hr class="divider" />
-            <div class="summary-row total">
-              <span>ยอดสุทธิ</span>
-              <span class="total-amount">฿{{ order.total_amount.toLocaleString() }}</span>
-            </div>
-            <button class="btn-checkout" @click="confirmPayment" :disabled="loading">
-              {{ loading ? 'กำลังประมวลผล...' : 'ยืนยันและชำระเงิน' }}
-            </button>
           </div>
         </div>
+
+        <!-- Action Button -->
+        <button class="btn-back-home" @click="goBack"><span>←</span> กลับไปรายการออเดอร์</button>
       </div>
     </div>
   </div>
@@ -330,15 +311,19 @@ onMounted(() => {
 
 <style scoped>
 .order-summary-page {
-  --primary: #6f50a0;
-  --primary-light: #cda2fb;
-  --primary-dark: #3f2f5d;
-  --bg: #f8f5ff;
-  --border: #eadff5;
-  --text: #3f2f5d;
-  --muted: #75658f;
-  --radius: 14px;
-  --radius-sm: 10px;
+  --primary: #7c5cdb;
+  --primary-light: #a385e0;
+  --primary-dark: #5a3eab;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --bg: linear-gradient(135deg, #f8f4ff 0%, #fef5f5 100%);
+  --surface: #ffffff;
+  --border: #e9e0f5;
+  --text: #2d2d3d;
+  --text-muted: #8b8b9a;
+  --shadow: 0 8px 24px rgba(124, 92, 219, 0.12);
+  --shadow-sm: 0 2px 8px rgba(124, 92, 219, 0.08);
 
   font-family: inherit;
   background: var(--bg);
@@ -346,417 +331,583 @@ onMounted(() => {
   color: var(--text);
 }
 
-/* Navbar */
+/* ─────────────────── NAVBAR ─────────────────── */
 .navbar {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  padding: 0 1.5rem;
-  height: 58px;
-  background: rgba(255, 255, 255, 0.95);
-  border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
   z-index: 100;
-  box-shadow: 0 2px 16px rgba(89, 61, 125, 0.08);
-  backdrop-filter: blur(8px);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(12px);
 }
+
+.navbar-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.75rem 1.5rem;
+  height: 60px;
+}
+
 .back-btn {
   display: flex;
   align-items: center;
-  gap: 0.38rem;
-  background: linear-gradient(160deg, #f8f2ff, #f0e6ff);
-  border: 1px solid #dcc8f5;
-  border-radius: 999px;
-  padding: 0.3rem 0.75rem;
-  font-size: 0.8rem;
-  font-weight: 800;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  background: linear-gradient(135deg, #f0e6ff, #ede9fe);
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
   color: var(--primary);
   cursor: pointer;
-  font-family: inherit;
-  transition: all 0.2s;
-  white-space: nowrap;
+  transition: all 0.3s;
+  flex-shrink: 0;
 }
+
 .back-btn:hover {
-  background: linear-gradient(180deg, #cda2fb, #bc8aed);
-  color: #fff;
-  border-color: #b788ea;
+  background: var(--primary);
+  color: white;
+  transform: translateX(-2px);
+  border-color: var(--primary);
 }
-.back-btn:hover .back-icon {
-  stroke: #fff;
+
+.back-btn svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2.5;
 }
-.back-icon {
-  width: 15px;
-  height: 15px;
-  stroke: var(--primary);
-  transition: stroke 0.2s;
-}
-.navbar__logo {
+
+.navbar__brand {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-left: 1rem;
+  gap: 0.75rem;
 }
-.logo-icon {
-  font-size: 1.3rem;
+
+.brand-icon {
+  font-size: 1.5rem;
 }
-.logo-text {
+
+.brand-text {
   font-weight: 900;
-  color: var(--primary);
-  font-size: 1rem;
-}
-.navbar__title {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 800;
-  font-size: 0.95rem;
-  color: var(--text);
-}
-.title-order-icon {
-  width: 18px;
-  height: 18px;
+  font-size: 1.2rem;
+  background: linear-gradient(135deg, var(--primary), var(--primary-light));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
-/* Cards */
-.section-card {
-  background: #fff;
+.navbar__spacer {
+  flex: 1;
+}
+
+/* ─────────────────── MAIN CONTENT ─────────────────── */
+.main-content {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+  animation: fadeIn 0.4s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* State Containers */
+.state-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem 2rem;
+  text-align: center;
+}
+
+.loader {
+  width: 50px;
+  height: 50px;
+  border: 4px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 1.5rem;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.loading-text,
+.error-text {
+  font-size: 1rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.error-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+}
+
+.btn-retry {
+  margin-top: 1.5rem;
+  padding: 0.75rem 1.5rem;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.3s;
+}
+
+.btn-retry:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+}
+
+/* ─────────────────── ORDER CONTAINER ─────────────────── */
+.order-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  animation: slideUp 0.5s ease;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Header Card */
+.header-card {
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1.5rem;
-  margin-bottom: 1.5rem;
-  box-shadow: 0 2px 8px rgba(111, 80, 160, 0.08);
-}
-.section-title {
-  font-size: 1rem;
-  margin-bottom: 1.2rem;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-weight: 700;
-  color: var(--text);
+  border-radius: 16px;
+  padding: 2rem;
+  box-shadow: var(--shadow-sm);
+  animation: slideDown 0.5s ease 0.1s backwards;
 }
 
-/* Order Info */
-.order-info {
-  background: #f9f8ff;
-  padding: 1rem;
-  border-radius: var(--radius-sm);
-  margin-bottom: 1.5rem;
-  border-left: 4px solid var(--primary);
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
-.info-row {
+
+.header-top {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+
+.order-number {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.order-label {
   font-size: 0.9rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
 }
-.info-row:last-child {
-  margin-bottom: 0;
+
+.order-id {
+  font-size: 2rem;
+  font-weight: 900;
+  background: linear-gradient(135deg, var(--primary), var(--primary-light));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
+
 .status-badge {
-  padding: 5px 12px;
-  border-radius: 20px;
-  font-size: 0.8rem;
+  padding: 0.6rem 1.25rem;
+  border-radius: 100px;
+  font-size: 0.85rem;
   font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
   display: inline-block;
+}
+
+.status--pending {
+  background: linear-gradient(135deg, #fef3c7, #fce7b6);
+  color: #92400e;
+}
+
+.status--paid {
+  background: linear-gradient(135deg, #dbeafe, #bfdbfe);
+  color: #1e40af;
+}
+
+.status--ready_to_ship {
+  background: linear-gradient(135deg, #dcfce7, #bbf7d0);
+  color: #166534;
+}
+
+.status--completed {
+  background: linear-gradient(135deg, #dcfce7, #bbf7d0);
+  color: #166534;
+}
+
+.status--cancelled {
+  background: linear-gradient(135deg, #fee2e2, #fecaca);
+  color: #991b1b;
+}
+
+.status--wait_for_import_fee {
+  background: linear-gradient(135deg, #fce7f3, #fbcfe8);
+  color: #831843;
+}
+
+.header-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.5rem;
+}
+
+.info-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.info-icon {
+  font-size: 1.5rem;
+  flex-shrink: 0;
+}
+
+.info-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.info-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
-.status--pending {
-  background: linear-gradient(160deg, #fef3c7, #fcd34d);
-  color: #7c2d12;
-}
-.status--completed {
-  background: linear-gradient(160deg, #d1fae5, #a7f3d0);
-  color: #065f46;
-}
-.status--canceled {
-  background: linear-gradient(160deg, #fee2e2, #fca5a5);
-  color: #7f1d1d;
+
+.info-value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
 }
 
-/* Order Items */
-.order-item {
+/* Status Message Card */
+.status-message-card {
+  background: linear-gradient(135deg, #fef08a, #fde047);
+  border: 1.5px solid #fcd34d;
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
   display: flex;
   align-items: center;
   gap: 1rem;
-  padding: 1rem;
-  border-radius: var(--radius-sm);
-  background: #fafaf9;
-  margin-bottom: 0.8rem;
-  border: 1px solid transparent;
-  transition: all 0.2s;
+  animation: slideDown 0.5s ease 0.2s backwards;
 }
-.order-item:hover {
-  background: #f5f3ff;
-  border-color: var(--border);
+
+.message-icon {
+  font-size: 1.5rem;
+  flex-shrink: 0;
 }
-.item-img {
-  width: 60px;
-  height: 60px;
-  background: linear-gradient(135deg, #f5f3ff, #ede9fe);
-  border-radius: var(--radius-sm);
+
+.message-text {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #78350f;
+  line-height: 1.5;
+}
+
+/* ─────────────────── ITEMS CARD ─────────────────── */
+.items-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  animation: slideDown 0.5s ease 0.3s backwards;
+}
+
+.card-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+  padding: 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(135deg, #f8f4ff, #faf8ff);
+}
+
+/* Grid Header */
+.items-grid-header {
+  display: grid;
+  grid-template-columns: 1fr 120px 100px 120px;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  background: linear-gradient(135deg, #f8f4ff, #faf8ff);
+  border-bottom: 2px solid var(--border);
+  font-weight: 700;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.header-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Grid Rows */
+.items-grid {
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.grid-row {
+  display: grid;
+  grid-template-columns: 1fr 120px 100px 120px;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+  transition: all 0.3s;
+  animation: fadeInRow 0.4s ease backwards;
+}
+
+@keyframes fadeInRow {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.grid-row:hover {
+  background: linear-gradient(135deg, rgba(248, 244, 255, 0.5), rgba(250, 248, 255, 0.5));
+}
+
+.grid-row:last-child {
+  border-bottom: none;
+}
+
+.cell {
+  display: flex;
+  align-items: center;
+}
+
+/* Product Cell */
+.product-cell {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.product-image {
+  width: 70px;
+  height: 70px;
+  background: linear-gradient(135deg, #f0e6ff, #ede9fe);
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
   flex-shrink: 0;
+  border: 1px solid var(--border);
+  transition: transform 0.3s;
 }
-.item-img img {
+
+.grid-row:hover .product-image {
+  transform: scale(1.05);
+}
+
+.product-image img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
-.item-info {
+
+.no-image {
+  font-size: 2rem;
+}
+
+.product-info {
   flex: 1;
+  min-width: 0;
 }
-.item-name {
+
+.product-name {
   font-weight: 700;
-  font-size: 0.9rem;
-  margin: 0 0 3px 0;
-  color: var(--text);
-}
-.item-price-small {
-  font-size: 0.8rem;
-  color: var(--muted);
-  margin: 0;
-}
-.item-qty {
-  padding: 4px 8px;
-  background: #f0e6ff;
-  border-radius: 6px;
-  font-weight: 600;
-  font-size: 0.8rem;
-  color: var(--primary);
-  min-width: 35px;
-  text-align: center;
-}
-.item-total {
-  font-weight: 700;
-  color: var(--primary);
   font-size: 0.95rem;
-  min-width: 70px;
-  text-align: right;
-}
-
-/* Forms */
-.form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-}
-.form-group {
-  margin-bottom: 1rem;
-}
-.form-label {
-  display: block;
-  font-size: 0.85rem;
-  font-weight: 700;
-  margin-bottom: 6px;
+  margin: 0 0 0.25rem 0;
   color: var(--text);
-}
-.form-input,
-.form-textarea {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-family: inherit;
-  font-size: 0.9rem;
-  transition: all 0.2s;
-  background: #fff;
-  color: var(--text);
-}
-.form-input:focus,
-.form-textarea:focus {
-  outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(111, 80, 160, 0.1);
-}
-.form-input::placeholder,
-.form-textarea::placeholder {
-  color: #aaa;
-}
-
-/* Payment Methods */
-.payment-methods {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.payment-method {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  border: 2px solid var(--border);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: all 0.2s;
-  background: #fff;
-  position: relative;
-}
-.payment-method:hover {
-  border-color: var(--primary);
-}
-.payment-method--selected {
-  background: linear-gradient(160deg, #f0e6ff, #f5f3ff);
-  border-color: var(--primary);
-  font-weight: 600;
-}
-.method-icon {
-  font-size: 1.2rem;
-  display: flex;
-  align-items: center;
-}
-.method-name {
-  font-size: 0.9rem;
-  color: var(--text);
-}
-
-/* Slip Upload */
-.upload-area {
-  border: 2px dashed var(--border);
-  border-radius: var(--radius-sm);
+  white-space: nowrap;
   overflow: hidden;
-  transition: all 0.2s;
+  text-overflow: ellipsis;
 }
-.upload-area:hover {
-  border-color: var(--primary);
+
+.product-flavor {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 0;
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.hidden-input {
-  display: none;
-}
-.upload-label {
-  cursor: pointer;
+
+/* Price Cell */
+.price-value {
+  font-weight: 700;
+  color: var(--text);
+  text-align: center;
   display: block;
 }
-.upload-prompt {
-  padding: 35px;
-  text-align: center;
-  color: var(--primary);
+
+/* Qty Cell */
+.qty-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: linear-gradient(135deg, #f0e6ff, #ede9fe);
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
   font-weight: 700;
+  color: var(--primary);
   font-size: 0.95rem;
 }
-.preview-box {
-  position: relative;
-  width: 100%;
-  background: #000;
-  display: flex;
-  justify-content: center;
-}
-.slip-preview {
-  max-width: 100%;
-  max-height: 250px;
+
+/* Total Cell */
+.total-value {
+  font-weight: 800;
+  font-size: 1rem;
+  color: var(--primary);
+  text-align: right;
   display: block;
-}
-.edit-overlay {
-  position: absolute;
-  bottom: 0;
-  width: 100%;
-  background: rgba(111, 80, 160, 0.85);
-  color: #fff;
-  text-align: center;
-  padding: 6px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  transition: all 0.2s;
-}
-.preview-box:hover .edit-overlay {
-  background: rgba(111, 80, 160, 1);
 }
 
 /* Summary */
-.summary-card {
-  background: #fff;
-  border: 1px solid var(--border);
+.items-summary {
+  padding: 1.5rem;
+  background: linear-gradient(135deg, #f8f4ff, #faf8ff);
+  border-top: 2px solid var(--border);
 }
+
 .summary-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
-  font-size: 0.9rem;
-}
-.summary-row.total {
-  font-size: 1.15rem;
-  font-weight: 900;
-  color: var(--primary);
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--border);
-}
-.total-amount {
-  font-weight: 900;
-  color: var(--primary);
-}
-.divider {
-  border: none;
-  border-top: 1px dashed var(--border);
-  margin: 10px 0;
-}
-.free-text {
-  color: #10b981;
-  font-weight: 700;
-  background: linear-gradient(160deg, #f0fdf5, #e4f8ef);
-  padding: 3px 10px;
-  border-radius: 12px;
-  font-size: 0.85rem;
 }
 
-.btn-checkout {
-  width: 100%;
-  padding: 14px;
-  border-radius: var(--radius-sm);
-  border: none;
-  background: linear-gradient(160deg, #7c63d8, #6f50a0);
-  color: #fff;
-  font-weight: 800;
+.summary-label {
   font-size: 1rem;
-  cursor: pointer;
-  margin-top: 15px;
-  box-shadow: 0 4px 12px rgba(111, 80, 160, 0.25);
-  transition: all 0.2s;
-  font-family: inherit;
-}
-.btn-checkout:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(111, 80, 160, 0.35);
-}
-.btn-checkout:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
+  font-weight: 700;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
-/* Notice */
+.summary-total {
+  font-size: 1.5rem;
+  font-weight: 900;
+  background: linear-gradient(135deg, var(--primary), var(--primary-light));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ─────────────────── BUTTONS ─────────────────── */
+.btn-back-home {
+  align-self: center;
+  padding: 1rem 2rem;
+  background: linear-gradient(135deg, var(--primary), var(--primary-light));
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.3s;
+  box-shadow: 0 4px 16px rgba(124, 92, 219, 0.3);
+  margin-top: 1rem;
+  animation: slideDown 0.5s ease 0.4s backwards;
+}
+
+.btn-back-home:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 24px rgba(124, 92, 219, 0.4);
+}
+
+.btn-back-home:active {
+  transform: translateY(-1px);
+}
+
+/* ─────────────────── NOTICE ─────────────────── */
 .notice {
   position: fixed;
-  top: 70px;
+  top: 75px;
   right: 20px;
   z-index: 1000;
-  padding: 12px 16px;
-  border-radius: var(--radius-sm);
-  background: #fff;
-  box-shadow: 0 4px 12px rgba(111, 80, 160, 0.2);
+  padding: 1rem 1.5rem;
+  background: var(--surface);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
   border-left: 4px solid var(--primary);
   font-size: 0.9rem;
   font-weight: 600;
   animation: slideIn 0.3s ease;
 }
+
 .notice-msg {
   color: var(--text);
 }
+
 .notice--error {
-  border-left-color: #ef4444;
+  border-left-color: var(--danger);
 }
+
 .notice--success {
-  border-left-color: #10b981;
+  border-left-color: var(--success);
 }
+
 .notice--warn {
-  border-left-color: #f59e0b;
+  border-left-color: var(--warning);
 }
 
 @keyframes slideIn {
@@ -770,70 +921,63 @@ onMounted(() => {
   }
 }
 
-/* Layout */
-.content {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 1.5rem 1rem;
-}
-.order-layout {
-  display: grid;
-  grid-template-columns: 1fr 360px;
-  gap: 1.5rem;
-  align-items: start;
-}
-.order-details {
-  display: flex;
-  flex-direction: column;
-}
-.payment-section {
-  display: flex;
-  flex-direction: column;
-}
-
-/* State Messages */
-.state-wrap {
-  text-align: center;
-  padding: 3rem 1rem;
-  color: var(--muted);
-}
-.error-box {
-  padding: 1rem;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  border-radius: var(--radius-sm);
-  color: #dc2626;
-  font-weight: 600;
-  margin-bottom: 1rem;
-}
-
-.loader {
-  border: 3px solid #f0e6ff;
-  border-top: 3px solid var(--primary);
-  border-radius: 50%;
-  width: 32px;
-  height: 32px;
-  animation: spin 0.8s linear infinite;
-  margin: 0 auto 1rem;
-}
-@keyframes spin {
+@keyframes slideDown {
   0% {
-    transform: rotate(0deg);
+    transform: translateY(-10px);
+    opacity: 0;
   }
   100% {
-    transform: rotate(360deg);
+    transform: translateY(0);
+    opacity: 1;
   }
 }
 
-@media (max-width: 900px) {
-  .order-layout {
-    grid-template-columns: 1fr;
-  }
-  .form-grid {
-    grid-template-columns: 1fr;
-  }
-  .content {
+/* ─────────────────── RESPONSIVE ─────────────────── */
+@media (max-width: 768px) {
+  .main-content {
     padding: 1rem;
+  }
+
+  .header-card {
+    padding: 1.5rem;
+  }
+
+  .order-id {
+    font-size: 1.5rem;
+  }
+
+  .items-grid-header,
+  .grid-row {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .header-cell,
+  .cell {
+    display: block;
+  }
+
+  .product-cell {
+    flex-direction: column;
+    text-align: center;
+  }
+
+  .price-value,
+  .total-value {
+    text-align: left;
+  }
+
+  .items-grid-header {
+    display: none;
+  }
+
+  .grid-row::before {
+    content: attr(data-label);
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.5px;
   }
 }
 </style>

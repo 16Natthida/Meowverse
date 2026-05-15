@@ -1,9 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { RouterLink } from 'vue-router'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
-const lowStockAlerts = ref([])
 const latestProducts = ref([])
 const dashboardData = ref(null)
 const isLoading = ref(false)
@@ -79,14 +77,6 @@ const chartBars = computed(() => {
   })
 })
 
-function getImageOrFallback(product) {
-  if (Array.isArray(product.imageUrls) && product.imageUrls.length > 0) {
-    return product.imageUrls[0]
-  }
-
-  return ''
-}
-
 function formatCurrency(amount) {
   return new Intl.NumberFormat('th-TH', {
     style: 'currency',
@@ -133,14 +123,6 @@ function resolveStockStatusText(product) {
   return 'ปกติ'
 }
 
-async function fetchLowStockAlerts() {
-  const response = await fetch(`${API_BASE_URL}/products/alerts/low-stock?threshold=8`)
-  if (!response.ok) {
-    throw new Error(`โหลดข้อมูลแจ้งเตือนไม่สำเร็จ (${response.status})`)
-  }
-  lowStockAlerts.value = await response.json()
-}
-
 async function fetchDashboardOverview() {
   const user = JSON.parse(
     localStorage.getItem('meowverse-user') || sessionStorage.getItem('meowverse-user') || '{}',
@@ -165,7 +147,7 @@ async function loadDashboardData() {
   error.value = ''
 
   try {
-    await Promise.all([fetchLowStockAlerts(), fetchDashboardOverview()])
+    await fetchDashboardOverview()
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดขณะโหลดข้อมูล'
   } finally {
@@ -256,26 +238,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="home-page">
-    <section class="hero-panel">
-      <div class="hero-copy">
-        <p class="eyebrow">Meowverse Admin Console</p>
-        <h2>แดชบอร์ดร้าน Pet Shop ที่ดูสถานะได้ครบในหน้าเดียว</h2>
-        <p>
-          ภาพรวมยอดขาย ออเดอร์ และสต็อกคงเหลือแบบเรียลไทม์ เพื่อให้ทีมแอดมินตัดสินใจได้ไว
-          และไม่พลาดสินค้าขาดมือ
-        </p>
-      </div>
-
-      <div class="hero-actions">
-        <RouterLink class="hero-btn hero-btn--primary" to="/admin/products"
-          >จัดการสินค้า</RouterLink
-        >
-        <RouterLink class="hero-btn hero-btn--primary" to="/admin/preorder-rounds"
-          >รอบนำเข้าสินค้า</RouterLink
-        >
-        <a class="hero-btn hero-btn--ghost" href="#stock-alerts">ดูสต็อกใกล้หมด</a>
-      </div>
-    </section>
+    <!-- Hero removed per request -->
 
     <section class="kpi-grid">
       <article class="kpi-card kpi-card--highlight">
@@ -300,12 +263,6 @@ onBeforeUnmount(() => {
         <p class="kpi-label">หมวดหมู่สินค้า</p>
         <p class="kpi-value">{{ formatNumber(kpi.totalCategories) }} หมวด</p>
         <p class="kpi-footnote">จำนวนหมวดหมู่ทั้งหมด</p>
-      </article>
-
-      <article class="kpi-card">
-        <p class="kpi-label">สินค้าใกล้หมด</p>
-        <p class="kpi-value">{{ formatNumber(kpi.lowStockCount) }} รายการ</p>
-        <p class="kpi-footnote">สินค้าที่เหลือ &lt;= {{ thresholds.lowStock }} ชิ้น</p>
       </article>
     </section>
 
@@ -351,27 +308,6 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </article>
-      <article class="panel panel--alert-summary" id="stock-alerts">
-        <header class="panel-head panel-head--stack">
-          <h3>สรุปสต็อกใกล้หมด</h3>
-          <p v-if="!error">อ้างอิงข้อมูลจากสินค้าในระบบ</p>
-        </header>
-
-        <div v-if="error" class="error-banner">{{ error }}</div>
-
-        <div class="summary-row">
-          <div class="summary-card">
-            <p>สินค้าคงเหลือน้อยกว่า {{ thresholds.lowStock }}</p>
-            <strong>{{ kpi.lowStockCount }}</strong>
-          </div>
-          <div class="summary-card summary-card--critical">
-            <p>เสี่ยงหมดสต็อก (&lt;= {{ thresholds.severeLowStock }})</p>
-            <strong>{{ kpi.severeLowStockCount }}</strong>
-          </div>
-        </div>
-
-        <p v-if="isLoading" class="loading-message">กำลังโหลดข้อมูลสต็อก...</p>
-      </article>
     </section>
 
     <section class="panel table-panel">
@@ -402,54 +338,6 @@ onBeforeUnmount(() => {
                 }}</span>
               </td>
               <td>{{ formatCurrency(product.basePrice) }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="panel table-panel">
-      <header class="panel-head panel-head--stack">
-        <h3>สต็อกสินค้าที่ใกล้หมด</h3>
-        <p>สินค้าเรียงตามปริมาณคงเหลือจากน้อยไปมาก</p>
-      </header>
-
-      <p v-if="isLoading" class="loading-message">กำลังโหลดข้อมูล...</p>
-
-      <div v-else-if="lowStockAlerts.length === 0" class="empty-state">
-        <p>ยังไม่มีสินค้าที่เข้าข่ายใกล้หมดในตอนนี้</p>
-      </div>
-
-      <div v-else class="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>สินค้า</th>
-              <th>หมวดหมู่</th>
-              <th>SKU</th>
-              <th>คงเหลือ</th>
-              <th>สถานะ</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="product in lowStockAlerts" :key="product.id">
-              <td class="product-cell">
-                <img
-                  v-if="getImageOrFallback(product)"
-                  :src="getImageOrFallback(product)"
-                  :alt="product.name"
-                />
-                <span v-else class="thumb-fallback">🐾</span>
-                <strong>{{ product.name }}</strong>
-              </td>
-              <td>{{ product.categoryName || '-' }}</td>
-              <td>{{ product.sku || '-' }}</td>
-              <td>{{ product.stock }} ชิ้น</td>
-              <td>
-                <span :class="resolveStockStatusClass(product)">{{
-                  resolveStockStatusText(product)
-                }}</span>
-              </td>
             </tr>
           </tbody>
         </table>

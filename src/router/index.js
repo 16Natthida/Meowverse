@@ -45,8 +45,19 @@ const router = createRouter({
       meta: { requiresAuth: true, roles: ['user'] },
     },
     {
+      path: '/ready-payment/:orderId',
+      component: () => import('../views/User/ReadyPayment.vue'),
+      meta: { requiresAuth: true, roles: ['user'] },
+    },
+    {
       path: '/admin/slips',
       component: () => import('../views/Admin/SlipManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/admin/orders',
+      name: 'admin-orders',
+      component: () => import('../views/Admin/OrderManagement.vue'),
       meta: { requiresAuth: true, roles: ['admin'] },
     },
     {

@@ -561,6 +561,23 @@ function closeProductDetailModal() {
   selectedProduct.value = null
 }
 
+function getSuggestedQuantity(product) {
+  if (!product || typeof product !== 'object') {
+    return 1
+  }
+
+  const flavorStock = product.flavorStock
+  if (flavorStock && typeof flavorStock === 'object' && !Array.isArray(flavorStock)) {
+    const flavorTotal = Object.values(flavorStock).reduce((sum, qty) => sum + (Number(qty) || 0), 0)
+    if (flavorTotal > 0) {
+      return Math.max(1, flavorTotal)
+    }
+  }
+
+  const stock = Number(product.stock) || 0
+  return Math.max(1, stock)
+}
+
 function toggleProductSelection(product) {
   const productId = product.id
   const index = selectedProductIds.value.indexOf(productId)
@@ -569,7 +586,7 @@ function toggleProductSelection(product) {
     delete selectedProductQuantities[productId]
   } else {
     selectedProductIds.value.push(productId)
-    selectedProductQuantities[productId] = 1 // Default quantity
+    selectedProductQuantities[productId] = getSuggestedQuantity(product)
   }
 }
 
@@ -652,7 +669,14 @@ async function saveRound() {
 async function confirmAddProducts() {
   try {
     if (selectedProductIds.value.length > 0 && currentRound.value) {
-      const quantities = selectedProductIds.value.map((id) => selectedProductQuantities[id] || 1)
+      const quantities = selectedProductIds.value.map((id) => {
+        if (selectedProductQuantities[id] != null) {
+          return selectedProductQuantities[id]
+        }
+
+        const product = filteredAvailableProducts.value.find((p) => String(p.id) === String(id))
+        return getSuggestedQuantity(product)
+      })
       await preorderStore.addProductsToRound(
         currentRound.value.id,
         selectedProductIds.value,

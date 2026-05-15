@@ -74,7 +74,7 @@ router.post('/checkout', async (req, res) => {
          p.ready_to_ship_enabled AS readyToShipEnabled,
          p.preorder_enabled AS preorderEnabled,
          COALESCE(
-           c.round_price,
+           NULLIF(c.round_price, 0),
            CASE
              WHEN COALESCE(NULLIF(c.item_type, ''), CASE
                WHEN c.preorder_round_id IS NOT NULL THEN 'preorder'
@@ -82,7 +82,7 @@ router.post('/checkout', async (req, res) => {
                WHEN p.preorder_enabled = 1 THEN 'preorder'
                ELSE NULL
              END) = 'preorder' THEN CASE
-               WHEN c.preorder_round_id IS NOT NULL THEN COALESCE(prp.round_price, p.preorder_price, p.base_price)
+               WHEN c.preorder_round_id IS NOT NULL THEN COALESCE(NULLIF(prp.round_price, 0), NULLIF(p.preorder_price, 0), NULLIF(p.base_price, 0))
                ELSE COALESCE(
                  (
                    SELECT prp2.round_price
@@ -93,11 +93,11 @@ router.post('/checkout', async (req, res) => {
                    ORDER BY r2.start_date DESC, prp2.round_id DESC
                    LIMIT 1
                  ),
-                 p.preorder_price,
-                 p.base_price
+                 NULLIF(p.preorder_price, 0),
+                 NULLIF(p.base_price, 0)
                )
              END
-             ELSE p.base_price
+             ELSE COALESCE(NULLIF(p.base_price, 0), NULLIF(p.preorder_price, 0))
            END
          ) AS price
        FROM cart c
@@ -124,8 +124,9 @@ router.post('/checkout', async (req, res) => {
       }
     }
 
+    // ใช้ราคาจาก query (calculated price) แทนที่จาก frontend เพื่อหลีกเลี่ยง price=0
     const totalAmount = cartItems.reduce(
-      (sum, item) => sum + Number(item.price || 0) * Number(item.qty || 0),
+      (sum, item) => sum + (Number(item.price) || 0) * Number(item.qty || 0),
       0,
     )
     const hasPreorder = cartItems.some(
@@ -180,17 +181,8 @@ router.post('/checkout', async (req, res) => {
       )
     }
 
-    await connection.query('DELETE FROM cart WHERE user_id = ?', [user_id])
-
     for (const item of cartItems) {
       const itemType = String(item.item_type || '').toLowerCase()
-
-      if (itemType === 'ready-to-ship') {
-        await connection.query('UPDATE products SET stock_qty = stock_qty - ? WHERE prod_id = ?', [
-          item.qty,
-          item.prod_id,
-        ])
-      }
 
       if (itemType === 'preorder' && item.preorder_round_id) {
         await connection.query(
@@ -200,6 +192,15 @@ router.post('/checkout', async (req, res) => {
           [item.qty, item.preorder_round_id, item.prod_id],
         )
       }
+    }
+
+    // ลบเฉพาะสินค้าที่สั่งออกจากตะกร้า (เลือกเฉพาะตามรายการที่ได้รับ)
+    if (selectedCartIds.length > 0) {
+      const deletePlaceholders = selectedCartIds.map(() => '?').join(',')
+      await connection.query(
+        `DELETE FROM cart WHERE cart_id IN (${deletePlaceholders})`,
+        selectedCartIds,
+      )
     }
 
     await connection.commit()
@@ -266,7 +267,14 @@ router.get('/:order_id', async (req, res) => {
     const order = orderRows[0]
 
     const [detailRows] = await db.query(
-      `SELECT od.detail_id, od.prod_id, od.Price, od.qty, od.received_qty, od.arrival_status, od.Import_fee, od.item_type, od.preorder_round_id, p.prod_name AS name, c.cat_name AS category_name
+      `SELECT od.detail_id, od.prod_id, od.Price AS unit_price, od.qty, od.received_qty, od.arrival_status, od.Import_fee, od.item_type, od.preorder_round_id, p.prod_name AS name, c.cat_name AS category_name,
+              (
+                SELECT pi.image_url
+                FROM product_images pi
+                WHERE pi.prod_id = od.prod_id
+                ORDER BY pi.sort_order ASC, pi.img_id ASC
+                LIMIT 1
+              ) AS image
        FROM order_details od
        LEFT JOIN products p ON od.prod_id = p.prod_id
        LEFT JOIN categories c ON p.cat_id = c.cat_id
