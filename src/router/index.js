@@ -50,6 +50,16 @@ const router = createRouter({
       meta: { requiresAuth: true, roles: ['user'] },
     },
     {
+      path: '/preorder-payment-temp',
+      component: () => import('../views/User/PreorderPayment.vue'),
+      meta: { requiresAuth: true, roles: ['user'] },
+    },
+    {
+      path: '/ready-payment-temp',
+      component: () => import('../views/User/ReadyPayment.vue'),
+      meta: { requiresAuth: true, roles: ['user'] },
+    },
+    {
       path: '/admin/slips',
       component: () => import('../views/Admin/SlipManagement.vue'),
       meta: { requiresAuth: true, roles: ['admin'] },

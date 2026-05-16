@@ -34,7 +34,7 @@ async function hasOrderDetailColumn(connection, columnName, cacheKeyName) {
   return exists
 }
 
-router.post('/checkout', async (req, res) => {
+router.post('/checkout-preview', async (req, res) => {
   const { user_id, items: requestItems = [] } = req.body || {}
 
   if (!user_id) {
@@ -125,6 +125,137 @@ router.post('/checkout', async (req, res) => {
     }
 
     // ใช้ราคาจาก query (calculated price) แทนที่จาก frontend เพื่อหลีกเลี่ยง price=0
+    const totalAmount = cartItems.reduce(
+      (sum, item) => sum + (Number(item.price) || 0) * Number(item.qty || 0),
+      0,
+    )
+    const hasPreorder = cartItems.some(
+      (item) => String(item.item_type || '').toLowerCase() === 'preorder' || item.preorder_round_id,
+    )
+    const orderType = hasPreorder ? 'Preorder' : 'Ready'
+
+    await connection.commit()
+
+    res.status(201).json({
+      message: 'วาลิเดตออเดอร์สำเร็จ',
+      cart_items: cartItems,
+      order_type: orderType,
+      total_amount: totalAmount,
+      item_count: cartItems.length,
+    })
+  } catch (err) {
+    await connection.rollback()
+    console.error('[POST /api/orders/checkout-preview]', err)
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการสร้างออเดอร์' })
+  } finally {
+    connection.release()
+  }
+})
+
+// POST /api/orders/confirm-payment
+// สร้างออเดอร์จริง + ลบ cart เมื่อกดยืนยันการชำระ
+router.post('/confirm-payment', async (req, res) => {
+  let { user_id, items: requestItems = [] } = req.body || {}
+
+  if (!user_id) {
+    return res.status(400).json({ error: 'user_id is required' })
+  }
+
+  let selectedItems = requestItems
+
+  // ถ้า items เป็น string (มาจาก formData) ให้ parse เป็น array
+  if (typeof requestItems === 'string') {
+    try {
+      selectedItems = JSON.parse(requestItems)
+    } catch (e) {
+      selectedItems = []
+    }
+  }
+
+  const db = getDB(req)
+  const connection = await db.getConnection()
+
+  try {
+    await connection.beginTransaction()
+
+    const selectedCartIds = Array.isArray(selectedItems)
+      ? [...new Set(selectedItems.map((item) => Number(item.cart_id)).filter(Boolean))]
+      : []
+
+    if (selectedCartIds.length === 0) {
+      await connection.rollback()
+      return res.status(400).json({ error: 'ต้องส่งรายการสินค้าที่ต้องการ checkout' })
+    }
+
+    const placeholders = selectedCartIds.map(() => '?').join(',')
+    const [cartItems] = await connection.query(
+      `SELECT
+         c.cart_id,
+         c.user_id,
+         c.prod_id,
+         c.qty,
+         c.item_type,
+         c.flavor,
+         c.preorder_round_id,
+         c.round_price,
+         p.prod_name AS name,
+         p.stock_qty AS stock,
+         p.base_price AS basePrice,
+         p.preorder_price AS preorderPrice,
+         p.ready_to_ship_enabled AS readyToShipEnabled,
+         p.preorder_enabled AS preorderEnabled,
+         COALESCE(
+           NULLIF(c.round_price, 0),
+           CASE
+             WHEN COALESCE(NULLIF(c.item_type, ''), CASE
+               WHEN c.preorder_round_id IS NOT NULL THEN 'preorder'
+               WHEN p.ready_to_ship_enabled = 1 THEN 'ready-to-ship'
+               WHEN p.preorder_enabled = 1 THEN 'preorder'
+               ELSE NULL
+             END) = 'preorder' THEN CASE
+               WHEN c.preorder_round_id IS NOT NULL THEN COALESCE(NULLIF(prp.round_price, 0), NULLIF(p.preorder_price, 0), NULLIF(p.base_price, 0))
+               ELSE COALESCE(
+                 (
+                   SELECT prp2.round_price
+                   FROM preorder_round_products prp2
+                   JOIN preorder_rounds r2 ON r2.round_id = prp2.round_id
+                   WHERE prp2.prod_id = c.prod_id
+                     AND LOWER(r2.status) IN ('active', 'open')
+                   ORDER BY r2.start_date DESC, prp2.round_id DESC
+                   LIMIT 1
+                 ),
+                 NULLIF(p.preorder_price, 0),
+                 NULLIF(p.base_price, 0)
+               )
+             END
+             ELSE COALESCE(NULLIF(p.base_price, 0), NULLIF(p.preorder_price, 0))
+           END
+         ) AS price
+       FROM cart c
+       LEFT JOIN products p ON p.prod_id = c.prod_id
+       LEFT JOIN preorder_round_products prp
+         ON prp.round_id = c.preorder_round_id AND prp.prod_id = c.prod_id
+       WHERE c.user_id = ? AND c.cart_id IN (${placeholders})
+       ORDER BY c.cart_id`,
+      [user_id, ...selectedCartIds],
+    )
+
+    if (cartItems.length === 0) {
+      await connection.rollback()
+      return res.status(400).json({ error: 'ตะกร้าสินค้าว่างเปล่า' })
+    }
+
+    for (const item of cartItems) {
+      const itemType = String(item.item_type || '').toLowerCase()
+      if (itemType === 'ready-to-ship' && item.qty > item.stock) {
+        await connection.rollback()
+        return res.status(400).json({
+          error: `สินค้า "${item.name}" มีสต็อกไม่เพียงพอ (เหลือ ${item.stock} ชิ้น)`,
+        })
+      }
+    }
+
+    // ใช้ราคาจาก query (calculated price)
     const totalAmount = cartItems.reduce(
       (sum, item) => sum + (Number(item.price) || 0) * Number(item.qty || 0),
       0,

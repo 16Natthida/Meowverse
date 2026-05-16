@@ -48,9 +48,32 @@ const onFileChange = (e) => {
 const fetchOrder = async () => {
   const orderId = route.params.orderId
   if (!orderId) {
-    router.push('/')
+    // ไม่มี orderId - อ่านจาก sessionStorage
+    const pendingDataJson = sessionStorage.getItem('pending_order_data')
+    if (!pendingDataJson) {
+      router.push('/cart')
+      return
+    }
+    try {
+      const pendingData = JSON.parse(pendingDataJson)
+      order.value = {
+        order_id: null,
+        items: pendingData.items,
+        total_amount: pendingData.total_amount,
+        Order_type: 'Preorder',
+        user_id: pendingData.user_id,
+      }
+    } catch {
+      error.value = 'ข้อมูลชั่วคราวเสียหาย'
+      setTimeout(() => router.push('/cart'), 2000)
+      loading.value = false
+      return
+    }
+    loading.value = false
     return
   }
+
+  // ถ้ามี orderId ให้ fetch แบบปกติ (สำหรับกรณีที่เข้า URL โดยตรง)
   try {
     loading.value = true
     error.value = null
@@ -63,6 +86,8 @@ const fetchOrder = async () => {
       return
     }
     order.value = data
+    // ลบ sessionStorage ถ้ามี (เพราะเข้า URL โดยตรง)
+    sessionStorage.removeItem('pending_order_data')
   } catch (err) {
     error.value = err.message
   } finally {
@@ -78,10 +103,61 @@ const confirmPayment = async () => {
 
   try {
     loading.value = true
+
+    // Check if this is a new order (no order_id, data from sessionStorage)
+    if (!order.value.order_id) {
+      const pendingDataJson = sessionStorage.getItem('pending_order_data')
+      if (!pendingDataJson) {
+        showNotice('ข้อมูลชั่วคราวหมดอายุ กรุณากลับไปหน้าตะกร้า', 'error')
+        setTimeout(() => router.push('/cart'), 2000)
+        return
+      }
+      const pendingData = JSON.parse(pendingDataJson)
+
+      // Step 1: Create order (without file upload)
+      const res = await fetch(`${API_BASE_URL}/orders/confirm-payment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: pendingData.user_id,
+          items: pendingData.items,
+        }),
+      })
+      if (!res.ok) {
+        const errorBody = await res.json().catch(() => null)
+        throw new Error(errorBody?.error || errorBody?.message || 'เกิดข้อผิดพลาดในการสร้างออเดอร์')
+      }
+      const orderData = await res.json()
+      const newOrderId = orderData.order_id
+
+      // Step 2: Upload payment slip
+      const slipFormData = new FormData()
+      slipFormData.append('payment_method', selectedPaymentMethod.value)
+      slipFormData.append('slip', slipFile.value)
+      slipFormData.append('shipping_name', '-')
+      slipFormData.append('shipping_phone', '-')
+      slipFormData.append('shipping_address', '-')
+      slipFormData.append('notes', '')
+
+      const slipRes = await fetch(`${API_BASE_URL}/orders/${newOrderId}/payment`, {
+        method: 'POST',
+        body: slipFormData,
+      })
+      if (!slipRes.ok) {
+        const errorBody = await slipRes.json().catch(() => null)
+        throw new Error(errorBody?.error || errorBody?.message || 'เกิดข้อผิดพลาดในการส่งหลักฐาน')
+      }
+
+      showNotice('ส่งหลักฐานเรียบร้อย! รอการตรวจสอบจากทีมงาน', 'success')
+      sessionStorage.removeItem('pending_order_data')
+      setTimeout(() => router.push('/order-list'), 2500)
+      return
+    }
+
+    // Existing order (has order_id) - use old payment flow
     const formData = new FormData()
     formData.append('payment_method', selectedPaymentMethod.value)
     formData.append('slip', slipFile.value)
-    // ส่งข้อมูล shipping เป็นค่าว่างเพราะ Preorder ไม่ต้องการ
     formData.append('shipping_name', '-')
     formData.append('shipping_phone', '-')
     formData.append('shipping_address', '-')
@@ -115,7 +191,7 @@ function showNotice(msg, type = 'success') {
 }
 
 function goBack() {
-  router.push('/order-list')
+  router.push('/cart')
 }
 
 onMounted(fetchOrder)
@@ -213,10 +289,18 @@ onMounted(fetchOrder)
                     <p v-if="item.preorder_round_id" class="item-round">
                       รอบนำเข้า #{{ item.preorder_round_id }}
                     </p>
-                    <p class="item-price-small">฿{{ Number(item.unit_price).toLocaleString() }}</p>
+                    <p class="item-price-small">
+                      ฿{{ Number(item.price || item.Price || item.unit_price).toLocaleString() }}
+                    </p>
                   </div>
                   <div class="item-qty">x{{ item.qty }}</div>
-                  <div class="item-total">฿{{ (item.unit_price * item.qty).toLocaleString() }}</div>
+                  <div class="item-total">
+                    ฿{{
+                      (
+                        Number(item.price || item.Price || item.unit_price) * Number(item.qty || 0)
+                      ).toLocaleString()
+                    }}
+                  </div>
                 </div>
               </div>
             </div>
@@ -234,10 +318,18 @@ onMounted(fetchOrder)
                     <p v-if="item.preorder_round_id" class="item-round">
                       รอบนำเข้า #{{ item.preorder_round_id }}
                     </p>
-                    <p class="item-price-small">฿{{ Number(item.unit_price).toLocaleString() }}</p>
+                    <p class="item-price-small">
+                      ฿{{ Number(item.price || item.Price || item.unit_price).toLocaleString() }}
+                    </p>
                   </div>
                   <div class="item-qty">x{{ item.qty }}</div>
-                  <div class="item-total">฿{{ (item.unit_price * item.qty).toLocaleString() }}</div>
+                  <div class="item-total">
+                    ฿{{
+                      (
+                        Number(item.price || item.Price || item.unit_price) * Number(item.qty || 0)
+                      ).toLocaleString()
+                    }}
+                  </div>
                 </div>
               </div>
             </div>
@@ -252,10 +344,18 @@ onMounted(fetchOrder)
                   <div class="item-info">
                     <p class="item-name">{{ item.name }}</p>
                     <p v-if="item.flavor" class="item-flavor">รส {{ item.flavor }}</p>
-                    <p class="item-price-small">฿{{ Number(item.unit_price).toLocaleString() }}</p>
+                    <p class="item-price-small">
+                      ฿{{ Number(item.price || item.Price || item.unit_price).toLocaleString() }}
+                    </p>
                   </div>
                   <div class="item-qty">x{{ item.qty }}</div>
-                  <div class="item-total">฿{{ (item.unit_price * item.qty).toLocaleString() }}</div>
+                  <div class="item-total">
+                    ฿{{
+                      (
+                        Number(item.price || item.Price || item.unit_price) * Number(item.qty || 0)
+                      ).toLocaleString()
+                    }}
+                  </div>
                 </div>
               </div>
             </div>

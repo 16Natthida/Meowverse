@@ -206,7 +206,7 @@ const checkout = async () => {
       })),
     }
 
-    const res = await fetch(`${API_BASE_URL}/orders/checkout`, {
+    const res = await fetch(`${API_BASE_URL}/orders/checkout-preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -219,19 +219,29 @@ const checkout = async () => {
 
     const data = await res.json()
 
-    showNotice('สร้างออเดอร์สำเร็จ! กำลังไปหน้ากรอกข้อมูลจัดส่ง...', 'success')
+    // Save pending order data to sessionStorage
+    sessionStorage.setItem(
+      'pending_order_data',
+      JSON.stringify({
+        user_id: userId,
+        items: activeItems.value,
+        order_type: data.order_type,
+        total_amount: data.total_amount,
+        item_count: data.item_count,
+      }),
+    )
 
-    // Redirect: if order contains preorder items, go to preorder payment page,
-    // otherwise go to regular order summary (where payment/slip is attached)
-    const newOrderId = data.order_id || data.order_ids?.[0]
+    showNotice('กำลังไปหน้าชำระเงิน...', 'success')
+
+    // Redirect to temp payment pages (without order_id)
     const newOrderType = String(data.order_type || data.orderType || '').toLowerCase()
 
     setTimeout(() => {
       if (newOrderType === 'preorder') {
-        router.push(`/preorder-payment/${newOrderId}`)
+        router.push('/preorder-payment-temp')
       } else {
         // Ready stock: go to dedicated ready payment page
-        router.push(`/ready-payment/${newOrderId}`)
+        router.push('/ready-payment-temp')
       }
     }, 1500)
   } catch (err) {
