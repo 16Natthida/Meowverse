@@ -762,6 +762,11 @@ async function ensureAdminSchema() {
   `)
 
   await pool.query(`
+    ALTER TABLE orders
+    ADD COLUMN IF NOT EXISTS deadline DATETIME NULL
+  `)
+
+  await pool.query(`
     ALTER TABLE preorder_rounds
     ADD COLUMN IF NOT EXISTS round_description VARCHAR(255) NULL AFTER round_name
   `)
@@ -1029,7 +1034,8 @@ app.put('/api/site-settings/theme', authenticateToken, requireAdmin, async (req,
       `
         INSERT INTO site_settings (setting_key, setting_value)
         VALUES (?, ?), (?, ?)
-        ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP
+        AS new_val(setting_key, setting_value)
+        ON DUPLICATE KEY UPDATE setting_value = new_val.setting_value, updated_at = CURRENT_TIMESTAMP
       `,
       ['theme_primary', primary, 'theme_accent', accent],
     )
@@ -1975,9 +1981,10 @@ app.put('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
                 0,
               )
 
+              const deadline = new Date(Date.now() + 48 * 60 * 60 * 1000)
               const [orderResult] = await connection.query(
-                `INSERT INTO orders (user_id, total_amount, status, Order_type) VALUES (?, ?, 'Pending', 'Preorder')`,
-                [userId, totalAmount],
+                `INSERT INTO orders (user_id, total_amount, status, Order_type, deadline) VALUES (?, ?, 'Pending', 'Preorder', ?)`,
+                [userId, totalAmount, deadline],
               )
               const orderId = orderResult.insertId
 
@@ -2094,16 +2101,17 @@ app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, a
       prices && prices[index] ? Number(prices[index]) : null,
     ])
 
+    const placeholders1 = values.map(() => '(?, ?, ?, ?)').join(', ')
+    const flatValues1 = values.flat()
     await pool.query(
       `
       INSERT INTO preorder_round_products (round_id, prod_id, quantity_available, round_price)
-      VALUES ?
+      VALUES ${placeholders1}
       ON DUPLICATE KEY UPDATE
         quantity_available = VALUES(quantity_available),
         round_price = COALESCE(VALUES(round_price), round_price)
-      ON DUPLICATE KEY UPDATE quantity_available = VALUES(quantity_available), round_price = VALUES(round_price)
     `,
-      [values],
+      flatValues1,
     )
 
     await pool.query(`UPDATE products SET preorder_enabled = 1 WHERE prod_id IN (?)`, [
@@ -2193,15 +2201,17 @@ app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, a
           : (preorderPriceMap.get(String(pid)) ?? productPriceMap.get(String(pid)) ?? 0),
     ])
 
+    const placeholders2 = values.map(() => '(?, ?, ?, ?)').join(', ')
+    const flatValues2 = values.flat()
     await pool.query(
       `
       INSERT INTO preorder_round_products (round_id, prod_id, quantity_available, round_price)
-      VALUES ?
+      VALUES ${placeholders2}
       ON DUPLICATE KEY UPDATE
         quantity_available = VALUES(quantity_available),
         round_price = COALESCE(VALUES(round_price), round_price)
     `,
-      [values],
+      flatValues2,
     )
 
     await pool.query(`UPDATE products SET preorder_enabled = 1 WHERE prod_id IN (?)`, [
