@@ -47,6 +47,10 @@ const pageTitle = computed(() => {
     return 'รับสินค้าเข้า'
   }
 
+  if (route.path === '/admin/shipping') {
+    return 'รายการจัดส่ง'
+  }
+
   return 'แดชบอร์ด'
 })
 
@@ -255,6 +259,7 @@ onUnmounted(() => {
           <RouterLink to="/admin/slips">จัดการสลิป</RouterLink>
           <RouterLink to="/admin/preorder-rounds">รอบนำเข้าสินค้า</RouterLink>
           <RouterLink to="/admin/inventory-intake">รับสินค้าเข้า</RouterLink>
+          <RouterLink to="/admin/shipping">รายการจัดส่ง</RouterLink>
           <RouterLink to="/admin/settings">ตั้งค่าระบบ</RouterLink>
           <RouterLink to="/admin/users">เพิ่ม User</RouterLink>
         </nav>

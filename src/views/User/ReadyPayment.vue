@@ -57,7 +57,7 @@ const displayStatus = computed(() => {
 
   if (normalized === 'invalid slip') return 'สลิปไม่ถูกต้อง'
 
-  return order.value?.status || 'ไม่ทราบสถานะ'
+  return order.value?.status || 'รอชำระเงิน'
 })
 
 // ถ้า order เป็น paid หรือ ready to ship จะไม่อนุญาตให้แก้ไขสลิป
@@ -73,12 +73,23 @@ const isPaidOrReady = computed(() => {
   )
 })
 
+const isReadyToShip = computed(() => {
+  const raw = String(order.value?.status || '').trim()
+  const lower = raw.toLowerCase()
+  const normalized = lower.replace(/[_\s]+/g, ' ')
+  return normalized === 'ready to ship' || lower === 'ready_to_ship' || lower === 'readytoship'
+})
+
 const primaryButtonLabel = computed(() => {
   if (isPaidOrReady.value) return loading.value ? 'กำลังประมวลผล...' : 'บันทึกข้อมูลจัดส่ง'
   return loading.value ? 'กำลังประมวลผล...' : 'ยืนยันการชำระเงิน'
 })
 
 async function onPrimaryAction() {
+  if (isReadyToShip.value) {
+    return
+  }
+
   if (isPaidOrReady.value) {
     try {
       loading.value = true
@@ -440,6 +451,7 @@ onMounted(() => {
                   id="recipient-name"
                   v-model="shippingInfo.name"
                   placeholder="ระบุชื่อ-นามสกุล"
+                  :disabled="isReadyToShip"
                 />
               </div>
               
@@ -450,11 +462,12 @@ onMounted(() => {
                     id="recipient-phone"
                     v-model="shippingInfo.phone"
                     placeholder="08x-xxx-xxxx"
+                    :disabled="isReadyToShip"
                   />
                 </div>
                 <div>
                   <label for="shipping-carrier">บริษัทขนส่ง</label>
-                  <select id="shipping-carrier" v-model="shippingInfo.carrier">
+                  <select id="shipping-carrier" v-model="shippingInfo.carrier" :disabled="isReadyToShip">
                     <option value="">-- เลือกบริษัทขนส่ง --</option>
                     <option value="Kerry">Kerry</option>
                     <option value="Flash">Flash</option>
@@ -470,6 +483,7 @@ onMounted(() => {
                   id="shipping-notes"
                   v-model="shippingInfo.notes"
                   placeholder="เช่น ฝากไว้หน้าบ้าน"
+                  :disabled="isReadyToShip"
                 />
               </div>
 
@@ -480,6 +494,7 @@ onMounted(() => {
                   v-model="shippingInfo.address"
                   rows="4"
                   placeholder="บ้านเลขที่ หมู่ ซอย ถนน ตำบล อำเภอ จังหวัด รหัสไปรษณีย์"
+                  :disabled="isReadyToShip"
                 ></textarea>
               </div>
             </div>
@@ -554,7 +569,7 @@ onMounted(() => {
               </div>
               <div class="summary-note">ชำระด้วยสลิปโอนเงิน แล้วแอดมินจะตรวจสอบให้ทันที</div>
               <hr class="divider" />
-              <button type="button" class="btn-checkout" @click="onPrimaryAction" :disabled="loading">
+              <button type="button" class="btn-checkout" @click="onPrimaryAction" :disabled="loading || isReadyToShip">
                 {{ primaryButtonLabel }}
               </button>
             </div>
@@ -1000,6 +1015,15 @@ onMounted(() => {
   font-size: 0.84rem;
   font-weight: 700;
   color: #5a487c;
+}
+
+.field-group input:disabled,
+.field-group textarea:disabled,
+.field-group select:disabled {
+  background: #ece6f5;
+  border-color: #c8b8e0;
+  color: #6f5f84;
+  cursor: not-allowed;
 }
 
 .field-group input,
