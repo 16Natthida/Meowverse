@@ -49,6 +49,66 @@ const paymentMethods = [
   { id: 'promptpay', name: 'พร้อมเพย์', icon: '📱' },
 ]
 
+const showPostponeForm = ref(false)
+const postponeSubmitting = ref(false)
+const latestPostpone = ref(null)
+const postponeRequest = ref({
+  new_deadline: '',
+  reason: '',
+  contact_phone: '',
+  details: '',
+})
+
+const postponeStatusLabel = computed(() => {
+  const s = latestPostpone.value?.status
+  if (s === 'Pending') return { text: 'รอการพิจารณา', cls: 'status--pending' }
+  if (s === 'Approved') return { text: 'อนุมัติแล้ว', cls: 'status--approved' }
+  if (s === 'Rejected') return { text: 'ถูกปฏิเสธ', cls: 'status--rejected' }
+  return null
+})
+
+const fetchLatestPostpone = async (orderId) => {
+  if (!orderId) return
+  try {
+    const res = await fetch(`${API_BASE_URL}/orders/${orderId}/postpone/latest`)
+    if (!res.ok) return
+    const data = await res.json()
+    if (data && data.post_id) {
+      latestPostpone.value = data
+      // แปลง datetime → datetime-local format (YYYY-MM-DDTHH:mm)
+      if (data.new_deadline) {
+        postponeRequest.value.new_deadline = data.new_deadline.replace(' ', 'T').slice(0, 16)
+      }
+      postponeRequest.value.reason = data.request_reason || ''
+      postponeRequest.value.contact_phone = data.contact_phone || ''
+      postponeRequest.value.details = data.post_detail || ''
+    }
+  } catch {
+    // ไม่มีข้อมูล postpone ก็ไม่เป็นไร
+  }
+}
+
+const orderDeadlineDisplay = computed(() => {
+  if (!order.value?.deadline) return 'ยังไม่กำหนด'
+  const deadline = new Date(order.value.deadline)
+  if (Number.isNaN(deadline.getTime())) return 'ไม่สามารถอ่านได้'
+  return deadline.toLocaleString('th-TH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+})
+
+const isCancelled = computed(() =>
+  String(order.value?.status || '').trim().toLowerCase() === 'cancelled'
+)
+
+const canRequestPostpone = computed(() => {
+  return !!order.value?.order_id
+})
+
 const onFileChange = (e) => {
   const file = e.target.files[0]
   if (!file) return
@@ -107,6 +167,9 @@ const fetchOrder = async () => {
       return
     }
     order.value = data
+
+    // ── ดึงข้อมูลคำขอเลื่อนล่าสุด ──
+    await fetchLatestPostpone(data.order_id)
 
     // ── ดึงข้อมูลสลิปและที่อยู่ที่เคยกรอกไว้มาแสดงอัตโนมัติ ──
     if (data.saved_shipping) {
@@ -208,6 +271,54 @@ const confirmPayment = async () => {
     showNotice(err.message, 'error')
   } finally {
     loading.value = false
+  }
+}
+
+const submitPostponeRequest = async () => {
+  if (postponeSubmitting.value || !order.value?.order_id) return
+
+  if (!postponeRequest.value.new_deadline) {
+    showNotice('กรุณาเลือกวันที่ขอเลื่อน', 'error')
+    return
+  }
+  if (!postponeRequest.value.reason.trim()) {
+    showNotice('กรุณาระบุเหตุผลการขอเลื่อน', 'error')
+    return
+  }
+
+  try {
+    postponeSubmitting.value = true
+    const deadlineValue = String(postponeRequest.value.new_deadline || '').replace('T', ' ')
+    const res = await fetch(`${API_BASE_URL}/orders/${order.value.order_id}/postpone`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        new_deadline: deadlineValue,
+        reason: postponeRequest.value.reason,
+        contact_phone: postponeRequest.value.contact_phone,
+        details: postponeRequest.value.details,
+      }),
+    })
+
+    if (!res.ok) {
+      const errorBody = await res.json().catch(() => null)
+      throw new Error(errorBody?.error || errorBody?.message || 'เกิดข้อผิดพลาดในการส่งคำขอเลื่อน')
+    }
+
+    showNotice('ส่งคำขอเลื่อนเวลาเรียบร้อยแล้ว', 'success')
+    showPostponeForm.value = false
+    postponeRequest.value = {
+      new_deadline: '',
+      reason: '',
+      contact_phone: '',
+      details: '',
+    }
+    // โหลดข้อมูลคำขอล่าสุดใหม่
+    await fetchLatestPostpone(order.value.order_id)
+  } catch (err) {
+    showNotice(err.message, 'error')
+  } finally {
+    postponeSubmitting.value = false
   }
 }
 
@@ -338,32 +449,102 @@ onMounted(() => {
                 </div>
               </div>
             </div>
+          </div>
 
-            <div v-if="unspecifiedItems.length > 0" class="order-category-block">
-              <h3 style="font-size: 0.9rem; font-weight: 800; color: #6f50a0; margin-bottom: 0.6rem;">📦 รายการสินค้า</h3>
-              <div class="item-list">
-                <div v-for="it in unspecifiedItems" :key="it.detail_id" class="order-item">
-                  <div class="item-img">
-                    <img v-if="it.image" :src="it.image" /><span v-else>🐾</span>
-                  </div>
-                  <div class="item-info">
-                    <p class="item-name">{{ it.name }}</p>
-                    <p v-if="it.flavor" class="item-price-small" style="color: #8b5cf6; font-weight: 600;">รสชาติ: {{ it.flavor }}</p>
-                    <p class="item-price-small">ราคา ฿{{ Number(it.price || it.Price || it.unit_price || 0).toLocaleString() }} / ชิ้น</p>
-                  </div>
-                  <div class="item-meta">
-                    <div class="item-qty">x{{ it.qty }}</div>
-                    <div class="item-total">฿{{ (Number(it.price || it.Price || it.unit_price || 0) * Number(it.qty)).toLocaleString() }}</div>
-                  </div>
-                </div>
+          <!-- ── กล่องกำหนดชำระและขอเลื่อนเวลา ── -->
+          <div class="section-card postpone-card">
+            <div class="postpone-header">
+              <div>
+                <p class="postpone-title">🗓️ ข้อมูลกำหนดชำระ</p>
+                <p class="postpone-subtitle">กำหนดชำระล่าสุด</p>
               </div>
+              <strong>{{ orderDeadlineDisplay }}</strong>
+            </div>
+
+            <button
+              class="secondary-btn"
+              type="button"
+              @click="showPostponeForm = !showPostponeForm"
+              :disabled="!canRequestPostpone || loading"
+            >
+              {{ showPostponeForm ? 'ซ่อนแบบฟอร์มขอเลื่อน' : 'ขอเลื่อนเวลา' }}
+            </button>
+
+            <!-- ── แสดงสถานะคำขอเลื่อนล่าสุด ── -->
+            <div v-if="latestPostpone" class="postpone-latest-banner" :class="'postpone-latest--' + latestPostpone.status.toLowerCase()">
+              <div class="postpone-latest-banner__row">
+                <span class="postpone-latest-banner__label">คำขอเลื่อนล่าสุด</span>
+                <span class="postpone-status-badge" :class="postponeStatusLabel?.cls">{{ postponeStatusLabel?.text }}</span>
+              </div>
+              <div class="postpone-latest-banner__detail">
+                <span>📅 วันที่ขอเลื่อน: <strong>{{ new Date(latestPostpone.new_deadline).toLocaleString('th-TH', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}</strong></span>
+                <span v-if="latestPostpone.request_reason">💬 เหตุผล: {{ latestPostpone.request_reason }}</span>
+                <span v-if="latestPostpone.contact_phone">📞 เบอร์ติดต่อ: {{ latestPostpone.contact_phone }}</span>
+              </div>
+            </div>
+
+            <div v-if="showPostponeForm" class="postpone-form">
+              <p v-if="latestPostpone" class="postpone-prefill-note">📋 ข้อมูลด้านล่างดึงมาจากคำขอครั้งล่าสุด แก้ไขได้ตามต้องการ</p>
+              <label class="form-field">
+                <span class="form-label">วันที่ต้องการเลื่อน</span>
+                <input
+                  class="form-input"
+                  type="datetime-local"
+                  v-model="postponeRequest.new_deadline"
+                />
+              </label>
+              <label class="form-field">
+                <span class="form-label">เหตุผลการขอเลื่อน</span>
+                <textarea
+                  class="textarea-input"
+                  rows="4"
+                  v-model="postponeRequest.reason"
+                  placeholder="ระบุเหตุผล เช่น ต้องการรอสินค้าเข้าคลัง, เปลี่ยนวันชำระเงิน ฯลฯ"
+                ></textarea>
+              </label>
+              <label class="form-field">
+                <span class="form-label">เบอร์ติดต่อ</span>
+                <input
+                  class="form-input"
+                  type="text"
+                  v-model="postponeRequest.contact_phone"
+                  placeholder="เช่น 0812345678"
+                />
+              </label>
+              <label class="form-field">
+                <span class="form-label">รายละเอียดเพิ่มเติม</span>
+                <textarea
+                  class="textarea-input"
+                  rows="3"
+                  v-model="postponeRequest.details"
+                  placeholder="รายละเอียดเพิ่มเติม (ไม่บังคับ)"
+                ></textarea>
+              </label>
+              <button
+                class="btn-checkout"
+                type="button"
+                @click="submitPostponeRequest"
+                :disabled="postponeSubmitting"
+              >
+                {{ postponeSubmitting ? 'กำลังส่งคำขอ...' : 'ส่งคำขอเลื่อนเวลา' }}
+              </button>
             </div>
           </div>
         </div>
 
         <div class="payment-section">
           <div class="payment-sticky">
-            <div class="section-card glass-card payment-panel">
+
+            <!-- ── CANCELLED BANNER ── -->
+            <div v-if="isCancelled" class="cancelled-banner">
+              <div class="cancelled-banner__icon">🚫</div>
+              <div class="cancelled-banner__text">
+                <strong>ออเดอร์นี้ถูกยกเลิกแล้ว</strong>
+                <span>หากต้องการชำระเงินต่อ กรุณาขอเลื่อนกำหนดชำระก่อน แล้วรอแอดมินอนุมัติ</span>
+              </div>
+            </div>
+
+            <div v-if="!isCancelled" class="section-card glass-card payment-panel">
               <h3 class="section-title">💳 วิธีการชำระเงิน</h3>
               <div class="payment-methods">
                 <div
@@ -419,7 +600,7 @@ onMounted(() => {
               </div>
             </div>
 
-            <div class="section-card summary-card summary-card--wide summary-card--compact">
+            <div v-if="!isCancelled" class="section-card summary-card summary-card--wide summary-card--compact">
               <div style="display: flex; flex-direction: column; gap: 8px; font-size: 0.85rem; font-weight: 700; color: #7d6e9a; padding-inline: 4px;">
                 <div style="display: flex; justify-content: space-between;">
                   <span>ยอดรวมสินค้า</span>
@@ -928,6 +1109,172 @@ onMounted(() => {
 .btn-checkout:disabled {
   opacity: 0.72;
   cursor: not-allowed;
+}
+.secondary-btn {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid #a78bfa;
+  border-radius: 14px;
+  background: #f8f5ff;
+  color: #5b21b6;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  margin-bottom: 1rem;
+}
+.secondary-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(124, 99, 216, 0.12);
+  background: #eef2ff;
+}
+/* ── Cancelled banner ── */
+.cancelled-banner {
+  display: flex;
+  gap: 0.65rem;
+  align-items: flex-start;
+  padding: 0.85rem 1rem;
+  border-radius: 14px;
+  background: #fff7ed;
+  border: 1.5px solid #fed7aa;
+  color: #9a3412;
+}
+.cancelled-banner__icon {
+  font-size: 1.2rem;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.cancelled-banner__text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cancelled-banner__text strong {
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+.cancelled-banner__text span {
+  font-size: 0.80rem;
+  font-weight: 500;
+  line-height: 1.5;
+  opacity: 0.9;
+}
+.postpone-card {
+  margin-top: 0;
+}
+/* ── Latest postpone banner ── */
+.postpone-latest-banner {
+  margin-bottom: 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 14px;
+  border: 1.5px solid #e6d9ff;
+  background: #faf7ff;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.postpone-latest--pending {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+.postpone-latest--approved {
+  border-color: #6ee7b7;
+  background: #f0fdf8;
+}
+.postpone-latest--rejected {
+  border-color: #fca5a5;
+  background: #fff7f7;
+}
+.postpone-latest-banner__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.postpone-latest-banner__label {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #5f3fa8;
+}
+.postpone-latest-banner__detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+  color: #4b3f72;
+  line-height: 1.5;
+}
+.postpone-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+.status--pending  { background: #fef3c7; color: #92400e; }
+.status--approved { background: #d1fae5; color: #065f46; }
+.status--rejected { background: #fee2e2; color: #991b1b; }
+.postpone-prefill-note {
+  margin: 0;
+  padding: 0.65rem 0.9rem;
+  border-radius: 10px;
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border: 1px solid #c7d2fe;
+}
+.postpone-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.postpone-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: #35235b;
+}
+.postpone-subtitle {
+  margin: 0.15rem 0 0;
+  font-size: 0.82rem;
+  color: #7d6e9a;
+}
+.postpone-form {
+  display: grid;
+  gap: 1rem;
+}
+.form-field {
+  display: grid;
+  gap: 0.45rem;
+}
+.form-label {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #5f3fa8;
+}
+.form-input,
+.textarea-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0.85rem 1rem;
+  border-radius: 14px;
+  border: 1px solid #e6d9ff;
+  background: #faf7ff;
+  color: #35235b;
+  font-size: 0.95rem;
+}
+.textarea-input {
+  min-height: 100px;
+  resize: vertical;
+}
+.form-input:focus,
+.textarea-input:focus {
+  outline: none;
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.08);
 }
 .state-wrap {
   min-height: 280px;

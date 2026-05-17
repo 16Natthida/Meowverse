@@ -767,6 +767,46 @@ async function ensureAdminSchema() {
   `)
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS postpone (
+      post_id INT NOT NULL AUTO_INCREMENT,
+      order_id INT DEFAULT NULL,
+      new_deadline DATETIME DEFAULT NULL,
+      post_detail VARCHAR(500) DEFAULT NULL,
+      request_reason VARCHAR(255) DEFAULT NULL,
+      contact_phone VARCHAR(50) DEFAULT NULL,
+      status ENUM('Pending','Approved','Rejected') DEFAULT 'Pending',
+      Post_date DATETIME DEFAULT CURRENT_TIMESTAMP(),
+      PRIMARY KEY (post_id),
+      KEY order_id (order_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+  `)
+
+  await pool.query(`
+    ALTER TABLE postpone
+    ADD COLUMN IF NOT EXISTS request_reason VARCHAR(255) DEFAULT NULL
+  `)
+
+  await pool.query(`
+    ALTER TABLE postpone
+    ADD COLUMN IF NOT EXISTS contact_phone VARCHAR(50) DEFAULT NULL
+  `)
+
+  await pool.query(`
+    ALTER TABLE postpone
+    ADD COLUMN IF NOT EXISTS post_detail VARCHAR(500) DEFAULT NULL
+  `)
+
+  await pool.query(`
+    ALTER TABLE postpone
+    ADD COLUMN IF NOT EXISTS status ENUM('Pending','Approved','Rejected') DEFAULT 'Pending'
+  `)
+
+  await pool.query(`
+    ALTER TABLE postpone
+    ADD COLUMN IF NOT EXISTS Post_date DATETIME DEFAULT CURRENT_TIMESTAMP()
+  `)
+
+  await pool.query(`
     ALTER TABLE preorder_rounds
     ADD COLUMN IF NOT EXISTS round_description VARCHAR(255) NULL AFTER round_name
   `)

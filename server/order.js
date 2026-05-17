@@ -34,6 +34,25 @@ async function hasOrderDetailColumn(connection, columnName, cacheKeyName) {
   return exists
 }
 
+async function maybeExpireOrder(connection, orderId) {
+  const [rows] = await connection.query('SELECT status, deadline FROM orders WHERE order_id = ? LIMIT 1', [orderId])
+  if (rows.length === 0) return null
+
+  const order = rows[0]
+  if (!order.deadline) return order
+
+  const deadlineTime = new Date(order.deadline).getTime()
+  if (Number.isNaN(deadlineTime)) return order
+
+  const cancellableStatuses = ['Pending', 'Wait_for_Import_Fee']
+  if (deadlineTime <= Date.now() && cancellableStatuses.includes(order.status)) {
+    await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', ['Cancelled', orderId])
+    order.status = 'Cancelled'
+  }
+
+  return order
+}
+
 /**
  * ตรวจสอบสถานะของรอบพรีออเดอร์ก่อนแปลงเป็นออเดอร์
  * อนุญาตเฉพาะเมื่อรอบ "closed" (ปิดรับแล้ว พร้อมยืนยัน)
@@ -393,6 +412,161 @@ router.post('/confirm-payment', async (req, res) => {
   }
 })
 
+router.post('/:order_id/postpone', async (req, res) => {
+  const { order_id } = req.params
+  const { new_deadline, reason, contact_phone, details } = req.body || {}
+
+  if (!new_deadline) {
+    return res.status(400).json({ error: 'กรุณาเลือกวันที่ต้องการเลื่อน' })
+  }
+  if (!String(reason || '').trim()) {
+    return res.status(400).json({ error: 'กรุณาระบุเหตุผลการขอเลื่อน' })
+  }
+
+  const connection = await getDB(req).getConnection()
+  try {
+    await connection.beginTransaction()
+
+    const [orderRows] = await connection.query('SELECT order_id, status FROM orders WHERE order_id = ? LIMIT 1', [
+      order_id,
+    ])
+    if (orderRows.length === 0) {
+      await connection.rollback()
+      return res.status(404).json({ error: 'ไม่พบออเดอร์ที่ระบุ' })
+    }
+
+    if (String(orderRows[0].status || '').trim().toLowerCase() === 'cancelled') {
+      // ยังอนุญาตให้ขอเลื่อนได้ เพื่อให้แอดมิน approve และ reopen ออเดอร์
+    }
+
+    const [insertResult] = await connection.query(
+      `INSERT INTO postpone (order_id, new_deadline, post_detail, request_reason, contact_phone, status)
+       VALUES (?, ?, ?, ?, ?, 'Pending')`,
+      [order_id, new_deadline, details || null, String(reason || '').trim(), contact_phone || null],
+    )
+
+    await connection.commit()
+    res.status(201).json({ success: true, post_id: insertResult.insertId })
+  } catch (err) {
+    await connection.rollback()
+    console.error('[POST /api/orders/:order_id/postpone]', err)
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการบันทึกคำขอเลื่อน' })
+  } finally {
+    connection.release()
+  }
+})
+
+// ─────────────────────────────────────────────
+// GET /api/orders/:order_id/postpone/latest
+// ดึงคำขอเลื่อนล่าสุด (post_id สูงสุด) ของออเดอร์นี้
+// ─────────────────────────────────────────────
+router.get('/:order_id/postpone/latest', async (req, res) => {
+  const { order_id } = req.params
+  try {
+    const db = getDB(req)
+    const [rows] = await db.query(
+      `SELECT post_id, order_id, new_deadline, request_reason, contact_phone, post_detail, status, Post_date
+       FROM postpone
+       WHERE order_id = ?
+       ORDER BY post_id DESC
+       LIMIT 1`,
+      [order_id],
+    )
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'ไม่พบคำขอเลื่อนสำหรับออเดอร์นี้' })
+    }
+    res.json(rows[0])
+  } catch (err) {
+    console.error('[GET /api/orders/:order_id/postpone/latest]', err)
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการดึงข้อมูลคำขอเลื่อน' })
+  }
+})
+
+router.get('/postpones', async (req, res) => {
+  const { status } = req.query
+
+  try {
+    const db = getDB(req)
+    const conditions = []
+    const params = []
+
+    if (status && ['Pending', 'Approved', 'Rejected'].includes(status)) {
+      conditions.push('p.status = ?')
+      params.push(status)
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
+    const [rows] = await db.query(
+      `SELECT
+         p.post_id,
+         p.order_id,
+         p.new_deadline,
+         p.request_reason,
+         p.contact_phone,
+         p.post_detail,
+         p.status,
+         p.Post_date,
+         o.status AS order_status
+       FROM postpone p
+       LEFT JOIN orders o ON o.order_id = p.order_id
+       ${whereClause}
+       ORDER BY p.Post_date DESC`,
+      params,
+    )
+
+    res.json(rows)
+  } catch (err) {
+    console.error('[GET /api/orders/postpones]', err)
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการดึงรายการคำขอเลื่อน' })
+  }
+})
+
+router.patch('/postpones/:post_id/status', async (req, res) => {
+  const { post_id } = req.params
+  const { status } = req.body || {}
+  const allowedStatuses = ['Pending', 'Approved', 'Rejected']
+
+  if (!status || !allowedStatuses.includes(status)) {
+    return res.status(400).json({ error: `status ต้องเป็นหนึ่งใน: ${allowedStatuses.join(', ')}` })
+  }
+
+  const connection = await getDB(req).getConnection()
+  try {
+    await connection.beginTransaction()
+
+    const [rows] = await connection.query(
+      'SELECT order_id, new_deadline, status AS current_status FROM postpone WHERE post_id = ? LIMIT 1',
+      [post_id],
+    )
+    if (rows.length === 0) {
+      await connection.rollback()
+      return res.status(404).json({ error: 'ไม่พบคำขอเลื่อน' })
+    }
+
+    const postponeRow = rows[0]
+    await connection.query('UPDATE postpone SET status = ? WHERE post_id = ?', [status, post_id])
+
+    if (status === 'Approved' && postponeRow.order_id) {
+      await connection.query(
+        `UPDATE orders
+         SET deadline = ?,
+             status = CASE WHEN status = 'Cancelled' THEN 'Pending' ELSE status END
+         WHERE order_id = ?`,
+        [postponeRow.new_deadline, postponeRow.order_id],
+      )
+    }
+
+    await connection.commit()
+    res.json({ success: true, post_id: Number(post_id), status })
+  } catch (err) {
+    await connection.rollback()
+    console.error('[PATCH /api/orders/postpones/:post_id/status]', err)
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการอัปเดตสถานะคำขอเลื่อน' })
+  } finally {
+    connection.release()
+  }
+})
+
 router.get('/', async (req, res) => {
   const { user_id } = req.query
 
@@ -422,6 +596,7 @@ router.get('/:order_id', async (req, res) => {
 
   try {
     const db = getDB(req)
+    await maybeExpireOrder(db, order_id)
 
     const [orderRows] = await db.query(
       `SELECT o.order_id, o.user_id, o.total_amount, o.status, o.deadline, o.Order_type, o.Order_date, a.username,
