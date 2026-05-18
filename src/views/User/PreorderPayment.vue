@@ -33,12 +33,18 @@ const unspecifiedItems = computed(
 const slipFile = ref(null)
 const slipPreview = ref(null)
 const slipFileInput = ref(null)
-const slipImageUrl = computed(() => slipPreview.value || order.value?.saved_shipping?.slip_url || null)
+const slipImageUrl = computed(
+  () => slipPreview.value || order.value?.saved_shipping?.slip_url || null,
+)
 const isSlipViewerOpen = ref(false)
 
 // ── สถานะสลิปไม่ถูกต้อง (แอดมินปฏิเสธ) ──
-const isInvalidSlip = computed(() =>
-  String(order.value?.status || '').trim().toLowerCase().replace(/[_\s]+/g, ' ') === 'invalid slip',
+const isInvalidSlip = computed(
+  () =>
+    String(order.value?.status || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[_\s]+/g, ' ') === 'invalid slip',
 )
 
 // ── Payment & Shipping ──
@@ -101,8 +107,11 @@ const orderDeadlineDisplay = computed(() => {
   })
 })
 
-const isCancelled = computed(() =>
-  String(order.value?.status || '').trim().toLowerCase() === 'cancelled'
+const isCancelled = computed(
+  () =>
+    String(order.value?.status || '')
+      .trim()
+      .toLowerCase() === 'cancelled',
 )
 
 const canRequestPostpone = computed(() => {
@@ -275,7 +284,11 @@ const confirmPayment = async () => {
 }
 
 const submitPostponeRequest = async () => {
-  if (postponeSubmitting.value || !order.value?.order_id) return
+  if (postponeSubmitting.value) return
+  if (!order.value?.order_id) {
+    showNotice('ไม่สามารถส่งคำขอเลื่อนสำหรับคำสั่งชั่วคราว กรุณาสร้างออเดอร์ก่อน', 'error')
+    return
+  }
 
   if (!postponeRequest.value.new_deadline) {
     showNotice('กรุณาเลือกวันที่ขอเลื่อน', 'error')
@@ -375,13 +388,21 @@ onMounted(() => {
                 <span class="hero-chip hero-chip--soft">Preorder stock</span>
                 <span class="hero-chip">Order #{{ order.order_id }}</span>
               </div>
-              <h1>{{ importFeeTotal > 0 ? 'ชำระเงินค่านำเข้า (รอบ 2)' : 'ชำระเงินสำหรับคำสั่งพรีออเดอร์' }}</h1>
-              
+              <h1>
+                {{
+                  importFeeTotal > 0
+                    ? 'ชำระเงินค่านำเข้า (รอบ 2)'
+                    : 'ชำระเงินสำหรับคำสั่งพรีออเดอร์'
+                }}
+              </h1>
+
               <p class="hero-subtitle" v-if="importFeeTotal === 0">
-                <strong>รอบ 1 (ชำระแรก):</strong> สินค้า Preorder จะถูกนำเข้าหลังได้รับการชำระเงิน ทีมงานจะแจ้งค่านำเข้าเพิ่มเติมภายหลัง
+                <strong>รอบ 1 (ชำระแรก):</strong> สินค้า Preorder จะถูกนำเข้าหลังได้รับการชำระเงิน
+                ทีมงานจะแจ้งค่านำเข้าเพิ่มเติมภายหลัง
               </p>
               <p class="hero-subtitle" v-else>
-                <strong>รอบ 2 (ชำระค่านำเข้า):</strong> แอดมินได้แจ้งค่านำเข้าแล้ว กรุณาชำระเงินค่านำเข้าเพื่อดำเนินการต่อ
+                <strong>รอบ 2 (ชำระค่านำเข้า):</strong> แอดมินได้แจ้งค่านำเข้าแล้ว
+                กรุณาชำระเงินค่านำเข้าเพื่อดำเนินการต่อ
               </p>
 
               <div class="hero-meta">
@@ -392,13 +413,24 @@ onMounted(() => {
                 <div class="hero-meta-divider"></div>
                 <div class="hero-meta-item">
                   <span class="hero-meta-label">ยอดชำระขณะนี้</span>
-                  <strong>฿{{ (importFeeTotal > 0 ? importFeeTotal : Number(order.total_amount || 0)).toLocaleString() }}</strong>
+                  <strong
+                    >฿{{
+                      (importFeeTotal > 0
+                        ? importFeeTotal
+                        : Number(order.total_amount || 0)
+                      ).toLocaleString()
+                    }}</strong
+                  >
                 </div>
                 <div class="hero-meta-divider"></div>
                 <div class="hero-meta-item">
                   <span class="hero-meta-label">สถานะ</span>
-                  <strong class="hero-meta-status" v-if="importFeeTotal === 0">รอแจ้งจากแอดมิน</strong>
-                  <strong class="hero-meta-status" style="color: #10b981 !important;" v-else>แจ้งค่านำเข้าแล้ว</strong>
+                  <strong class="hero-meta-status" v-if="importFeeTotal === 0"
+                    >รอแจ้งจากแอดมิน</strong
+                  >
+                  <strong class="hero-meta-status" style="color: #10b981 !important" v-else
+                    >แจ้งค่านำเข้าแล้ว</strong
+                  >
                 </div>
               </div>
             </div>
@@ -410,8 +442,16 @@ onMounted(() => {
               <span class="section-pill">{{ order.items?.length || 0 }} รายการ</span>
             </div>
 
-            <div v-if="readyItems.length > 0" class="order-category-block" style="margin-bottom: 1.5rem;">
-              <h3 style="font-size: 0.9rem; font-weight: 800; color: #10b981; margin-bottom: 0.6rem;">🟢 พร้อมส่ง</h3>
+            <div
+              v-if="readyItems.length > 0"
+              class="order-category-block"
+              style="margin-bottom: 1.5rem"
+            >
+              <h3
+                style="font-size: 0.9rem; font-weight: 800; color: #10b981; margin-bottom: 0.6rem"
+              >
+                🟢 พร้อมส่ง
+              </h3>
               <div class="item-list">
                 <div v-for="it in readyItems" :key="it.detail_id" class="order-item">
                   <div class="item-img">
@@ -419,19 +459,44 @@ onMounted(() => {
                   </div>
                   <div class="item-info">
                     <p class="item-name">{{ it.name }}</p>
-                    <p v-if="it.flavor" class="item-price-small" style="color: #8b5cf6; font-weight: 600;">รสชาติ: {{ it.flavor }}</p>
-                    <p class="item-price-small">ราคา ฿{{ Number(it.price || it.Price || it.unit_price || 0).toLocaleString() }} / ชิ้น</p>
+                    <p
+                      v-if="it.flavor"
+                      class="item-price-small"
+                      style="color: #8b5cf6; font-weight: 600"
+                    >
+                      รสชาติ: {{ it.flavor }}
+                    </p>
+                    <p class="item-price-small">
+                      ราคา ฿{{
+                        Number(it.price || it.Price || it.unit_price || 0).toLocaleString()
+                      }}
+                      / ชิ้น
+                    </p>
                   </div>
                   <div class="item-meta">
                     <div class="item-qty">x{{ it.qty }}</div>
-                    <div class="item-total">฿{{ (Number(it.price || it.Price || it.unit_price || 0) * Number(it.qty)).toLocaleString() }}</div>
+                    <div class="item-total">
+                      ฿{{
+                        (
+                          Number(it.price || it.Price || it.unit_price || 0) * Number(it.qty)
+                        ).toLocaleString()
+                      }}
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div v-if="preorderItems.length > 0" class="order-category-block" style="margin-bottom: 1.5rem;">
-              <h3 style="font-size: 0.9rem; font-weight: 800; color: #7c3aed; margin-bottom: 0.6rem;">🕐 พรีออเดอร์</h3>
+            <div
+              v-if="preorderItems.length > 0"
+              class="order-category-block"
+              style="margin-bottom: 1.5rem"
+            >
+              <h3
+                style="font-size: 0.9rem; font-weight: 800; color: #7c3aed; margin-bottom: 0.6rem"
+              >
+                🕐 พรีออเดอร์
+              </h3>
               <div class="item-list">
                 <div v-for="it in preorderItems" :key="it.detail_id" class="order-item">
                   <div class="item-img">
@@ -439,102 +504,186 @@ onMounted(() => {
                   </div>
                   <div class="item-info">
                     <p class="item-name">{{ it.name }}</p>
-                    <p v-if="it.flavor" class="item-price-small" style="color: #8b5cf6; font-weight: 600;">รสชาติ: {{ it.flavor }}</p>
-                    <p class="item-price-small">ราคา ฿{{ Number(it.price || it.Price || it.unit_price || 0).toLocaleString() }} / ชิ้น</p>
+                    <p
+                      v-if="it.flavor"
+                      class="item-price-small"
+                      style="color: #8b5cf6; font-weight: 600"
+                    >
+                      รสชาติ: {{ it.flavor }}
+                    </p>
+                    <p class="item-price-small">
+                      ราคา ฿{{
+                        Number(it.price || it.Price || it.unit_price || 0).toLocaleString()
+                      }}
+                      / ชิ้น
+                    </p>
                   </div>
                   <div class="item-meta">
                     <div class="item-qty">x{{ it.qty }}</div>
-                    <div class="item-total">฿{{ (Number(it.price || it.Price || it.unit_price || 0) * Number(it.qty)).toLocaleString() }}</div>
+                    <div class="item-total">
+                      ฿{{
+                        (
+                          Number(it.price || it.Price || it.unit_price || 0) * Number(it.qty)
+                        ).toLocaleString()
+                      }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div
+              v-if="unspecifiedItems.length > 0"
+              class="order-category-block"
+              style="margin-bottom: 1.5rem"
+            >
+              <h3
+                style="font-size: 0.9rem; font-weight: 800; color: #6b7280; margin-bottom: 0.6rem"
+              >
+                🔖 รายการอื่น ๆ
+              </h3>
+              <div class="item-list">
+                <div v-for="it in unspecifiedItems" :key="it.detail_id" class="order-item">
+                  <div class="item-img">
+                    <img v-if="it.image" :src="it.image" /><span v-else>🐾</span>
+                  </div>
+                  <div class="item-info">
+                    <p class="item-name">{{ it.name }}</p>
+                    <p
+                      v-if="it.flavor"
+                      class="item-price-small"
+                      style="color: #8b5cf6; font-weight: 600"
+                    >
+                      รสชาติ: {{ it.flavor }}
+                    </p>
+                    <p class="item-price-small">
+                      ราคา ฿{{
+                        Number(it.price || it.Price || it.unit_price || 0).toLocaleString()
+                      }}
+                      / ชิ้น
+                    </p>
+                  </div>
+                  <div class="item-meta">
+                    <div class="item-qty">x{{ it.qty }}</div>
+                    <div class="item-total">
+                      ฿{{
+                        (
+                          Number(it.price || it.Price || it.unit_price || 0) * Number(it.qty)
+                        ).toLocaleString()
+                      }}
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
           </div>
 
-          <!-- ── กล่องกำหนดชำระและขอเลื่อนเวลา ── -->
-          <div class="section-card postpone-card">
-            <div class="postpone-header">
-              <div>
-                <p class="postpone-title">🗓️ ข้อมูลกำหนดชำระ</p>
-                <p class="postpone-subtitle">กำหนดชำระล่าสุด</p>
-              </div>
-              <strong>{{ orderDeadlineDisplay }}</strong>
-            </div>
-
-            <button
-              class="secondary-btn"
-              type="button"
-              @click="showPostponeForm = !showPostponeForm"
-              :disabled="!canRequestPostpone || loading"
-            >
-              {{ showPostponeForm ? 'ซ่อนแบบฟอร์มขอเลื่อน' : 'ขอเลื่อนเวลา' }}
-            </button>
-
-            <!-- ── แสดงสถานะคำขอเลื่อนล่าสุด ── -->
-            <div v-if="latestPostpone" class="postpone-latest-banner" :class="'postpone-latest--' + latestPostpone.status.toLowerCase()">
-              <div class="postpone-latest-banner__row">
-                <span class="postpone-latest-banner__label">คำขอเลื่อนล่าสุด</span>
-                <span class="postpone-status-badge" :class="postponeStatusLabel?.cls">{{ postponeStatusLabel?.text }}</span>
-              </div>
-              <div class="postpone-latest-banner__detail">
-                <span>📅 วันที่ขอเลื่อน: <strong>{{ new Date(latestPostpone.new_deadline).toLocaleString('th-TH', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}</strong></span>
-                <span v-if="latestPostpone.request_reason">💬 เหตุผล: {{ latestPostpone.request_reason }}</span>
-                <span v-if="latestPostpone.contact_phone">📞 เบอร์ติดต่อ: {{ latestPostpone.contact_phone }}</span>
-              </div>
-            </div>
-
-            <div v-if="showPostponeForm" class="postpone-form">
-              <p v-if="latestPostpone" class="postpone-prefill-note">📋 ข้อมูลด้านล่างดึงมาจากคำขอครั้งล่าสุด แก้ไขได้ตามต้องการ</p>
-              <label class="form-field">
-                <span class="form-label">วันที่ต้องการเลื่อน</span>
-                <input
-                  class="form-input"
-                  type="datetime-local"
-                  v-model="postponeRequest.new_deadline"
-                />
-              </label>
-              <label class="form-field">
-                <span class="form-label">เหตุผลการขอเลื่อน</span>
-                <textarea
-                  class="textarea-input"
-                  rows="4"
-                  v-model="postponeRequest.reason"
-                  placeholder="ระบุเหตุผล เช่น ต้องการรอสินค้าเข้าคลัง, เปลี่ยนวันชำระเงิน ฯลฯ"
-                ></textarea>
-              </label>
-              <label class="form-field">
-                <span class="form-label">เบอร์ติดต่อ</span>
-                <input
-                  class="form-input"
-                  type="text"
-                  v-model="postponeRequest.contact_phone"
-                  placeholder="เช่น 0812345678"
-                />
-              </label>
-              <label class="form-field">
-                <span class="form-label">รายละเอียดเพิ่มเติม</span>
-                <textarea
-                  class="textarea-input"
-                  rows="3"
-                  v-model="postponeRequest.details"
-                  placeholder="รายละเอียดเพิ่มเติม (ไม่บังคับ)"
-                ></textarea>
-              </label>
-              <button
-                class="btn-checkout"
-                type="button"
-                @click="submitPostponeRequest"
-                :disabled="postponeSubmitting"
-              >
-                {{ postponeSubmitting ? 'กำลังส่งคำขอ...' : 'ส่งคำขอเลื่อนเวลา' }}
-              </button>
-            </div>
-          </div>
+          <!-- postponed card moved to right column for clarity -->
         </div>
 
         <div class="payment-section">
           <div class="payment-sticky">
+            <!-- ── Postpone: moved from left, prominent display ── -->
+            <div class="section-card postpone-card postpone-card--prominent">
+              <div class="postpone-header">
+                <div>
+                  <p class="postpone-title">🗓️ ข้อมูลกำหนดชำระ</p>
+                  <p class="postpone-subtitle">กำหนดชำระล่าสุด</p>
+                </div>
+                <strong>{{ orderDeadlineDisplay }}</strong>
+              </div>
 
+              <button
+                class="secondary-btn"
+                type="button"
+                @click="showPostponeForm = !showPostponeForm"
+                :disabled="loading"
+                style="font-size: 0.98rem; padding: 14px 18px"
+              >
+                {{ showPostponeForm ? 'ซ่อนแบบฟอร์มขอเลื่อน' : 'ขอเลื่อนเวลา' }}
+              </button>
+
+              <div
+                v-if="latestPostpone"
+                class="postpone-latest-banner"
+                :class="'postpone-latest--' + latestPostpone.status.toLowerCase()"
+              >
+                <div class="postpone-latest-banner__row">
+                  <span class="postpone-latest-banner__label">คำขอเลื่อนล่าสุด</span>
+                  <span class="postpone-status-badge" :class="postponeStatusLabel?.cls">{{
+                    postponeStatusLabel?.text
+                  }}</span>
+                </div>
+                <div class="postpone-latest-banner__detail">
+                  <span
+                    >📅 วันที่ขอเลื่อน:
+                    <strong>{{
+                      new Date(latestPostpone.new_deadline).toLocaleString('th-TH', {
+                        year: 'numeric',
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })
+                    }}</strong></span
+                  >
+                  <span v-if="latestPostpone.request_reason"
+                    >💬 เหตุผล: {{ latestPostpone.request_reason }}</span
+                  >
+                  <span v-if="latestPostpone.contact_phone"
+                    >📞 เบอร์ติดต่อ: {{ latestPostpone.contact_phone }}</span
+                  >
+                </div>
+              </div>
+
+              <div v-if="showPostponeForm" class="postpone-form">
+                <p v-if="latestPostpone" class="postpone-prefill-note">
+                  📋 ข้อมูลด้านล่างดึงมาจากคำขอครั้งล่าสุด แก้ไขได้ตามต้องการ
+                </p>
+                <label class="form-field">
+                  <span class="form-label">วันที่ต้องการเลื่อน</span>
+                  <input
+                    class="form-input"
+                    type="datetime-local"
+                    v-model="postponeRequest.new_deadline"
+                  />
+                </label>
+                <label class="form-field">
+                  <span class="form-label">เหตุผลการขอเลื่อน</span>
+                  <textarea
+                    class="textarea-input"
+                    rows="4"
+                    v-model="postponeRequest.reason"
+                    placeholder="ระบุเหตุผล เช่น ต้องการรอสินค้าเข้าคลัง, เปลี่ยนวันชำระเงิน ฯลฯ"
+                  ></textarea>
+                </label>
+                <label class="form-field">
+                  <span class="form-label">เบอร์ติดต่อ</span>
+                  <input
+                    class="form-input"
+                    type="text"
+                    v-model="postponeRequest.contact_phone"
+                    placeholder="เช่น 0812345678"
+                  />
+                </label>
+                <label class="form-field">
+                  <span class="form-label">รายละเอียดเพิ่มเติม</span>
+                  <textarea
+                    class="textarea-input"
+                    rows="3"
+                    v-model="postponeRequest.details"
+                    placeholder="รายละเอียดเพิ่มเติม (ไม่บังคับ)"
+                  ></textarea>
+                </label>
+                <button
+                  class="btn-checkout"
+                  type="button"
+                  @click="submitPostponeRequest"
+                  :disabled="postponeSubmitting"
+                >
+                  {{ postponeSubmitting ? 'กำลังส่งคำขอ...' : 'ส่งคำขอเลื่อนเวลา' }}
+                </button>
+              </div>
+            </div>
             <!-- ── CANCELLED BANNER ── -->
             <div v-if="isCancelled" class="cancelled-banner">
               <div class="cancelled-banner__icon">🚫</div>
@@ -568,7 +717,9 @@ onMounted(() => {
                 <div class="invalid-slip-banner__icon">⚠️</div>
                 <div class="invalid-slip-banner__text">
                   <strong>สลิปไม่ถูกต้อง กรุณาแนบสลิปใหม่</strong>
-                  <span>แอดมินตรวจสอบแล้วพบว่าสลิปที่แนบมาไม่ถูกต้อง กรุณาอัปโหลดสลิปใหม่อีกครั้ง</span>
+                  <span
+                    >แอดมินตรวจสอบแล้วพบว่าสลิปที่แนบมาไม่ถูกต้อง กรุณาอัปโหลดสลิปใหม่อีกครั้ง</span
+                  >
                 </div>
               </div>
 
@@ -600,28 +751,63 @@ onMounted(() => {
               </div>
             </div>
 
-            <div v-if="!isCancelled" class="section-card summary-card summary-card--wide summary-card--compact">
-              <div style="display: flex; flex-direction: column; gap: 8px; font-size: 0.85rem; font-weight: 700; color: #7d6e9a; padding-inline: 4px;">
-                <div style="display: flex; justify-content: space-between;">
+            <div
+              v-if="!isCancelled"
+              class="section-card summary-card summary-card--wide summary-card--compact"
+            >
+              <div
+                style="
+                  display: flex;
+                  flex-direction: column;
+                  gap: 8px;
+                  font-size: 0.85rem;
+                  font-weight: 700;
+                  color: #7d6e9a;
+                  padding-inline: 4px;
+                "
+              >
+                <div style="display: flex; justify-content: space-between">
                   <span>ยอดรวมสินค้า</span>
                   <span>฿{{ Number(order.total_amount).toLocaleString() }}</span>
                 </div>
-                <div style="display: flex; justify-content: space-between;" v-if="importFeeTotal > 0">
+                <div
+                  style="display: flex; justify-content: space-between"
+                  v-if="importFeeTotal > 0"
+                >
                   <span>ค่านำเข้าแจ้งแล้ว</span>
                   <span>฿{{ importFeeTotal.toLocaleString() }}</span>
                 </div>
-                <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; justify-content: space-between; align-items: center">
                   <span>สถานะค่านำเข้า</span>
-                  <span class="pending-text" v-if="importFeeTotal === 0" style="color: #f59e0b; background: #fffbeb; padding: 2px 8px; border-radius: 12px; font-size: 0.74rem;">⏳ รอแจ้งจากแอดมิน</span>
-                  <span v-else style="color: #10b981;">✅ แจ้งแล้ว</span>
+                  <span
+                    class="pending-text"
+                    v-if="importFeeTotal === 0"
+                    style="
+                      color: #f59e0b;
+                      background: #fffbeb;
+                      padding: 2px 8px;
+                      border-radius: 12px;
+                      font-size: 0.74rem;
+                    "
+                    >⏳ รอแจ้งจากแอดมิน</span
+                  >
+                  <span v-else style="color: #10b981">✅ แจ้งแล้ว</span>
                 </div>
               </div>
-              <hr class="divider" style="border: none; border-top: 1px dashed #eadff5; margin: 4px 0;" />
-              
+              <hr
+                class="divider"
+                style="border: none; border-top: 1px dashed #eadff5; margin: 4px 0"
+              />
+
               <div class="summary-header">
                 <span class="summary-label">ยอดชำระขณะนี้</span>
                 <strong class="summary-amount">
-                  ฿{{ (importFeeTotal > 0 ? importFeeTotal : Number(order.total_amount)).toLocaleString() }}
+                  ฿{{
+                    (importFeeTotal > 0
+                      ? importFeeTotal
+                      : Number(order.total_amount)
+                    ).toLocaleString()
+                  }}
                 </strong>
               </div>
               <div class="summary-note">ชำระด้วยสลิปโอนเงิน แล้วแอดมินจะตรวจสอบประวัติให้ทันที</div>
@@ -984,7 +1170,7 @@ onMounted(() => {
   font-weight: 800;
 }
 .invalid-slip-banner__text span {
-  font-size: 0.80rem;
+  font-size: 0.8rem;
   font-weight: 500;
   line-height: 1.5;
   opacity: 0.9;
@@ -1119,7 +1305,10 @@ onMounted(() => {
   color: #5b21b6;
   font-weight: 800;
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    background 0.2s ease;
   margin-bottom: 1rem;
 }
 .secondary-btn:hover:not(:disabled) {
@@ -1153,13 +1342,20 @@ onMounted(() => {
   font-weight: 800;
 }
 .cancelled-banner__text span {
-  font-size: 0.80rem;
+  font-size: 0.8rem;
   font-weight: 500;
   line-height: 1.5;
   opacity: 0.9;
 }
 .postpone-card {
   margin-top: 0;
+}
+.postpone-card--prominent {
+  border: 1.8px solid #d6bcfa;
+  background: linear-gradient(180deg, #ffffff, #faf6ff);
+  padding: 1rem;
+  box-shadow: 0 12px 30px rgba(111, 80, 160, 0.06);
+  border-radius: 14px;
 }
 /* ── Latest postpone banner ── */
 .postpone-latest-banner {
@@ -1211,9 +1407,18 @@ onMounted(() => {
   font-size: 0.76rem;
   font-weight: 800;
 }
-.status--pending  { background: #fef3c7; color: #92400e; }
-.status--approved { background: #d1fae5; color: #065f46; }
-.status--rejected { background: #fee2e2; color: #991b1b; }
+.status--pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+.status--approved {
+  background: #d1fae5;
+  color: #065f46;
+}
+.status--rejected {
+  background: #fee2e2;
+  color: #991b1b;
+}
 .postpone-prefill-note {
   margin: 0;
   padding: 0.65rem 0.9rem;
@@ -1443,16 +1648,22 @@ onMounted(() => {
   font-size: 2rem;
   cursor: pointer;
 }
-.fade-enter-active, .fade-leave-active {
+.fade-enter-active,
+.fade-leave-active {
   transition: opacity 0.3s;
 }
-.fade-enter-from, .fade-leave-to {
+.fade-enter-from,
+.fade-leave-to {
   opacity: 0;
 }
-.slide-down-enter-active, .slide-down-leave-active {
-  transition: opacity 0.3s, transform 0.3s;
+.slide-down-enter-active,
+.slide-down-leave-active {
+  transition:
+    opacity 0.3s,
+    transform 0.3s;
 }
-.slide-down-enter-from, .slide-down-leave-to {
+.slide-down-enter-from,
+.slide-down-leave-to {
   opacity: 0;
   transform: translateY(-8px);
 }
