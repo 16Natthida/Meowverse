@@ -30,7 +30,7 @@ const heroBannerImage = ref(defaultBannerImageUrl)
 const defaultLogoImageUrl = ''
 const logoImage = ref(defaultLogoImageUrl)
 
-const tabs = ['หน้าหลัก', 'พร้อมส่ง', 'พรีออเดอร์', 'ติดตามคำสั่งซื้อ', 'รายการออเดอร์']
+const tabs = ['หน้าหลัก', 'พร้อมส่ง', 'พรีออเดอร์','รายการออเดอร์']
 
 const iconMap = [
   { keyword: 'ขนม', icon: '🍬' },

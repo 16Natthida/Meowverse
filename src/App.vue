@@ -259,6 +259,7 @@ onUnmounted(() => {
         <p class="menu-title">เมนูหลัก</p>
         <nav class="menu-list" aria-label="เมนูหลัก">
           <RouterLink to="/admin/home">แดชบอร์ด</RouterLink>
+          <RouterLink to="/admin/sales">รายการยอดขาย</RouterLink>
           <RouterLink to="/admin/products">สินค้า</RouterLink>
           <RouterLink to="/admin/slips">จัดการสลิป</RouterLink>
           <RouterLink to="/admin/preorder-rounds">รอบนำเข้าสินค้า</RouterLink>

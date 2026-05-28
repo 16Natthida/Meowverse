@@ -203,8 +203,10 @@
                   <p class="sku">SKU: {{ product.sku || '-' }}</p>
                   <p class="category">{{ product.categoryName || '-' }}</p>
                   <div class="price-section">
-                    <span class="price-label">ราคาพื้นฐาน:</span>
-                    <span class="price">{{ formatPrice(product.basePrice) }}</span>
+                    <span class="price-label">ราคาพรีออเดอร์:</span>
+                    <span class="price">{{
+                      formatPrice(product.roundPrice ?? product.basePrice)
+                    }}</span>
                   </div>
                   <div class="quantity-section">
                     <span class="quantity-label">จำนวนที่เปิดรับ</span>
@@ -213,45 +215,9 @@
                         product.quantityAvailable === null ? 'ไม่จำกัด' : product.quantityAvailable
                       }}
                     </span>
-                    <div class="quantity-edit">
-                      <label class="unlimited-checkbox">
-                        <input
-                          type="checkbox"
-                          :checked="
-                            (productQuantityChanges[product.id] ?? product.quantityAvailable) ===
-                            null
-                          "
-                          @change="
-                            (e) =>
-                              updateProductQuantity(
-                                product.id,
-                                e.target.checked ? null : (product.quantityAvailable ?? 0),
-                              )
-                          "
-                        />
-                        ไม่จำกัด
-                      </label>
-                      <input
-                        v-if="
-                          (productQuantityChanges[product.id] ?? product.quantityAvailable) !== null
-                        "
-                        type="number"
-                        min="0"
-                        :value="productQuantityChanges[product.id] ?? product.quantityAvailable"
-                        @input="updateProductQuantity(product.id, $event.target.value)"
-                        class="quantity-input-field"
-                      />
-                      <button
-                        class="btn-save-quantity"
-                        @click="saveProductQuantity(product.id)"
-                        :disabled="!hasQuantityChanged(product.id)"
-                      >
-                        บันทึก
-                      </button>
-                    </div>
                   </div>
                   <button class="btn-detail" @click="openProductDetailModal(product)">
-                    ดูรายละเอียด
+                    แก้ไขรายละเอียด
                   </button>
                 </div>
                 <button
@@ -322,11 +288,24 @@
                       class="quantity-field"
                     />
                   </div>
+                  <div class="price-input">
+                    <label>ราคาพรีออเดอร์:</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      :value="
+                        selectedProductRoundPrices[product.id] ?? getSuggestedRoundPrice(product)
+                      "
+                      @input="updateSelectedProductRoundPrice(product.id, $event.target.value)"
+                      class="price-input-field"
+                    />
+                  </div>
                 </div>
                 <div class="product-meta">
                   <span class="sku">SKU: {{ product.sku || '-' }}</span>
                   <span class="category">{{ product.categoryName || '-' }}</span>
-                  <span class="price">ราคา ฿{{ formatPrice(product.basePrice) }}</span>
+                  <span class="price">ราคาพื้นฐาน ฿{{ formatPrice(product.basePrice) }}</span>
                 </div>
               </div>
             </div>
@@ -373,8 +352,29 @@
               <h3>{{ selectedProduct.name }}</h3>
               <p><strong>SKU:</strong> {{ selectedProduct.sku || '-' }}</p>
               <p><strong>หมวดหมู่:</strong> {{ selectedProduct.categoryName || '-' }}</p>
-              <p><strong>ราคา:</strong> {{ formatPrice(selectedProduct.basePrice) }} บาท</p>
-              <p class="compact">ราคานี้จะถูกใช้กับรอบพรีออเดอร์อัตโนมัติ</p>
+              <p><strong>ราคาพื้นฐาน:</strong> {{ formatPrice(selectedProduct.basePrice) }} บาท</p>
+              <p>
+                <strong>ราคาพรีออเดอร์:</strong> {{ formatPrice(selectedProduct.roundPrice) }} บาท
+              </p>
+              <p class="compact">ราคาพรีออเดอร์จะแยกแก้จากราคาพื้นฐาน</p>
+              <div class="price-detail-edit">
+                <label>แก้ไขราคาพรีออเดอร์:</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  :value="productPriceChanges[selectedProduct.id] ?? selectedProduct.roundPrice"
+                  @input="updateProductPrice(selectedProduct.id, $event.target.value)"
+                  class="price-input-field"
+                />
+              </div>
+              <button
+                class="btn-save-detail"
+                @click="saveProductPrice(selectedProduct.id)"
+                :disabled="!hasPriceChanged(selectedProduct.id)"
+              >
+                บันทึกราคาพรีออเดอร์
+              </button>
               <p><strong>จำนวนคงเหลือ:</strong> {{ selectedProduct.quantityAvailable }}</p>
               <div class="quantity-detail-edit">
                 <label>แก้ไขจำนวน:</label>
@@ -418,7 +418,9 @@ const searchQuery = ref('')
 const editingRound = ref(null)
 const selectedProductIds = ref([])
 const selectedProductQuantities = reactive({})
+const selectedProductRoundPrices = reactive({})
 const productQuantityChanges = reactive({})
+const productPriceChanges = reactive({})
 const showProductDetailModal = ref(false)
 const selectedProduct = ref(null)
 
@@ -540,6 +542,9 @@ function openAddProductsModal() {
   Object.keys(selectedProductQuantities).forEach((key) => {
     delete selectedProductQuantities[key]
   })
+  Object.keys(selectedProductRoundPrices).forEach((key) => {
+    delete selectedProductRoundPrices[key]
+  })
   showAddProductsModal.value = true
 }
 
@@ -548,6 +553,9 @@ function closeAddProductsModal() {
   selectedProductIds.value = []
   Object.keys(selectedProductQuantities).forEach((key) => {
     delete selectedProductQuantities[key]
+  })
+  Object.keys(selectedProductRoundPrices).forEach((key) => {
+    delete selectedProductRoundPrices[key]
   })
 }
 
@@ -559,6 +567,9 @@ function openProductDetailModal(product) {
 function closeProductDetailModal() {
   showProductDetailModal.value = false
   selectedProduct.value = null
+  Object.keys(productPriceChanges).forEach((key) => {
+    delete productPriceChanges[key]
+  })
 }
 
 function getSuggestedQuantity(product) {
@@ -578,15 +589,46 @@ function getSuggestedQuantity(product) {
   return Math.max(1, stock)
 }
 
+function getSuggestedRoundPrice(product) {
+  if (!product || typeof product !== 'object') {
+    return 0
+  }
+
+  const roundPrice = Number(product.roundPrice)
+  if (Number.isFinite(roundPrice) && roundPrice > 0) {
+    return roundPrice
+  }
+
+  const preorderPrice = Number(product.preorderPrice)
+  if (Number.isFinite(preorderPrice) && preorderPrice > 0) {
+    return preorderPrice
+  }
+
+  return Number(product.basePrice) || 0
+}
+
 function toggleProductSelection(product) {
   const productId = product.id
   const index = selectedProductIds.value.indexOf(productId)
   if (index > -1) {
     selectedProductIds.value.splice(index, 1)
     delete selectedProductQuantities[productId]
+    delete selectedProductRoundPrices[productId]
   } else {
     selectedProductIds.value.push(productId)
     selectedProductQuantities[productId] = getSuggestedQuantity(product)
+    selectedProductRoundPrices[productId] = getSuggestedRoundPrice(product)
+  }
+}
+
+function updateSelectedProductRoundPrice(productId, price) {
+  const value = Number(price)
+  if (Number.isNaN(value) || value < 0) {
+    return
+  }
+
+  if (selectedProductIds.value.includes(productId)) {
+    selectedProductRoundPrices[productId] = value
   }
 }
 
@@ -615,6 +657,24 @@ function updateProductQuantity(productId, quantity) {
   }
 }
 
+function updateProductPrice(productId, price) {
+  if (price === null) {
+    if (currentRound.value?.products) {
+      productPriceChanges[productId] = null
+    }
+    return
+  }
+
+  const value = Number(price)
+  if (Number.isNaN(value) || value < 0) {
+    return
+  }
+
+  if (currentRound.value?.products) {
+    productPriceChanges[productId] = value
+  }
+}
+
 async function saveProductQuantity(productId) {
   try {
     if (!currentRound.value) return
@@ -627,10 +687,31 @@ async function saveProductQuantity(productId) {
     await preorderStore.updateProductQuantityInRound(currentRound.value.id, productId, raw)
     // Refresh current round detail
     await preorderStore.fetchRoundDetail(currentRound.value.id)
+    selectedProduct.value =
+      currentRound.value.products.find((product) => String(product.id) === String(productId)) ||
+      selectedProduct.value
     // Clear local change tracking
     delete productQuantityChanges[productId]
   } catch (err) {
     alert('การบันทึกล้มเหลว: ' + err.message)
+  }
+}
+
+async function saveProductPrice(productId) {
+  try {
+    if (!currentRound.value) return
+    const raw = Object.prototype.hasOwnProperty.call(productPriceChanges, productId)
+      ? productPriceChanges[productId]
+      : currentRound.value.products.find((p) => String(p.id) === String(productId))?.roundPrice
+
+    await preorderStore.updateProductPriceInRound(currentRound.value.id, productId, raw)
+    await preorderStore.fetchRoundDetail(currentRound.value.id)
+    selectedProduct.value =
+      currentRound.value.products.find((product) => String(product.id) === String(productId)) ||
+      selectedProduct.value
+    delete productPriceChanges[productId]
+  } catch (err) {
+    alert('การบันทึกราคาพรีออเดอร์ล้มเหลว: ' + err.message)
   }
 }
 
@@ -645,6 +726,17 @@ function hasQuantityChanged(productId) {
   if (left === null && right === null) return false
   if (left === null && right !== null) return true
   if (left !== null && right === null) return true
+  return Number(left) !== Number(right)
+}
+
+function hasPriceChanged(productId) {
+  if (!currentRound.value?.products) return false
+  const product = currentRound.value.products.find((p) => String(p.id) === String(productId))
+  if (!product) return false
+  const left = Object.prototype.hasOwnProperty.call(productPriceChanges, productId)
+    ? productPriceChanges[productId]
+    : product.roundPrice
+  const right = product.roundPrice
   return Number(left) !== Number(right)
 }
 
@@ -677,10 +769,19 @@ async function confirmAddProducts() {
         const product = filteredAvailableProducts.value.find((p) => String(p.id) === String(id))
         return getSuggestedQuantity(product)
       })
+      const roundPrices = selectedProductIds.value.map((id) => {
+        if (selectedProductRoundPrices[id] != null) {
+          return selectedProductRoundPrices[id]
+        }
+
+        const product = filteredAvailableProducts.value.find((p) => String(p.id) === String(id))
+        return getSuggestedRoundPrice(product)
+      })
       await preorderStore.addProductsToRound(
         currentRound.value.id,
         selectedProductIds.value,
         quantities,
+        roundPrices,
       )
       closeAddProductsModal()
     }

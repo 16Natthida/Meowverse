@@ -5,8 +5,7 @@ import { useAuth } from '../../composables/useAuth'
 
 const router = useRouter()
 const route = useRoute()
-const { getUser } = useAuth()
-const currentUser = computed(() => getUser())
+useAuth()
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 
 const order = ref(null)

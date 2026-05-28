@@ -2033,7 +2033,14 @@ app.put('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
                   `INSERT INTO order_details
                      (order_id, prod_id, flavor, Price, qty, received_qty, arrival_status, Import_fee, item_type, preorder_round_id)
                    VALUES (?, ?, ?, ?, ?, 0, 'Pending', 0, 'preorder', ?)`,
-                  [orderId, item.prod_id, item.flavor || null, item.price, item.qty, item.preorder_round_id],
+                  [
+                    orderId,
+                    item.prod_id,
+                    item.flavor || null,
+                    item.price,
+                    item.qty,
+                    item.preorder_round_id,
+                  ],
                 )
 
                 // อัปเดต quantity_sold ใน preorder_round_products
@@ -2097,7 +2104,7 @@ app.delete('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (r
 // Add product to preorder round
 app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, async (req, res) => {
   const roundId = Number(req.params.id)
-  const { productIds, quantities, roundPrices, prices } = req.body || {}
+  const { productIds, quantities, roundPrices } = req.body || {}
 
   if (!Array.isArray(productIds) || productIds.length === 0) {
     res.status(400).json({ message: 'productIds array is required' })
@@ -2114,6 +2121,13 @@ app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, a
       res.status(404).json({ message: 'Preorder round not found' })
       return
     }
+
+    const resolvedRoundId = Number(roundRows[0].round_id)
+    if (!Number.isFinite(resolvedRoundId) || resolvedRoundId <= 0) {
+      res.status(400).json({ message: 'Invalid preorder round id' })
+      return
+    }
+
     const [productRows] = await pool.query(
       'SELECT prod_id AS prodId, base_price AS basePrice FROM products WHERE prod_id IN (?)',
       [productIds.map((pid) => Number(pid))],
@@ -2131,28 +2145,28 @@ app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, a
     const preorderPriceMap = new Map(
       preorderPriceRows.map((row) => [String(row.prodId), Number(row.preorderPrice) || 0]),
     )
-    const values = productIds.map((pid, index) => [
-      roundId,
-      Number(pid),
-      quantities && quantities[index] ? Number(quantities[index]) : 0,
-      roundPrices && roundPrices[index] !== undefined && roundPrices[index] !== null
-        ? Number(roundPrices[index])
-        : (preorderPriceMap.get(String(pid)) ?? productPriceMap.get(String(pid)) ?? 0),
-      prices && prices[index] ? Number(prices[index]) : null,
-    ])
 
-    const placeholders1 = values.map(() => '(?, ?, ?, ?)').join(', ')
-    const flatValues1 = values.flat()
-    await pool.query(
-      `
-      INSERT INTO preorder_round_products (round_id, prod_id, quantity_available, round_price)
-      VALUES ${placeholders1}
-      ON DUPLICATE KEY UPDATE
-        quantity_available = VALUES(quantity_available),
-        round_price = COALESCE(VALUES(round_price), round_price)
-    `,
-      flatValues1,
-    )
+    for (const [index, pid] of productIds.entries()) {
+      const quantityValue =
+        quantities && quantities[index] !== undefined ? Number(quantities[index]) : 0
+      const roundPriceValue =
+        roundPrices && roundPrices[index] !== undefined && roundPrices[index] !== null
+          ? Number(roundPrices[index])
+          : (preorderPriceMap.get(String(pid)) ?? productPriceMap.get(String(pid)) ?? 0)
+
+      await pool.query(
+        `
+        INSERT INTO preorder_round_products (round_id, prod_id, quantity_available, round_price)
+        SELECT ?, ?, ?, ?
+        FROM preorder_rounds
+        WHERE round_id = ?
+        ON DUPLICATE KEY UPDATE
+          quantity_available = VALUES(quantity_available),
+          round_price = COALESCE(VALUES(round_price), round_price)
+      `,
+        [resolvedRoundId, Number(pid), quantityValue, roundPriceValue, resolvedRoundId],
+      )
+    }
 
     await pool.query(`UPDATE products SET preorder_enabled = 1 WHERE prod_id IN (?)`, [
       productIds.map((pid) => Number(pid)),
@@ -2190,79 +2204,6 @@ app.delete(
     }
   },
 )
-
-// Add product to preorder round
-app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, async (req, res) => {
-  const roundId = Number(req.params.id)
-  const { productIds, quantities, roundPrices, prices } = req.body || {}
-
-  if (!Array.isArray(productIds) || productIds.length === 0) {
-    res.status(400).json({ message: 'productIds array is required' })
-    return
-  }
-
-  try {
-    const [roundRows] = await pool.query(
-      'SELECT round_id FROM preorder_rounds WHERE round_id = ? LIMIT 1',
-      [roundId],
-    )
-
-    if (roundRows.length === 0) {
-      res.status(404).json({ message: 'Preorder round not found' })
-      return
-    }
-
-    const [productRows] = await pool.query(
-      'SELECT prod_id AS prodId, base_price AS basePrice FROM products WHERE prod_id IN (?)',
-      [productIds.map((pid) => Number(pid))],
-    )
-
-    const productPriceMap = new Map(
-      productRows.map((row) => [String(row.prodId), Number(row.basePrice) || 0]),
-    )
-
-    const [preorderPriceRows] = await pool.query(
-      'SELECT prod_id AS prodId, preorder_price AS preorderPrice FROM products WHERE prod_id IN (?)',
-      [productIds.map((pid) => Number(pid))],
-    )
-
-    const preorderPriceMap = new Map(
-      preorderPriceRows.map((row) => [String(row.prodId), Number(row.preorderPrice) || 0]),
-    )
-
-    const values = productIds.map((pid, index) => [
-      roundId,
-      Number(pid),
-      quantities && quantities[index] !== undefined ? Number(quantities[index]) : 0,
-      roundPrices && roundPrices[index] !== undefined && roundPrices[index] !== null
-        ? Number(roundPrices[index])
-        : prices && prices[index] !== undefined && prices[index] !== null
-          ? Number(prices[index])
-          : (preorderPriceMap.get(String(pid)) ?? productPriceMap.get(String(pid)) ?? 0),
-    ])
-
-    const placeholders2 = values.map(() => '(?, ?, ?, ?)').join(', ')
-    const flatValues2 = values.flat()
-    await pool.query(
-      `
-      INSERT INTO preorder_round_products (round_id, prod_id, quantity_available, round_price)
-      VALUES ${placeholders2}
-      ON DUPLICATE KEY UPDATE
-        quantity_available = VALUES(quantity_available),
-        round_price = COALESCE(VALUES(round_price), round_price)
-    `,
-      flatValues2,
-    )
-
-    await pool.query(`UPDATE products SET preorder_enabled = 1 WHERE prod_id IN (?)`, [
-      productIds.map((pid) => Number(pid)),
-    ])
-
-    res.json({ message: 'Products added to round successfully' })
-  } catch (error) {
-    res.status(500).json({ message: error.message })
-  }
-})
 
 // Update product quantity and/or price in preorder round
 app.put(
@@ -2387,11 +2328,16 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
 
     // 3. บันทึกที่อยู่ลงตาราง shipping
     // รวมชื่อ เบอร์โทร และหมายเหตุเข้ากับที่อยู่ เพื่อเก็บในคอลัมน์ address ตามโครงสร้างตาราง
-    const fullAddress = `ชื่อผู้รับ: ${shipping_name}\nโทร: ${shipping_phone}\nที่อยู่: ${shipping_address}\nหมายเหตุ: ${notes || '-'}`
-
     await connection.query(
       `INSERT INTO shipping (order_id, name, phone, address, notes, Shipping_Carrier) VALUES (?, ?, ?, ?, ?, ?)`,
-      [order_id, shipping_name || null, shipping_phone || null, shipping_address || null, notes || null, shipping_carrier || null],
+      [
+        order_id,
+        shipping_name || null,
+        shipping_phone || null,
+        shipping_address || null,
+        notes || null,
+        shipping_carrier || null,
+      ],
     )
 
     // 4. ดึงรายละเอียดออเดอร์เพื่อเคลียร์ตะกร้าและปรับสต็อกหลังชำระเงินจริง
@@ -2463,7 +2409,9 @@ app.post('/api/orders/:order_id/shipping', async (req, res) => {
   try {
     await connection.beginTransaction()
 
-    const [orderRows] = await connection.query('SELECT order_id FROM orders WHERE order_id = ?', [order_id])
+    const [orderRows] = await connection.query('SELECT order_id FROM orders WHERE order_id = ?', [
+      order_id,
+    ])
     if (orderRows.length === 0) {
       throw new Error('ไม่พบข้อมูลออเดอร์')
     }
@@ -2471,7 +2419,14 @@ app.post('/api/orders/:order_id/shipping', async (req, res) => {
     await connection.query(
       `INSERT INTO shipping (order_id, name, phone, address, notes, Shipping_Carrier)
        VALUES (?, ?, ?, ?, ?, ?)`,
-      [order_id, shipping_name || null, shipping_phone || null, shipping_address || null, notes || null, shipping_carrier || null],
+      [
+        order_id,
+        shipping_name || null,
+        shipping_phone || null,
+        shipping_address || null,
+        notes || null,
+        shipping_carrier || null,
+      ],
     )
 
     await connection.commit()
@@ -3694,6 +3649,58 @@ app.get('/api/admin/orders', authenticateToken, requireAdmin, async (req, res) =
         Order_date: row.Order_date || null,
         item_count: Number(row.item_count) || 0,
         total_qty: Number(row.total_qty) || 0,
+      })),
+    )
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ─────────────────────────────────────────────
+// GET /api/admin/order-item-summary
+// สรุปยอดขายรายสินค้าแบบรวมทุกออเดอร์สำหรับแอดมิน
+// ─────────────────────────────────────────────
+app.get('/api/admin/order-item-summary', authenticateToken, requireAdmin, async (_req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT
+         od.prod_id,
+         p.prod_name AS name,
+         c.cat_name AS category_name,
+         od.flavor,
+         LOWER(COALESCE(NULLIF(od.item_type, ''), CASE WHEN od.preorder_round_id IS NOT NULL THEN 'preorder' END, '')) AS item_type,
+         od.Price AS unit_price,
+         SUM(od.qty) AS sold_qty,
+         COUNT(od.detail_id) AS line_count,
+         COUNT(DISTINCT od.order_id) AS order_count,
+         COALESCE(SUM(od.Price * od.qty), 0) AS total_amount
+       FROM order_details od
+       INNER JOIN orders o ON o.order_id = od.order_id
+       LEFT JOIN products p ON p.prod_id = od.prod_id
+       LEFT JOIN categories c ON c.cat_id = p.cat_id
+       WHERE o.order_id IS NOT NULL
+       GROUP BY
+         od.prod_id,
+         p.prod_name,
+         c.cat_name,
+         od.flavor,
+         LOWER(COALESCE(NULLIF(od.item_type, ''), CASE WHEN od.preorder_round_id IS NOT NULL THEN 'preorder' END, '')),
+         od.Price
+       ORDER BY sold_qty DESC, name ASC, od.flavor ASC, item_type ASC, unit_price ASC`,
+    )
+
+    res.json(
+      rows.map((row) => ({
+        prod_id: Number(row.prod_id) || null,
+        name: row.name || '-',
+        category_name: row.category_name || '',
+        flavor: row.flavor || '',
+        item_type: row.item_type || '',
+        unit_price: Number(row.unit_price) || 0,
+        sold_qty: Number(row.sold_qty) || 0,
+        line_count: Number(row.line_count) || 0,
+        order_count: Number(row.order_count) || 0,
+        total_amount: Number(row.total_amount) || 0,
       })),
     )
   } catch (error) {

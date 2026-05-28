@@ -13,12 +13,27 @@ const currentUser = computed(() => getUser())
 const orders = ref([])
 const loading = ref(false)
 const error = ref('')
+const productSalesSummary = ref([])
+const productSalesLoading = ref(false)
+const productSalesError = ref('')
+const productFilterName = ref('')
+const productFilterType = ref('all')
+const productFilterMinSold = ref(0)
+const productFilterTopN = ref('all')
+const showProductFilters = ref(false)
+const salesView = ref('summary')
 const searchQuery = ref('')
 const typeFilter = ref('all')
 const statusFilter = ref('all')
 const selectedOrder = ref(null)
 const selectedOrderLoading = ref(false)
 const selectedOrderError = ref('')
+
+function normalizeStatus(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+}
 
 const statusConfig = {
   Pending: { label: 'รอดำเนินการ', color: '#f59e0b', bg: '#fffbeb' },
@@ -89,14 +104,234 @@ const filteredOrders = computed(() => {
 
 const orderStats = computed(() => ({
   all: orders.value.length,
-  preorder: orders.value.filter(
-    (order) => String(order.Order_type || '').toLowerCase() === 'preorder',
-  ).length,
-  ready: orders.value.filter((order) => String(order.Order_type || '').toLowerCase() === 'ready')
-    .length,
-  pending: orders.value.filter((order) => String(order.status || '').toLowerCase() === 'pending')
-    .length,
+  totalSales: orders.value.reduce((sum, order) => sum + (Number(order.total_amount) || 0), 0),
+  paid: orders.value.filter((order) => normalizeStatus(order.status) === 'paid').length,
+  preorder: orders.value.filter((order) => normalizeStatus(order.Order_type) === 'preorder').length,
+  ready: orders.value.filter((order) => normalizeStatus(order.Order_type) === 'ready').length,
+  pending: orders.value.filter((order) => normalizeStatus(order.status) === 'pending').length,
 }))
+
+const productSalesTotalQty = computed(() =>
+  productSalesSummary.value.reduce((sum, item) => sum + (Number(item.sold_qty) || 0), 0),
+)
+
+// Aggregate product sales by product id and item type (ignore flavor) so preorder and ready-to-ship rows stay separate
+const aggregatedProductSales = computed(() => {
+  const rows = Array.isArray(productSalesSummary.value) ? productSalesSummary.value : []
+  const map = new Map()
+
+  for (const r of rows) {
+    const itemType = String(r.item_type || '')
+      .trim()
+      .toLowerCase()
+    const key = [String(r.prod_id || r.id || r.product_id || r.name).trim(), itemType].join('|')
+    const existing = map.get(key)
+    if (!existing) {
+      map.set(key, {
+        prod_id: r.prod_id,
+        name: r.name,
+        category_name: r.category_name,
+        item_type: itemType,
+        // keep a representative unit_price (first seen)
+        unit_price: r.unit_price,
+        sold_qty: Number(r.sold_qty || 0),
+        total_amount: Number(r.total_amount || 0),
+        details: [r],
+      })
+      continue
+    }
+    existing.sold_qty += Number(r.sold_qty || 0)
+    existing.total_amount += Number(r.total_amount || 0)
+    existing.details.push(r)
+  }
+
+  return [...map.values()].sort((a, b) => {
+    const typeRank = (value) => (String(value || '').toLowerCase() === 'preorder' ? 0 : 1)
+    const rankDiff = typeRank(a.item_type) - typeRank(b.item_type)
+    if (rankDiff !== 0) return rankDiff
+
+    const nameDiff = String(a.name || '').localeCompare(String(b.name || ''), 'th')
+    if (nameDiff !== 0) return nameDiff
+
+    return Number(b.sold_qty || 0) - Number(a.sold_qty || 0)
+  })
+})
+
+const filteredProductSales = computed(() => {
+  let list = aggregatedProductSales.value.slice()
+
+  const name = String(productFilterName.value || '')
+    .trim()
+    .toLowerCase()
+  const type = String(productFilterType.value || '')
+    .trim()
+    .toLowerCase()
+  const minSold = Number(productFilterMinSold.value || 0)
+
+  if (name) {
+    list = list.filter((p) =>
+      String(p.name || '')
+        .toLowerCase()
+        .includes(name),
+    )
+  }
+
+  if (type && type !== 'all') {
+    list = list.filter((p) => String(p.item_type || '').toLowerCase() === type)
+  }
+
+  if (!Number.isNaN(minSold) && minSold > 0) {
+    list = list.filter((p) => Number(p.sold_qty || 0) >= minSold)
+  }
+
+  list = list.slice().sort((a, b) => Number(b.sold_qty || 0) - Number(a.sold_qty || 0))
+
+  if (productFilterTopN.value && String(productFilterTopN.value) !== 'all') {
+    const n = Number(productFilterTopN.value) || 0
+    if (n > 0) list = list.slice(0, n)
+  }
+
+  return list
+})
+
+// Product detail modal state
+const showProductDetail = ref(false)
+const selectedProductDetails = ref(null)
+
+function openProductDetails(prod) {
+  selectedProductDetails.value = prod
+  showProductDetail.value = true
+}
+
+function closeProductDetails() {
+  selectedProductDetails.value = null
+  showProductDetail.value = false
+}
+
+const aggregatedSelectedProductRows = computed(() => {
+  const rows = Array.isArray(selectedProductDetails.value?.details)
+    ? selectedProductDetails.value.details
+    : []
+  const map = new Map()
+
+  for (const r of rows) {
+    const flavor = String(r.flavor || '').trim()
+    const type = String(r.item_type || '').trim()
+    const unitPrice = Number(r.unit_price || 0)
+    const key = `${flavor}|${type}|${unitPrice}`
+
+    if (!map.has(key)) {
+      map.set(key, {
+        flavor,
+        item_type: type,
+        unit_price: unitPrice,
+        sold_qty: Number(r.sold_qty || 0),
+        total_amount: Number(r.sold_qty || 0) * unitPrice,
+        category_name: r.category_name,
+        name: r.name,
+      })
+      continue
+    }
+
+    const e = map.get(key)
+    e.sold_qty += Number(r.sold_qty || 0)
+    e.total_amount += Number(r.sold_qty || 0) * unitPrice
+  }
+
+  return [...map.values()]
+})
+
+const selectedProductDetailTotals = computed(() => {
+  return aggregatedSelectedProductRows.value.reduce(
+    (totals, row) => {
+      totals.qty += Number(row.sold_qty || 0)
+      totals.amount += Number(row.unit_price || 0) * Number(row.sold_qty || 0)
+      return totals
+    },
+    { qty: 0, amount: 0 },
+  )
+})
+
+function toggleProductFilters() {
+  showProductFilters.value = !showProductFilters.value
+}
+
+const summarizedOrderItems = computed(() => {
+  const items = Array.isArray(selectedOrder.value?.items) ? selectedOrder.value.items : []
+  const groupedItems = new Map()
+
+  for (const item of items) {
+    const unitPrice = Number(item.unit_price || 0)
+    const quantity = Number(item.qty || 0)
+    const flavor = String(item.flavor || '').trim()
+    const groupKey = [
+      String(item.name || '')
+        .trim()
+        .toLowerCase(),
+      flavor.toLowerCase(),
+      String(item.item_type || '')
+        .trim()
+        .toLowerCase(),
+      String(unitPrice),
+      String(item.category_name || '')
+        .trim()
+        .toLowerCase(),
+    ].join('|')
+
+    if (!groupedItems.has(groupKey)) {
+      groupedItems.set(groupKey, {
+        ...item,
+        qty: quantity,
+        unit_price: unitPrice,
+        merged_count: 1,
+        detail_ids: [item.detail_id],
+      })
+      continue
+    }
+
+    const groupedItem = groupedItems.get(groupKey)
+    groupedItem.qty += quantity
+    groupedItem.merged_count += 1
+    groupedItem.detail_ids.push(item.detail_id)
+  }
+
+  return [...groupedItems.values()]
+})
+
+function getItemLabel(item) {
+  const flavor = String(item?.flavor || '').trim()
+  const labelParts = [String(item?.name || '-')]
+  if (flavor) {
+    labelParts.push(`รสชาติ: ${flavor}`)
+  }
+  return labelParts.join(' · ')
+}
+
+async function fetchProductSalesSummary() {
+  productSalesLoading.value = true
+  productSalesError.value = ''
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/order-item-summary`, {
+      headers: authHeaders(),
+    })
+
+    if (!response.ok) {
+      throw new Error('โหลดสรุปยอดขายรายสินค้าไม่สำเร็จ')
+    }
+
+    productSalesSummary.value = await response.json()
+  } catch (err) {
+    productSalesError.value = translateError(err)
+    productSalesSummary.value = []
+  } finally {
+    productSalesLoading.value = false
+  }
+}
+
+async function refreshDashboard() {
+  await Promise.all([fetchOrders(), fetchProductSalesSummary()])
+}
 
 async function fetchOrders() {
   loading.value = true
@@ -165,7 +400,7 @@ function viewSlipList() {
 }
 
 onMounted(() => {
-  fetchOrders()
+  refreshDashboard()
 })
 </script>
 
@@ -173,9 +408,9 @@ onMounted(() => {
   <div class="admin-order-page">
     <section class="hero-panel">
       <div class="hero-copy">
-        <p class="eyebrow">Admin Operations</p>
-        <h1>รายการออเดอร์ทั้งหมด</h1>
-        <p>ดูออเดอร์พร้อมส่งและพรีออเดอร์ทุกสถานะในที่เดียว พร้อมเปิดรายละเอียดได้ทันที</p>
+        <p class="eyebrow">Admin Sales</p>
+        <h1>รายการยอดขาย</h1>
+        <p>ดูยอดขายพร้อมส่งและพรีออเดอร์ทุกสถานะในที่เดียว พร้อมเปิดรายละเอียดได้ทันที</p>
       </div>
       <div class="hero-actions">
         <button class="ghost-btn" type="button" @click="goBack">กลับ Dashboard</button>
@@ -185,127 +420,218 @@ onMounted(() => {
 
     <section class="kpi-grid">
       <article class="kpi-card">
-        <p class="kpi-label">ทั้งหมด</p>
+        <p class="kpi-label">ยอดขายรวม</p>
+        <p class="kpi-value">{{ formatMoney(orderStats.totalSales) }}</p>
+      </article>
+      <article class="kpi-card">
+        <p class="kpi-label">รายการทั้งหมด</p>
         <p class="kpi-value">{{ orderStats.all }}</p>
+      </article>
+      <article class="kpi-card">
+        <p class="kpi-label">ชำระแล้ว</p>
+        <p class="kpi-value">{{ orderStats.paid }}</p>
       </article>
       <article class="kpi-card">
         <p class="kpi-label">พรีออเดอร์</p>
         <p class="kpi-value">{{ orderStats.preorder }}</p>
       </article>
-      <article class="kpi-card">
-        <p class="kpi-label">พร้อมส่ง</p>
-        <p class="kpi-value">{{ orderStats.ready }}</p>
-      </article>
-      <article class="kpi-card">
-        <p class="kpi-label">รอดำเนินการ</p>
-        <p class="kpi-value">{{ orderStats.pending }}</p>
-      </article>
     </section>
 
-    <section class="panel">
+    <div class="view-filter-row">
+      <span class="view-filter-label">ตัวกรองมุมมอง</span>
+      <select
+        v-model="salesView"
+        class="filter-select view-filter-select"
+        aria-label="ตัวกรองมุมมอง"
+      >
+        <option value="summary">สรุปยอดขายรายสินค้า</option>
+        <option value="orders">จัดการรายการยอดขาย</option>
+      </select>
+    </div>
+
+    <section v-if="salesView === 'summary'" class="panel summary-panel">
       <header class="panel-head panel-head--stacked">
         <div>
-          <h2>จัดการรายการออเดอร์</h2>
-          <p>ค้นหาและกรองตามประเภทหรือสถานะออเดอร์</p>
+          <h2>สรุปยอดขายรายสินค้า</h2>
+          <p>ดูว่ารายการไหนถูกขายรวมทั้งหมดกี่ชิ้นจากทุกออเดอร์</p>
         </div>
-        <button class="ghost-btn" type="button" @click="fetchOrders">รีเฟรช</button>
+        <button class="ghost-btn" type="button" @click="fetchProductSalesSummary">
+          รีเฟรชสรุป
+        </button>
       </header>
 
-      <div class="toolbar">
+      <div class="summary-strip summary-strip--wide">
+        <div>
+          <span>สินค้าทั้งหมดที่ขายได้</span
+          ><strong>{{ productSalesSummary.length }} รายการ</strong>
+        </div>
+        <div>
+          <span>จำนวนชิ้นรวม</span><strong>{{ productSalesTotalQty }} ชิ้น</strong>
+        </div>
+        <button class="ghost-btn summary-toggle-btn" type="button" @click="toggleProductFilters">
+          {{ showProductFilters ? 'ซ่อนตัวกรอง' : 'แสดงตัวกรอง' }}
+        </button>
+      </div>
+
+      <transition name="fade">
+        <div v-if="showProductFilters" class="summary-filters">
+          <input
+            v-model="productFilterName"
+            class="filter-input"
+            type="search"
+            placeholder="ค้นหาชื่อสินค้า"
+          />
+
+          <div class="summary-type-buttons" role="group" aria-label="กรองประเภทสินค้า">
+            <button
+              class="filter-btn"
+              :class="{ active: productFilterType === 'all' }"
+              type="button"
+              @click="productFilterType = 'all'"
+            >
+              ทั้งหมด
+            </button>
+            <button
+              class="filter-btn"
+              :class="{ active: productFilterType === 'ready-to-ship' }"
+              type="button"
+              @click="productFilterType = 'ready-to-ship'"
+            >
+              พร้อมส่งสินค้า
+            </button>
+            <button
+              class="filter-btn"
+              :class="{ active: productFilterType === 'preorder' }"
+              type="button"
+              @click="productFilterType = 'preorder'"
+            >
+              สินค้าพรีออเดอร์
+            </button>
+          </div>
+
+          <input
+            v-model.number="productFilterMinSold"
+            class="filter-input filter-input--small"
+            type="number"
+            min="0"
+            placeholder="จำนวนขั้นต่ำ"
+          />
+
+          <select v-model="productFilterTopN" class="filter-select">
+            <option value="all">ทั้งหมด</option>
+            <option value="10">Top 10</option>
+            <option value="20">Top 20</option>
+            <option value="50">Top 50</option>
+          </select>
+
+          <div class="filter-summary">
+            แสดง {{ filteredProductSales.length }} / {{ productSalesSummary.length }}
+          </div>
+        </div>
+      </transition>
+
+      <div v-if="productSalesLoading" class="state-box">กำลังโหลดสรุปยอดขายรายสินค้า...</div>
+      <div v-else-if="productSalesError" class="state-box state-box--error">
+        {{ productSalesError }}
+      </div>
+      <div v-else-if="filteredProductSales.length === 0" class="empty-box">
+        ยังไม่มีข้อมูลสรุปยอดขายรายสินค้า
+      </div>
+      <div v-else class="summary-table-wrap">
+        <table class="summary-table">
+          <thead>
+            <tr>
+              <th>สินค้า</th>
+              <th>ประเภท</th>
+              <th>ราคาต่อชิ้น</th>
+              <th>ขายได้</th>
+              <th>รวมมูลค่า</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="item in filteredProductSales"
+              :key="`prod-${item.prod_id}-${item.item_type}`"
+            >
+              <td>
+                <strong>{{ item.name }}</strong>
+                <p v-if="item.category_name">{{ item.category_name }}</p>
+              </td>
+              <td>
+                <span
+                  :class="[
+                    'type-chip',
+                    item.item_type === 'preorder' ? 'type-chip--pre' : 'type-chip--ready',
+                  ]"
+                >
+                  {{ item.item_type === 'preorder' ? 'พรีออเดอร์' : 'พร้อมส่ง' }}
+                </span>
+              </td>
+              <td>{{ formatMoney(item.unit_price) }}</td>
+              <td>
+                <strong>{{ Number(item.sold_qty || 0).toLocaleString('th-TH') }}</strong>
+              </td>
+              <td>{{ formatMoney(item.total_amount) }}</td>
+              <td>
+                <button class="slip-view-btn" type="button" @click="openProductDetails(item)">
+                  รายละเอียด
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section v-else class="panel">
+      <header class="panel-head panel-head--stacked">
+        <div>
+          <h2>จัดการรายการยอดขาย</h2>
+          <p>ค้นหาและกรองตามประเภทหรือสถานะการขาย</p>
+        </div>
+        <button class="ghost-btn" type="button" @click="refreshDashboard">รีเฟรช</button>
+      </header>
+
+      <div class="toolbar order-filter-toolbar">
         <input
           v-model="searchQuery"
-          class="search-input"
+          class="search-input order-filter-search"
           type="search"
-          placeholder="ค้นหาด้วยเลขออเดอร์ / ชื่อผู้ใช้ / ชื่อลูกค้า"
+          placeholder="ค้นหาด้วยเลขยอดขาย / ชื่อผู้ใช้ / ชื่อลูกค้า"
           @keyup.enter="fetchOrders"
         />
-        <button class="primary-btn" type="button" @click="fetchOrders">ค้นหา</button>
-      </div>
 
-      <div class="filter-row">
-        <button
-          class="filter-btn"
-          :class="{ active: typeFilter === 'all' }"
-          @click="
-            typeFilter = 'all'
-            fetchOrders()
-          "
-        >
-          ทั้งหมด
+        <button class="primary-btn order-filter-search-btn" type="button" @click="fetchOrders">
+          ค้นหา
         </button>
-        <button
-          class="filter-btn"
-          :class="{ active: typeFilter === 'preorder' }"
-          @click="
-            typeFilter = 'preorder'
-            fetchOrders()
-          "
-        >
-          พรีออเดอร์
-        </button>
-        <button
-          class="filter-btn"
-          :class="{ active: typeFilter === 'ready' }"
-          @click="
-            typeFilter = 'ready'
-            fetchOrders()
-          "
-        >
-          พร้อมส่ง
-        </button>
-      </div>
 
-      <div class="filter-row filter-row--muted">
-        <button
-          class="filter-btn"
-          :class="{ active: statusFilter === 'all' }"
-          @click="
-            statusFilter = 'all'
-            fetchOrders()
-          "
-        >
-          ทั้งหมด
-        </button>
-        <button
-          class="filter-btn"
-          :class="{ active: statusFilter === 'pending' }"
-          @click="
-            statusFilter = 'pending'
-            fetchOrders()
-          "
-        >
-          รอดำเนินการ
-        </button>
-        <button
-          class="filter-btn"
-          :class="{ active: statusFilter === 'paid' }"
-          @click="
-            statusFilter = 'paid'
-            fetchOrders()
-          "
-        >
-          ชำระแล้ว
-        </button>
-        <button
-          class="filter-btn"
-          :class="{ active: statusFilter === 'wait_for_import_fee' }"
-          @click="
-            statusFilter = 'wait_for_import_fee'
-            fetchOrders()
-          "
-        >
-          รอค่านำเข้า
-        </button>
-        <button
-          class="filter-btn"
-          :class="{ active: statusFilter === 'ready_to_ship' }"
-          @click="
-            statusFilter = 'ready_to_ship'
-            fetchOrders()
-          "
-        >
-          พร้อมจัดส่ง
-        </button>
+        <div class="order-filter-section" style="margin-left: auto">
+          <label class="order-filter-title" for="order-type-select">ประเภทสลิป</label>
+          <select
+            id="order-type-select"
+            v-model="typeFilter"
+            class="filter-select order-filter-select"
+          >
+            <option value="all">ทั้งหมด</option>
+            <option value="preorder">พรีออเดอร์</option>
+            <option value="ready">พร้อมส่ง</option>
+          </select>
+        </div>
+
+        <div class="order-filter-section">
+          <label class="order-filter-title" for="order-status-select">สถานะการตรวจ</label>
+          <select
+            id="order-status-select"
+            v-model="statusFilter"
+            class="filter-select order-filter-select"
+          >
+            <option value="all">ทั้งหมด</option>
+            <option value="pending">รอดำเนินการ</option>
+            <option value="paid">ชำระแล้ว</option>
+            <option value="wait_for_import_fee">รอค่านำเข้า</option>
+            <option value="ready_to_ship">พร้อมจัดส่ง</option>
+          </select>
+        </div>
       </div>
 
       <div v-if="loading" class="state-box">กำลังโหลดรายการออเดอร์...</div>
@@ -399,13 +725,23 @@ onMounted(() => {
               <div>
                 <span>วันที่</span><strong>{{ formatDate(selectedOrder.Order_date) }}</strong>
               </div>
+              <div>
+                <span>จำนวนสินค้า</span><strong>{{ selectedOrder.total_qty || 0 }} ชิ้น</strong>
+              </div>
             </div>
 
             <div class="items-list">
-              <div v-for="item in selectedOrder.items || []" :key="item.detail_id" class="item-row">
+              <div
+                v-for="item in summarizedOrderItems"
+                :key="item.detail_ids?.join('-') || item.detail_id"
+                class="item-row"
+              >
                 <div>
-                  <strong>{{ item.name }}</strong>
+                  <strong>{{ getItemLabel(item) }}</strong>
                   <p v-if="item.category_name">{{ item.category_name }}</p>
+                  <p v-if="item.merged_count > 1" class="item-merge-note">
+                    รวมจาก {{ item.merged_count }} รายการย่อย
+                  </p>
                 </div>
                 <div>฿{{ Number(item.unit_price || 0).toLocaleString('th-TH') }}</div>
                 <div>x{{ item.qty }}</div>
@@ -426,6 +762,58 @@ onMounted(() => {
               </div>
             </div>
           </template>
+        </div>
+      </div>
+    </transition>
+    <transition name="fade">
+      <div v-if="showProductDetail" class="modal-overlay" @click.self="closeProductDetails">
+        <div class="modal-card">
+          <div class="modal-head">
+            <div>
+              <h3>รายละเอียดสินค้า {{ selectedProductDetails?.name }}</h3>
+              <p>{{ selectedProductDetails?.category_name || '' }}</p>
+            </div>
+            <button class="close-btn" type="button" @click="closeProductDetails">✕</button>
+          </div>
+
+          <div class="summary-strip">
+            <div>
+              <span>จำนวนชิ้นรวม</span>
+              <strong>{{ selectedProductDetailTotals.qty.toLocaleString('th-TH') }} ชิ้น</strong>
+            </div>
+            <div>
+              <span>รวมมูลค่า</span>
+              <strong>{{ formatMoney(selectedProductDetailTotals.amount || 0) }}</strong>
+            </div>
+          </div>
+
+          <div class="items-list">
+            <div
+              class="item-row"
+              v-for="row in aggregatedSelectedProductRows"
+              :key="(row.flavor || 'nof') + '-' + row.item_type"
+            >
+              <div>
+                <strong
+                  >{{ row.name }} <small v-if="row.flavor">· {{ row.flavor }}</small></strong
+                >
+                <p v-if="row.category_name">{{ row.category_name }}</p>
+              </div>
+              <div>{{ formatMoney(row.unit_price) }}</div>
+              <div>x{{ Number(row.sold_qty || 0) }}</div>
+              <div>{{ formatMoney(row.total_amount) }}</div>
+              <div>
+                <span
+                  :class="[
+                    'type-chip',
+                    row.item_type === 'preorder' ? 'type-chip--pre' : 'type-chip--ready',
+                  ]"
+                >
+                  {{ row.item_type === 'preorder' ? 'พรีออเดอร์' : 'พร้อมส่ง' }}
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </transition>
@@ -539,16 +927,98 @@ onMounted(() => {
   align-items: flex-start;
 }
 
+.view-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0.35rem 0 0.9rem;
+  padding: 0.6rem 0.8rem;
+  flex-wrap: wrap;
+  width: fit-content;
+  border: 1px dashed rgba(160, 126, 191, 0.22);
+  border-radius: 14px;
+  background: #fbf8ff;
+}
+
+.view-filter-label {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: #6b5a84;
+  white-space: nowrap;
+}
+
+.view-filter-select {
+  min-width: 230px;
+}
+
+.view-filter-select:focus {
+  outline: none;
+  border-color: rgba(111, 80, 160, 0.45);
+  box-shadow: 0 0 0 3px rgba(161, 125, 242, 0.12);
+}
+
 .toolbar,
 .filter-row {
   display: flex;
   gap: 0.65rem;
-  flex-wrap: wrap;
   margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.order-filter-toolbar {
+  align-items: center;
+  overflow-x: auto;
+  padding-bottom: 0.15rem;
+}
+
+.order-filter-section {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px dashed rgba(160, 126, 191, 0.22);
+  border-radius: 14px;
+  background: #fbf8ff;
+  flex: 0 0 auto;
+}
+
+.order-filter-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #6b5a84;
+  white-space: nowrap;
+  margin-right: 0.45rem;
+}
+
+.order-filter-group {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
+}
+
+.order-filter-search {
+  flex: 0 0 360px;
+}
+
+.order-filter-search-btn {
+  flex: 0 0 auto;
+}
+
+.order-filter-bar .filter-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding: 0.4rem 0.78rem;
+}
+
+.order-filter-bar .search-input {
+  margin-bottom: 0;
 }
 
 .filter-row--muted {
-  padding-bottom: 0.35rem;
+  padding-bottom: 0.2rem;
 }
 
 .search-input {
@@ -570,6 +1040,66 @@ onMounted(() => {
   cursor: pointer;
   font-family: inherit;
   font-weight: 700;
+}
+
+.filter-row .filter-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.summary-filters {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  margin: 0.8rem 0 1rem 0;
+  flex-wrap: wrap;
+  padding: 0.85rem 0.9rem;
+  border: 1px dashed rgba(160, 126, 191, 0.22);
+  border-radius: 14px;
+  background: #fbf8ff;
+}
+
+.summary-type-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.summary-toggle-btn {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.filter-input {
+  padding: 0.5rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid rgba(160, 126, 191, 0.12);
+  min-width: 180px;
+}
+
+.filter-input--small {
+  width: 110px;
+}
+
+.filter-select {
+  padding: 0.5rem 0.6rem;
+  border-radius: 10px;
+  border: 1px solid rgba(160, 126, 191, 0.12);
+  background: #fff;
+}
+
+.order-filter-select {
+  min-width: 160px;
+}
+
+.filter-summary {
+  margin-left: auto;
+  color: #6b5a84;
+  font-size: 0.9rem;
+}
+
+.summary-strip--wide {
+  align-items: center;
 }
 
 .ghost-btn,
@@ -736,6 +1266,44 @@ onMounted(() => {
   font-size: 1.05rem;
 }
 
+.summary-strip--wide {
+  margin-bottom: 1rem;
+}
+
+.summary-panel {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.summary-table-wrap {
+  overflow: auto;
+}
+
+.summary-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.summary-table th,
+.summary-table td {
+  padding: 0.9rem 0.75rem;
+  border-bottom: 1px solid #f0e8fb;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.summary-table th {
+  color: #7b6992;
+  font-size: 0.84rem;
+  text-transform: uppercase;
+}
+
+.summary-table td p {
+  margin: 0.15rem 0 0;
+  color: #8b7aa3;
+  font-size: 0.82rem;
+}
+
 .items-list {
   display: grid;
   gap: 0.65rem;
@@ -755,6 +1323,11 @@ onMounted(() => {
   margin: 0.15rem 0 0;
   color: #8b7aa3;
   font-size: 0.82rem;
+}
+
+.item-merge-note {
+  color: #8a5bbf;
+  font-weight: 600;
 }
 
 @media (max-width: 960px) {

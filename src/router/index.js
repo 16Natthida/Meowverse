@@ -71,6 +71,12 @@ const router = createRouter({
       meta: { requiresAuth: true, roles: ['admin'] },
     },
     {
+      path: '/admin/sales',
+      name: 'admin-sales',
+      component: () => import('../views/Admin/OrderManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
       path: '/admin/inventory-intake',
       component: () => import('../views/Admin/InventoryIntakeManagement.vue'),
       meta: { requiresAuth: true, roles: ['admin'] },

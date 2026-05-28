@@ -9,7 +9,9 @@
           <span class="count">{{ filteredUsers.length }}</span>
         </div>
       </div>
-      <button class="btn-add-user" @click="goToAddUser"><span>➕</span> เพิ่มผู้ใช้ใหม่</button>
+      <div class="header-actions">
+        <button class="btn-add-user" @click="goToAddUser"><span>➕</span> เพิ่มผู้ใช้ใหม่</button>
+      </div>
     </div>
 
     <div class="controls-section">

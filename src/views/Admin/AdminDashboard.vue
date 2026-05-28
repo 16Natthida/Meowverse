@@ -17,7 +17,7 @@ const totalMembers = computed(() => {
 
 const menuItems = computed(() => [
   { name: 'Dashboard', icon: '📊' },
-  { name: 'Orders', icon: '📦' },
+  { name: 'Sales', icon: '📦' },
   { name: 'Products', icon: '🛍️' },
   { name: 'Inventory Intake', icon: '📥' },
   { name: 'Categories', icon: '🏷️' },
@@ -73,7 +73,7 @@ function handleMenuClick(itemName) {
   activeMenu.value = itemName
   const routeMap = {
     Dashboard: '/admin/home',
-    Orders: '/admin/orders',
+    Sales: '/admin/sales',
     Products: '/admin/products',
     'Inventory Intake': '/admin/inventory-intake',
     Categories: '/admin/products',
@@ -162,8 +162,8 @@ onMounted(() => {
         <div class="dashboard-row">
           <section class="table-container main-table">
             <div class="table-header">
-              <h2>📦 คำสั่งซื้อล่าสุด</h2>
-              <button class="view-all">ดูทั้งหมด</button>
+              <h2>📦 ยอดขายล่าสุด</h2>
+              <button class="view-all" @click="router.push('/admin/sales')">ดูรายการยอดขาย</button>
             </div>
             <table class="custom-table">
               <thead>

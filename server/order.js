@@ -8,9 +8,36 @@ const router = express.Router()
 let orderDetailsSupportsFlavor = null
 let orderDetailsSupportsItemType = null
 let orderDetailsSupportsPreorderRoundId = null
+let postponeDeadlineColumnName = null
 
 function getDB(req) {
   return req.app.locals.db
+}
+
+function normalizeItemType(value) {
+  const type = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, '-')
+
+  if (type === 'ready-to-ship' || type === 'preorder') {
+    return type
+  }
+
+  return ''
+}
+
+function getEffectiveItemType(item) {
+  const normalizedType = normalizeItemType(item?.item_type)
+  if (normalizedType) {
+    return normalizedType
+  }
+
+  if (item?.preorder_round_id) {
+    return 'preorder'
+  }
+
+  return ''
 }
 
 async function hasOrderDetailColumn(connection, columnName, cacheKeyName) {
@@ -34,8 +61,36 @@ async function hasOrderDetailColumn(connection, columnName, cacheKeyName) {
   return exists
 }
 
+async function getPostponeDeadlineColumn(connection) {
+  if (postponeDeadlineColumnName !== null) {
+    return postponeDeadlineColumnName
+  }
+
+  const [newDeadlineRows] = await connection.query('SHOW COLUMNS FROM postpone LIKE ?', [
+    'new_deadline',
+  ])
+  if (newDeadlineRows.length > 0) {
+    postponeDeadlineColumnName = 'new_deadline'
+    return postponeDeadlineColumnName
+  }
+
+  const [legacyDeadlineRows] = await connection.query('SHOW COLUMNS FROM postpone LIKE ?', [
+    'deadline',
+  ])
+  if (legacyDeadlineRows.length > 0) {
+    postponeDeadlineColumnName = 'deadline'
+    return postponeDeadlineColumnName
+  }
+
+  postponeDeadlineColumnName = ''
+  return postponeDeadlineColumnName
+}
+
 async function maybeExpireOrder(connection, orderId) {
-  const [rows] = await connection.query('SELECT status, deadline FROM orders WHERE order_id = ? LIMIT 1', [orderId])
+  const [rows] = await connection.query(
+    'SELECT status, deadline FROM orders WHERE order_id = ? LIMIT 1',
+    [orderId],
+  )
   if (rows.length === 0) return null
 
   const order = rows[0]
@@ -46,7 +101,10 @@ async function maybeExpireOrder(connection, orderId) {
 
   const cancellableStatuses = ['Pending', 'Wait_for_Import_Fee']
   if (deadlineTime <= Date.now() && cancellableStatuses.includes(order.status)) {
-    await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', ['Cancelled', orderId])
+    await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [
+      'Cancelled',
+      orderId,
+    ])
     order.status = 'Cancelled'
   }
 
@@ -70,11 +128,16 @@ async function validatePreorderRound(connection, roundId) {
     return { ok: false, error: 'ไม่พบรอบพรีออเดอร์ที่ระบุ' }
   }
 
-  const status = String(rows[0].status || '').trim().toLowerCase()
+  const status = String(rows[0].status || '')
+    .trim()
+    .toLowerCase()
   const roundName = rows[0].round_name || `รอบ #${roundId}`
 
   if (status === 'active') {
-    return { ok: false, error: `รอบพรีออเดอร์ "${roundName}" ยังเปิดรับออเดอร์อยู่ ไม่สามารถยืนยันออเดอร์ได้จนกว่ารอบจะปิด` }
+    return {
+      ok: false,
+      error: `รอบพรีออเดอร์ "${roundName}" ยังเปิดรับออเดอร์อยู่ ไม่สามารถยืนยันออเดอร์ได้จนกว่ารอบจะปิด`,
+    }
   }
   if (status === 'archived') {
     return { ok: false, error: `รอบพรีออเดอร์ "${roundName}" ถูกเก็บถาวรแล้ว ไม่สามารถสั่งซื้อได้` }
@@ -350,6 +413,7 @@ router.post('/confirm-payment', async (req, res) => {
         'Import_fee',
       ]
       const values = [orderId, item.prod_id, item.price, item.qty, 0, 'Pending', 0.0]
+      const effectiveItemType = getEffectiveItemType(item)
 
       if (supportsFlavor) {
         columns.splice(2, 0, 'flavor')
@@ -358,7 +422,7 @@ router.post('/confirm-payment', async (req, res) => {
 
       if (supportsItemType) {
         columns.push('item_type')
-        values.push(item.item_type || null)
+        values.push(effectiveItemType || null)
       }
 
       if (supportsPreorderRoundId) {
@@ -427,22 +491,41 @@ router.post('/:order_id/postpone', async (req, res) => {
   try {
     await connection.beginTransaction()
 
-    const [orderRows] = await connection.query('SELECT order_id, status FROM orders WHERE order_id = ? LIMIT 1', [
-      order_id,
-    ])
+    const [orderRows] = await connection.query(
+      'SELECT order_id, status FROM orders WHERE order_id = ? LIMIT 1',
+      [order_id],
+    )
     if (orderRows.length === 0) {
       await connection.rollback()
       return res.status(404).json({ error: 'ไม่พบออเดอร์ที่ระบุ' })
     }
 
-    if (String(orderRows[0].status || '').trim().toLowerCase() === 'cancelled') {
+    if (
+      String(orderRows[0].status || '')
+        .trim()
+        .toLowerCase() === 'cancelled'
+    ) {
       // ยังอนุญาตให้ขอเลื่อนได้ เพื่อให้แอดมิน approve และ reopen ออเดอร์
     }
 
+    const deadlineColumn = await getPostponeDeadlineColumn(connection)
+    const insertColumns = ['order_id', 'post_detail', 'request_reason', 'contact_phone', 'status']
+    const insertValues = [
+      order_id,
+      details || null,
+      String(reason || '').trim(),
+      contact_phone || null,
+      'Pending',
+    ]
+
+    if (deadlineColumn) {
+      insertColumns.splice(1, 0, deadlineColumn)
+      insertValues.splice(1, 0, new_deadline)
+    }
+
     const [insertResult] = await connection.query(
-      `INSERT INTO postpone (order_id, new_deadline, post_detail, request_reason, contact_phone, status)
-       VALUES (?, ?, ?, ?, ?, 'Pending')`,
-      [order_id, new_deadline, details || null, String(reason || '').trim(), contact_phone || null],
+      `INSERT INTO postpone (${insertColumns.join(', ')}) VALUES (${insertColumns.map(() => '?').join(', ')})`,
+      insertValues,
     )
 
     await connection.commit()
@@ -464,8 +547,13 @@ router.get('/:order_id/postpone/latest', async (req, res) => {
   const { order_id } = req.params
   try {
     const db = getDB(req)
+    const deadlineColumn = await getPostponeDeadlineColumn(db)
+    const deadlineSelect = deadlineColumn
+      ? `
+      ${deadlineColumn} AS new_deadline,`
+      : 'NULL AS new_deadline,'
     const [rows] = await db.query(
-      `SELECT post_id, order_id, new_deadline, request_reason, contact_phone, post_detail, status, Post_date
+      `SELECT post_id, order_id,${deadlineSelect} request_reason, contact_phone, post_detail, status, Post_date
        FROM postpone
        WHERE order_id = ?
        ORDER BY post_id DESC
@@ -487,6 +575,10 @@ router.get('/postpones', async (req, res) => {
 
   try {
     const db = getDB(req)
+    const deadlineColumn = await getPostponeDeadlineColumn(db)
+    const deadlineSelect = deadlineColumn
+      ? `p.${deadlineColumn} AS new_deadline,`
+      : 'NULL AS new_deadline,'
     const conditions = []
     const params = []
 
@@ -500,7 +592,7 @@ router.get('/postpones', async (req, res) => {
       `SELECT
          p.post_id,
          p.order_id,
-         p.new_deadline,
+         ${deadlineSelect}
          p.request_reason,
          p.contact_phone,
          p.post_detail,
@@ -534,8 +626,11 @@ router.patch('/postpones/:post_id/status', async (req, res) => {
   try {
     await connection.beginTransaction()
 
+    const deadlineColumn = await getPostponeDeadlineColumn(connection)
+
     const [rows] = await connection.query(
-      'SELECT order_id, new_deadline, status AS current_status FROM postpone WHERE post_id = ? LIMIT 1',
+      `SELECT order_id, ${deadlineColumn ? `${deadlineColumn} AS new_deadline,` : 'NULL AS new_deadline,'} status AS current_status
+       FROM postpone WHERE post_id = ? LIMIT 1`,
       [post_id],
     )
     if (rows.length === 0) {
@@ -546,7 +641,7 @@ router.patch('/postpones/:post_id/status', async (req, res) => {
     const postponeRow = rows[0]
     await connection.query('UPDATE postpone SET status = ? WHERE post_id = ?', [status, post_id])
 
-    if (status === 'Approved' && postponeRow.order_id) {
+    if (status === 'Approved' && postponeRow.order_id && postponeRow.new_deadline) {
       await connection.query(
         `UPDATE orders
          SET deadline = ?,
@@ -725,10 +820,10 @@ router.patch('/:order_id/status', async (req, res) => {
 
   try {
     const db = getDB(req)
-    const [result] = await db.query(
-      'UPDATE orders SET status = ? WHERE order_id = ?',
-      [status, order_id],
-    )
+    const [result] = await db.query('UPDATE orders SET status = ? WHERE order_id = ?', [
+      status,
+      order_id,
+    ])
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'ไม่พบออเดอร์ที่ระบุ' })
