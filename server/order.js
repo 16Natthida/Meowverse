@@ -694,7 +694,7 @@ router.get('/:order_id', async (req, res) => {
     await maybeExpireOrder(db, order_id)
 
     const [orderRows] = await db.query(
-      `SELECT o.order_id, o.user_id, o.total_amount, o.status, o.deadline, o.Order_type, o.Order_date, a.username,
+      `SELECT o.order_id, o.user_id, o.total_amount, o.status, o.deadline, o.Order_type, o.Order_date, o.import_fee_total, a.username,
               s.name AS shipping_name, s.phone AS shipping_phone, s.address AS shipping_address, s.notes AS shipping_notes, s.Shipping_Carrier,
               p.slip_img AS slip_url, p.payment_method, p.status AS payment_status
        FROM orders o
@@ -739,12 +739,11 @@ router.get('/:order_id', async (req, res) => {
       [order_id],
     )
 
-    const importFeeTotal = detailRows.reduce((sum, item) => sum + (Number(item.import_fee) || 0), 0)
-
+    // Use import_fee_total from orders table (already set by admin)
     res.json({
       ...order,
       items: detailRows,
-      import_fee_total: importFeeTotal,
+      import_fee_total: order.import_fee_total !== undefined ? Number(order.import_fee_total) : 0,
       saved_shipping: savedShipping,
     })
   } catch (err) {
@@ -765,26 +764,46 @@ router.patch('/:order_id/import-fee', async (req, res) => {
   try {
     await connection.beginTransaction()
 
-    const [rows] = await connection.query(
-      `SELECT detail_id FROM order_details
-       WHERE order_id = ? AND item_type = 'preorder'
-       ORDER BY detail_id ASC
-       LIMIT 1`,
+    // Verify this is a preorder order in the correct state
+    const [orderRows] = await connection.query(
+      `SELECT order_id, status, Order_type FROM orders WHERE order_id = ? LIMIT 1`,
       [order_id],
     )
+    if (orderRows.length === 0) {
+      await connection.rollback()
+      return res.status(404).json({ error: 'ไม่พบออเดอร์' })
+    }
 
-    if (rows.length === 0) {
+    // Get all preorder items in this order
+    const [detailRows] = await connection.query(
+      `SELECT detail_id FROM order_details
+       WHERE order_id = ? AND item_type = 'preorder'
+       ORDER BY detail_id ASC`,
+      [order_id],
+    )
+    if (detailRows.length === 0) {
       await connection.rollback()
       return res.status(404).json({ error: 'ไม่พบรายการพรีออเดอร์ในออเดอร์นี้' })
     }
 
-    await connection.query('UPDATE order_details SET Import_fee = ? WHERE detail_id = ?', [
-      importFee,
-      rows[0].detail_id,
-    ])
+    // Distribute import fee evenly across all preorder items (rounded to 2 decimal places)
+    const perItemFee = Math.round((importFee / detailRows.length) * 100) / 100
+    for (const row of detailRows) {
+      await connection.query(
+        'UPDATE order_details SET Import_fee = ? WHERE detail_id = ?',
+        [perItemFee, row.detail_id],
+      )
+    }
+
+    // Save import_fee_total on the order so user can see the amount due in round 2.
+    // Do NOT change total_amount or order status — that happens only on round-2 approval.
+    await connection.query(
+      'UPDATE orders SET import_fee_total = ? WHERE order_id = ?',
+      [importFee, order_id],
+    )
 
     await connection.commit()
-    res.json({ success: true, order_id: Number(order_id), import_fee: importFee })
+    res.json({ success: true, order_id: Number(order_id), import_fee_total: importFee })
   } catch (err) {
     await connection.rollback()
     console.error('[PATCH /api/orders/:order_id/import-fee]', err)
@@ -820,6 +839,23 @@ router.patch('/:order_id/status', async (req, res) => {
 
   try {
     const db = getDB(req)
+    // ดึงประเภทออเดอร์ก่อน
+    const [orderRows] = await db.query('SELECT Order_type FROM orders WHERE order_id = ? LIMIT 1', [order_id])
+    if (orderRows.length === 0) {
+      return res.status(404).json({ error: 'ไม่พบออเดอร์ที่ระบุ' })
+    }
+    const orderType = String(orderRows[0].Order_type || '').toLowerCase()
+
+    // เฉพาะ Preorder เท่านั้นที่อนุญาต Wait_for_Import_Fee, Paid (2 รอบ)
+    if ((status === 'Wait_for_Import_Fee' || status === 'Paid') && orderType !== 'preorder') {
+      return res.status(400).json({ error: 'อนุญาตเฉพาะออเดอร์ประเภท Preorder เท่านั้นสำหรับสถานะนี้' })
+    }
+
+    // อื่นๆ (Ready, ฯลฯ) อนุญาตเฉพาะ Pending, Ready_to_Ship, Cancelled, Invalid slip
+    if (orderType !== 'preorder' && (status === 'Wait_for_Import_Fee' || status === 'Paid')) {
+      return res.status(400).json({ error: 'เฉพาะ Preorder เท่านั้นที่เปลี่ยนสถานะเป็น Wait_for_Import_Fee หรือ Paid ได้' })
+    }
+
     const [result] = await db.query('UPDATE orders SET status = ? WHERE order_id = ?', [
       status,
       order_id,

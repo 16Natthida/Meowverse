@@ -299,6 +299,13 @@ onMounted(() => {
                 }}
               </span>
             </div>
+            <!-- แสดงค่านำเข้ารอบที่ 2 ถ้าเป็นพรีออเดอร์และมี import_fee_total > 0 -->
+            <div class="summary-row" v-if="order.Order_type === 'Preorder' && Number(order.import_fee_total) > 0">
+              <span class="summary-label" style="color:#b67300;">ค่านำเข้ารอบที่ 2</span>
+              <span class="summary-total" style="color:#b67300;">
+                ฿{{ Number(order.import_fee_total).toLocaleString() }}
+              </span>
+            </div>
           </div>
         </div>
 

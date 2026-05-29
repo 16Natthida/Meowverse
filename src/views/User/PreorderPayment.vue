@@ -1,4 +1,12 @@
 <script setup>
+// Helper to display the correct price (import fee or original price)
+function displayPrice(item) {
+  // Use import_fee as the effective price when in import fee stage and fee is set
+  if (order.value?.is_import_fee_stage && Number(item.import_fee) > 0) {
+    return Number(item.import_fee)
+  }
+  return Number(item.price || item.Price || item.unit_price || 0)
+}
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
@@ -15,6 +23,14 @@ const notice = ref({ msg: '', type: '' })
 
 // ── สรุปยอดและประเภทสินค้าของ Preorder ──
 const importFeeTotal = computed(() => Number(order.value?.import_fee_total || 0))
+
+// Show import fee as amount due only if status is Wait_for_Import_Fee
+const isImportFeeStage = computed(() => order.value?.status === 'Wait_for_Import_Fee')
+const amountDue = computed(() =>
+  isImportFeeStage.value
+    ? Number(order.value?.import_fee_total || 0)
+    : Number(order.value?.total_amount || 0)
+)
 const readyItems = computed(
   () => order.value?.items?.filter((item) => item.item_type === 'ready-to-ship') || [],
 )
@@ -113,9 +129,7 @@ const isCancelled = computed(
       .toLowerCase() === 'cancelled',
 )
 
-const canRequestPostpone = computed(() => {
-  return !!order.value?.order_id
-})
+
 
 const onFileChange = (e) => {
   const file = e.target.files[0]
@@ -412,14 +426,7 @@ onMounted(() => {
                 <div class="hero-meta-divider"></div>
                 <div class="hero-meta-item">
                   <span class="hero-meta-label">ยอดชำระขณะนี้</span>
-                  <strong
-                    >฿{{
-                      (importFeeTotal > 0
-                        ? importFeeTotal
-                        : Number(order.total_amount || 0)
-                      ).toLocaleString()
-                    }}</strong
-                  >
+                  <strong>฿{{ amountDue.toLocaleString() }}</strong>
                 </div>
                 <div class="hero-meta-divider"></div>
                 <div class="hero-meta-item">
@@ -466,20 +473,13 @@ onMounted(() => {
                       รสชาติ: {{ it.flavor }}
                     </p>
                     <p class="item-price-small">
-                      ราคา ฿{{
-                        Number(it.price || it.Price || it.unit_price || 0).toLocaleString()
-                      }}
-                      / ชิ้น
+                      ราคา ฿{{ displayPrice(it).toLocaleString() }} / ชิ้น
                     </p>
                   </div>
                   <div class="item-meta">
                     <div class="item-qty">x{{ it.qty }}</div>
                     <div class="item-total">
-                      ฿{{
-                        (
-                          Number(it.price || it.Price || it.unit_price || 0) * Number(it.qty)
-                        ).toLocaleString()
-                      }}
+                      ฿{{ (displayPrice(it) * Number(it.qty)).toLocaleString() }}
                     </div>
                   </div>
                 </div>
@@ -510,21 +510,18 @@ onMounted(() => {
                     >
                       รสชาติ: {{ it.flavor }}
                     </p>
-                    <p class="item-price-small">
-                      ราคา ฿{{
-                        Number(it.price || it.Price || it.unit_price || 0).toLocaleString()
-                      }}
-                      / ชิ้น
+                    <p v-if="order.is_import_fee_stage && it.import_fee > 0"
+                       class="item-price-small" style="color: #f59e42; font-weight: 600">
+                      ราคานำเข้า: ฿{{ Number(it.import_fee).toLocaleString() }} / ชิ้น
+                    </p>
+                    <p v-else class="item-price-small">
+                      ราคา ฿{{ displayPrice(it).toLocaleString() }} / ชิ้น
                     </p>
                   </div>
                   <div class="item-meta">
                     <div class="item-qty">x{{ it.qty }}</div>
                     <div class="item-total">
-                      ฿{{
-                        (
-                          Number(it.price || it.Price || it.unit_price || 0) * Number(it.qty)
-                        ).toLocaleString()
-                      }}
+                      ฿{{ (displayPrice(it) * Number(it.qty)).toLocaleString() }}
                     </div>
                   </div>
                 </div>
@@ -555,20 +552,13 @@ onMounted(() => {
                       รสชาติ: {{ it.flavor }}
                     </p>
                     <p class="item-price-small">
-                      ราคา ฿{{
-                        Number(it.price || it.Price || it.unit_price || 0).toLocaleString()
-                      }}
-                      / ชิ้น
+                      ราคา ฿{{ displayPrice(it).toLocaleString() }} / ชิ้น
                     </p>
                   </div>
                   <div class="item-meta">
                     <div class="item-qty">x{{ it.qty }}</div>
                     <div class="item-total">
-                      ฿{{
-                        (
-                          Number(it.price || it.Price || it.unit_price || 0) * Number(it.qty)
-                        ).toLocaleString()
-                      }}
+                      ฿{{ (displayPrice(it) * Number(it.qty)).toLocaleString() }}
                     </div>
                   </div>
                 </div>
@@ -801,12 +791,7 @@ onMounted(() => {
               <div class="summary-header">
                 <span class="summary-label">ยอดชำระขณะนี้</span>
                 <strong class="summary-amount">
-                  ฿{{
-                    (importFeeTotal > 0
-                      ? importFeeTotal
-                      : Number(order.total_amount)
-                    ).toLocaleString()
-                  }}
+                  ฿{{ amountDue.toLocaleString() }}
                 </strong>
               </div>
               <div class="summary-note">ชำระด้วยสลิปโอนเงิน แล้วแอดมินจะตรวจสอบประวัติให้ทันที</div>

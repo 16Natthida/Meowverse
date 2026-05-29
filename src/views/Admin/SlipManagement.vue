@@ -103,26 +103,8 @@ async function fetchPayments() {
       throw new Error('โหลดข้อมูลสลิปไม่สำเร็จ')
     }
     const data = await response.json()
-    // If there are multiple payments for the same order_id, keep only the record with the largest pay_id
-    if (Array.isArray(data)) {
-      const grouped = new Map()
-      const noOrder = []
-      for (const p of data) {
-        const oid = p.order_id
-        const pid = Number(p.pay_id) || 0
-        if (!oid) {
-          noOrder.push(p)
-          continue
-        }
-        const exist = grouped.get(oid)
-        if (!exist || (Number(exist.pay_id) || 0) < pid) {
-          grouped.set(oid, p)
-        }
-      }
-      payments.value = [...grouped.values(), ...noOrder]
-    } else {
-      payments.value = data
-    }
+    // FIX: Show all payment records, no deduplication
+    payments.value = Array.isArray(data) ? data : []
   } catch (error) {
     slipError.value = translateError(error)
   } finally {
@@ -130,9 +112,23 @@ async function fetchPayments() {
   }
 }
 
-async function updatePaymentStatus(payId, status) {
+async function updatePaymentStatus(payId, status, orderId = null) {
   try {
-    // 1) อัปเดตสถานะ payment
+    // 1) ตรวจสอบว่าต้องกรอกค่านำเข้าก่อนอนุมัติ slip รอบแรก (preorder)
+    const targetPayment = payments.value.find((p) => p.pay_id === payId)
+    const _orderId = orderId || selectedSlip.value?.order_id || targetPayment?.order_id
+    let orderData = null
+    if (_orderId && status === 'Approved' && targetPayment?.Order_type === 'Preorder') {
+      const orderRes = await fetch(`${API_BASE_URL}/orders/${_orderId}`)
+      orderData = orderRes.ok ? await orderRes.json() : null
+      // ถ้าเป็นรอบแรก (Pending) และยังไม่ได้กรอก import_fee_total หรือเป็น 0 ให้เตือนและไม่อนุมัติ
+      if (orderData?.status === 'Pending' && (!orderData.import_fee_total || Number(orderData.import_fee_total) === 0)) {
+        slipError.value = 'กรุณากรอกและบันทึกค่านำเข้าก่อนอนุมัติสลิปรอบแรก';
+        return;
+      }
+    }
+
+    // 2) อัปเดตสถานะ payment
     const response = await fetch(`${API_BASE_URL}/payments/${payId}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -140,16 +136,27 @@ async function updatePaymentStatus(payId, status) {
     })
     if (!response.ok) throw new Error('อัปเดตสถานะไม่สำเร็จ')
 
-    // 2) ถ้าปฏิเสธสลิป → อัปเดต order status เป็น Invalid slip ด้วย
-    if (status === 'Rejected') {
-      // ดึง order_id จาก row ที่กด (ปุ่มใน table) หรือจาก modal ที่เปิดอยู่
-      const targetPayment = payments.value.find((p) => p.pay_id === payId)
-      const orderId = selectedSlip.value?.order_id ?? targetPayment?.order_id
-      if (orderId) {
-        const orderRes = await fetch(`${API_BASE_URL}/orders/${orderId}/status`, {
+    // 3) อัปเดตสถานะ order ตาม logic เดิม
+    if (_orderId) {
+      let nextOrderStatus = null
+      if (status === 'Rejected') {
+        nextOrderStatus = 'Invalid slip'
+      } else if (status === 'Approved' && targetPayment?.Order_type === 'Preorder') {
+        if (!orderData) {
+          const orderRes = await fetch(`${API_BASE_URL}/orders/${_orderId}`)
+          orderData = orderRes.ok ? await orderRes.json() : null
+        }
+        if (orderData?.status === 'Pending') {
+          nextOrderStatus = 'Wait_for_Import_Fee'
+        } else if (orderData?.status === 'Wait_for_Import_Fee') {
+          nextOrderStatus = 'Paid'
+        }
+      }
+      if (nextOrderStatus) {
+        const orderRes = await fetch(`${API_BASE_URL}/orders/${_orderId}/status`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: 'Invalid slip' }),
+          body: JSON.stringify({ status: nextOrderStatus }),
         })
         if (!orderRes.ok) console.warn('อัปเดตสถานะออเดอร์ไม่สำเร็จ')
       }
@@ -428,13 +435,15 @@ onMounted(() => {
             <button class="close-btn" type="button" @click="closeSlip">✕</button>
           </div>
 
+
           <div class="slip-modal-body">
             <img :src="resolveSlipUrl(selectedSlip.slip_img)" class="slip-img-full" alt="slip" />
 
             <div v-if="selectedSlip.Order_type === 'Preorder'" class="import-fee-panel">
               <h4>ค่านำเข้า</h4>
               <p class="import-fee-note">
-                สำหรับพรีออเดอร์ แอดมินสามารถบันทึกค่านำเข้าเพื่อแจ้งลูกค้าต่อได้
+                สำหรับพรีออเดอร์ ต้องอนุมัติรอบแรกก่อนถึงจะบันทึกค่านำเข้าได้<br />
+                หลังจากลูกค้าชำระรอบสองและอัปโหลดสลิป ให้แอดมินอนุมัติรอบสองเพื่อเปลี่ยนสถานะเป็น "ชำระแล้ว"
               </p>
 
               <div v-if="selectedOrderLoading" class="state-wrap">
@@ -462,55 +471,77 @@ onMounted(() => {
                       placeholder="0.00"
                       step="0.01"
                       type="number"
+                      :disabled="selectedOrderDetail.status !== 'Wait_for_Import_Fee'"
                     />
+                  </div>
+                  <div v-if="selectedOrderDetail.status !== 'Wait_for_Import_Fee'" class="info-box">
+                    ต้องอนุมัติรอบแรกก่อนถึงจะบันทึกค่านำเข้าได้
                   </div>
                 </div>
               </div>
             </div>
           </div>
 
-          <div v-if="selectedSlip.status === 'Pending'" class="slip-modal-foot">
-            <button
-              class="btn-approve"
-              type="button"
-              @click="updatePaymentStatus(selectedSlip.pay_id, 'Approved')"
-            >
-              ✓ อนุมัติสลิป
-            </button>
-            <button
-              class="btn-reject"
-              type="button"
-              @click="updatePaymentStatus(selectedSlip.pay_id, 'Rejected')"
-            >
-              ✕ ปฏิเสธ
-            </button>
-            <button
-              v-if="selectedSlip.Order_type === 'Preorder'"
-              class="btn-approve"
-              type="button"
-              @click="saveImportFee"
-            >
-              💰 บันทึกค่านำเข้า
-            </button>
-          </div>
-          <div v-else class="slip-modal-foot">
-            <span
-              class="status-pill"
-              :style="{
-                color: (statusConfig[selectedSlip.status] || {}).color,
-                background: (statusConfig[selectedSlip.status] || {}).bg,
-              }"
-            >
-              {{ (statusConfig[selectedSlip.status] || {}).text || selectedSlip.status }}
-            </span>
-            <button
-              v-if="selectedSlip.Order_type === 'Preorder'"
-              class="btn-approve"
-              type="button"
-              @click="saveImportFee"
-            >
-              💰 บันทึกค่านำเข้า
-            </button>
+          <div class="slip-modal-foot">
+            <template v-if="selectedSlip.Order_type === 'Preorder' && selectedOrderDetail">
+              <!-- รอบ 1: อนุมัติรอบแรก (Pending -> Wait_for_Import_Fee) -->
+              <button
+                v-if="selectedSlip.status === 'Pending' && selectedOrderDetail.status === 'Pending'"
+                class="btn-approve"
+                type="button"
+                @click="updatePaymentStatus(selectedSlip.pay_id, 'Approved', selectedSlip.order_id)"
+              >
+                ✓ อนุมัติรอบ 1 (ชำระรอบแรก)
+              </button>
+              <!-- รอบ 2: อนุมัติรอบสอง (Wait_for_Import_Fee -> Paid) -->
+              <button
+                v-if="selectedSlip.status === 'Pending' && selectedOrderDetail.status === 'Wait_for_Import_Fee'"
+                class="btn-approve"
+                type="button"
+                @click="updatePaymentStatus(selectedSlip.pay_id, 'Approved', selectedSlip.order_id)"
+              >
+                ✓ อนุมัติรอบ 2 (ชำระรอบสอง)
+              </button>
+              <!-- ปฏิเสธสลิป -->
+              <button
+                v-if="selectedSlip.status === 'Pending'"
+                class="btn-reject"
+                type="button"
+                @click="updatePaymentStatus(selectedSlip.pay_id, 'Rejected', selectedSlip.order_id)"
+              >
+                ✕ ปฏิเสธ
+              </button>
+              <!-- บันทึกค่านำเข้า (เฉพาะ Wait_for_Import_Fee) -->
+              <button
+                v-if="selectedOrderDetail.status === 'Wait_for_Import_Fee'"
+                class="btn-approve"
+                type="button"
+                @click="saveImportFee"
+              >
+                💰 บันทึกค่านำเข้า
+              </button>
+              <span
+                v-if="selectedOrderDetail.status === 'Paid'"
+                class="status-pill"
+                :style="{
+                  color: (statusConfig['Approved'] || {}).color,
+                  background: (statusConfig['Approved'] || {}).bg,
+                }"
+              >
+                ชำระครบ 2 รอบแล้ว
+              </span>
+            </template>
+            <template v-else>
+              <span
+                class="status-pill"
+                :style="{
+                  color: (statusConfig[selectedSlip.status] || {}).color,
+                  background: (statusConfig[selectedSlip.status] || {}).bg,
+                }"
+              >
+                {{ (statusConfig[selectedSlip.status] || {}).text || selectedSlip.status }}
+              </span>
+            </template>
           </div>
         </div>
       </div>

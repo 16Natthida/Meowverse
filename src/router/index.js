@@ -81,6 +81,12 @@ const router = createRouter({
       component: () => import('../views/Admin/InventoryIntakeManagement.vue'),
       meta: { requiresAuth: true, roles: ['admin'] },
     },
+      {
+        path: '/admin/import-fee',
+        name: 'admin-import-fee',
+        component: () => import('../views/Admin/ImportFeeManagement.vue'),
+        meta: { requiresAuth: true, roles: ['admin'] },
+      },
     {
       path: '/dashboard',
       name: 'userDashboard',

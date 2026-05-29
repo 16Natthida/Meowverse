@@ -169,6 +169,7 @@ onMounted(() => {
               </span>
             </div>
 
+
             <div class="order-row__meta">
               <div class="meta-item">
                 <span class="meta-label">ประเภท</span>
@@ -187,6 +188,11 @@ onMounted(() => {
                 <span class="meta-label">กำหนดส่ง</span>
                 <span class="meta-value">{{ formatDate(order.deadline) }}</span>
               </div>
+              <!-- แสดงค่านำเข้ารอบที่ 2 ถ้าเป็นพรีออเดอร์และมี import_fee_total > 0 -->
+              <div class="meta-item" v-if="order.Order_type === 'Preorder' && Number(order.import_fee_total) > 0">
+                <span class="meta-label">ค่านำเข้ารอบที่ 2</span>
+                <span class="meta-value" style="color:#b67300;font-weight:600;">฿{{ Number(order.import_fee_total).toLocaleString() }}</span>
+              </div>
             </div>
 
             <!-- ── INVALID SLIP ALERT ── -->
@@ -200,9 +206,12 @@ onMounted(() => {
 
             <div class="order-row__foot">
               <div class="total-amount">
-                ฿{{
-                  Number(order.total_amount).toLocaleString('th-TH', { minimumFractionDigits: 2 })
-                }}
+                <template v-if="order.Order_type === 'Preorder' && order.status === 'Wait_for_Import_Fee' && Number(order.import_fee_total) > 0">
+                  ฿{{ Number(order.import_fee_total).toLocaleString('th-TH', { minimumFractionDigits: 2 }) }}
+                </template>
+                <template v-else>
+                  ฿{{ Number(order.total_amount).toLocaleString('th-TH', { minimumFractionDigits: 2 }) }}
+                </template>
               </div>
               <button class="detail-btn">
                 ดูรายละเอียด

@@ -2295,6 +2295,140 @@ app.get(
   },
 )
 
+// ========== Preorder Import Fee Management ========== //
+
+// 1A. GET /api/admin/preorder-import-fee/rounds
+app.get('/api/admin/preorder-import-fee/rounds', authenticateToken, requireAdmin, async (_req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT
+        pr.round_id,
+        pr.round_name,
+        pr.status AS round_status,
+        pr.start_date,
+        pr.end_date,
+        od.prod_id,
+        p.prod_name AS product_name,
+        od.flavor,
+        SUM(od.qty) AS total_sold_qty,
+        od.Price AS unit_price,
+        COALESCE(od.Import_fee, 0) AS import_fee
+      FROM preorder_rounds pr
+      JOIN order_details od ON od.preorder_round_id = pr.round_id
+      JOIN orders o ON o.order_id = od.order_id
+      LEFT JOIN products p ON p.prod_id = od.prod_id
+      WHERE LOWER(o.Order_type) = 'preorder'
+      GROUP BY
+        pr.round_id,
+        pr.round_name,
+        pr.status,
+        pr.start_date,
+        pr.end_date,
+        od.prod_id,
+        p.prod_name,
+        od.flavor,
+        od.Price,
+        od.Import_fee
+      ORDER BY pr.round_id DESC, od.prod_id ASC, od.flavor ASC
+    `)
+
+    // Group by round
+    const roundMap = new Map()
+    for (const row of rows) {
+      if (!roundMap.has(row.round_id)) {
+        roundMap.set(row.round_id, {
+          round_id: row.round_id,
+          round_name: row.round_name,
+          round_status: row.round_status,
+          start_date: row.start_date,
+          end_date: row.end_date,
+          products: [],
+        })
+      }
+      roundMap.get(row.round_id).products.push({
+        prod_id: row.prod_id,
+        product_name: row.product_name,
+        flavor: row.flavor,
+        total_sold_qty: Number(row.total_sold_qty) || 0,
+        unit_price: Number(row.unit_price) || 0,
+        current_import_fee: Number(row.import_fee) || 0,
+      })
+    }
+    res.json(Array.from(roundMap.values()))
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
+
+// 1B. PUT /api/admin/preorder-import-fee/:roundId
+app.put('/api/admin/preorder-import-fee/:roundId', authenticateToken, requireAdmin, async (req, res) => {
+  const roundId = Number(req.params.roundId)
+  const { fees } = req.body || {}
+  if (!Array.isArray(fees) || fees.length === 0) {
+    return res.status(400).json({ success: false, message: 'fees array is required' })
+  }
+
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+
+    // Update Import_fee for each product/flavor in this round
+    for (const item of fees) {
+      await connection.query(
+        `UPDATE order_details
+         SET Import_fee = ?
+         WHERE preorder_round_id = ?
+           AND prod_id = ?
+           AND COALESCE(flavor, '') = COALESCE(?, '')`,
+        [Number(item.import_fee) || 0, roundId, Number(item.prod_id), item.flavor || '']
+      )
+    }
+
+
+    // Get all affected order_ids in this round ที่ status = 'Wait_for_Import_Fee', 'Pending', or 'Paid'
+    const [orderRows] = await connection.query(
+      `SELECT DISTINCT o.order_id FROM order_details od
+        JOIN orders o ON o.order_id = od.order_id
+        WHERE od.preorder_round_id = ?
+          AND o.status IN ('Wait_for_Import_Fee', 'Pending', 'Paid')`,
+      [roundId]
+    )
+    // Ensure column exists (run once outside loop)
+    await connection.query(
+      `ALTER TABLE orders ADD COLUMN IF NOT EXISTS import_fee_total DECIMAL(10,2) DEFAULT 0`
+    )
+
+    let updatedOrders = 0
+    for (const row of orderRows) {
+      const orderId = row.order_id
+
+      // คำนวณ import_fee_total รวม (Import_fee * qty ทุก item)
+      const [[importTotalRow]] = await connection.query(
+        `SELECT SUM(COALESCE(Import_fee, 0) * qty) AS import_total
+         FROM order_details
+         WHERE order_id = ?`,
+        [orderId]
+      )
+      const importTotal = Number(importTotalRow.import_total) || 0
+
+      // บันทึก import_fee_total เฉพาะ order ที่พร้อมชำระรอบ 2
+      await connection.query(
+        `UPDATE orders SET import_fee_total = ? WHERE order_id = ?`,
+        [importTotal, orderId]
+      )
+      updatedOrders++
+    }
+
+    await connection.commit()
+    res.json({ success: true, message: 'บันทึกค่านำเข้าเรียบร้อย', updated_orders: updatedOrders })
+  } catch (error) {
+    await connection.rollback()
+    res.status(500).json({ success: false, message: error.message })
+  } finally {
+    connection.release()
+  }
+})
+
 // POST /api/orders/:order_id/payment
 app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res) => {
   const { order_id } = req.params
@@ -2306,9 +2440,10 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
   try {
     await connection.beginTransaction()
 
-    // 1. ตรวจสอบข้อมูล Order เดิมเพื่อยอดเงินและประเภท
+
+    // 1. ตรวจสอบข้อมูล Order เดิมเพื่อยอดเงินและประเภท พร้อมสถานะ
     const [orderRows] = await connection.query(
-      'SELECT total_amount, Order_type FROM orders WHERE order_id = ?',
+      'SELECT total_amount, import_fee_total, Order_type, status FROM orders WHERE order_id = ?',
       [order_id],
     )
 
@@ -2318,16 +2453,28 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
 
     const orderData = orderRows[0]
 
-    // 2. บันทึกข้อมูลสลิปลงตาราง payment
-    const paymentType = orderData.Order_type === 'Ready' ? 'Ready pay' : 'Order_fee'
+    // 2. Determine payment type and amount based on order status
+    let paymentType, paymentAmount
+    if (orderData.Order_type === 'Ready') {
+      paymentType = 'Ready pay'
+      paymentAmount = orderData.total_amount
+    } else if (orderData.status === 'Wait_for_Import_Fee') {
+      // Round 2: user is paying the import fee
+      paymentType = 'Import_Fee'
+      paymentAmount = Number(orderData.import_fee_total) || 0
+    } else {
+      // Round 1: user is paying the initial order amount
+      paymentType = 'Order_fee'
+      paymentAmount = orderData.total_amount
+    }
     await connection.query(
       `INSERT INTO payment (order_id, type, amount, slip_img, Slip_date, status, payment_method)
        VALUES (?, ?, ?, ?, NOW(), 'Pending', ?)`,
-      [order_id, paymentType, orderData.total_amount, slip_url, payment_method || null],
+      [order_id, paymentType, paymentAmount, slip_url, payment_method || null],
     )
 
+
     // 3. บันทึกที่อยู่ลงตาราง shipping
-    // รวมชื่อ เบอร์โทร และหมายเหตุเข้ากับที่อยู่ เพื่อเก็บในคอลัมน์ address ตามโครงสร้างตาราง
     await connection.query(
       `INSERT INTO shipping (order_id, name, phone, address, notes, Shipping_Carrier) VALUES (?, ?, ?, ?, ?, ?)`,
       [
@@ -2340,53 +2487,57 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
       ],
     )
 
-    // 4. ดึงรายละเอียดออเดอร์เพื่อเคลียร์ตะกร้าและปรับสต็อกหลังชำระเงินจริง
-    const [detailRows] = await connection.query(
-      `SELECT od.prod_id, od.qty, od.Price AS unit_price, od.flavor
-       FROM order_details od
-       WHERE od.order_id = ?`,
-      [order_id],
-    )
+    // 4-8. เฉพาะรอบแรกเท่านั้น (orderData.status !== 'Wait_for_Import_Fee')
+    // Round 1: reset to Pending so admin can see it for approval
+    // Round 2: keep 'Wait_for_Import_Fee' — do NOT overwrite; admin needs to see it
+    if (orderData.status !== 'Wait_for_Import_Fee') {
+      // 4. ดึงรายละเอียดออเดอร์เพื่อเคลียร์ตะกร้าและปรับสต็อกหลังชำระเงินจริง
+      const [detailRows] = await connection.query(
+        `SELECT od.prod_id, od.qty, od.Price AS unit_price, od.flavor
+         FROM order_details od
+         WHERE od.order_id = ?`,
+        [order_id],
+      )
 
-    // 5. ลบรายการในตะกร้าที่ถูกยืนยันชำระแล้ว
-    if (detailRows.length > 0) {
-      for (const detail of detailRows) {
-        await connection.query(
-          `DELETE FROM cart
-           WHERE prod_id = ?
-             AND user_id = (SELECT user_id FROM orders WHERE order_id = ?)
-             AND qty = ?
-             AND COALESCE(flavor, '') = COALESCE(?, '')
-             AND COALESCE(round_price, 0) = COALESCE(?, 0)
-           LIMIT 1`,
-          [detail.prod_id, order_id, detail.qty, detail.flavor || '', detail.unit_price || 0],
-        )
+      // 5. ลบรายการในตะกร้าที่ถูกยืนยันชำระแล้ว
+      if (detailRows.length > 0) {
+        for (const detail of detailRows) {
+          await connection.query(
+            `DELETE FROM cart
+             WHERE prod_id = ?
+               AND user_id = (SELECT user_id FROM orders WHERE order_id = ?)
+               AND qty = ?
+               AND COALESCE(flavor, '') = COALESCE(?, '')
+               AND COALESCE(round_price, 0) = COALESCE(?, 0)
+             LIMIT 1`,
+            [detail.prod_id, order_id, detail.qty, detail.flavor || '', detail.unit_price || 0],
+          )
+        }
       }
-    }
 
-    // 6. ลดสต็อกสำหรับสินค้าที่พร้อมส่งเมื่อชำระเงินสำเร็จ
-    if (String(orderData.Order_type || '').toLowerCase() === 'ready') {
-      for (const detail of detailRows) {
-        await adjustProductStock(
-          connection,
-          detail.prod_id,
-          -Number(detail.qty) || 0,
-          detail.flavor,
-        )
+      // 6. ลดสต็อกสำหรับสินค้าที่พร้อมส่งเมื่อชำระเงินสำเร็จ
+      if (String(orderData.Order_type || '').toLowerCase() === 'ready') {
+        for (const detail of detailRows) {
+          await adjustProductStock(
+            connection,
+            detail.prod_id,
+            -Number(detail.qty) || 0,
+            detail.flavor,
+          )
+        }
       }
-    }
 
-    // 7. อัปเดตสถานะในตาราง orders เป็น 'Pending'
+      // 7. อัปเดตสถานะในตาราง orders เป็น 'Pending' (เฉพาะรอบแรก)
+      await connection.query(`UPDATE orders SET status = 'Pending' WHERE order_id = ?`, [order_id])
 
-    await connection.query(`UPDATE orders SET status = 'Pending' WHERE order_id = ?`, [order_id])
-
-    // 8. ลบรายการในตะกร้าหลังชำระเงินสำเร็จ
-    const [userIdRows] = await connection.query('SELECT user_id FROM orders WHERE order_id = ?', [
-      order_id,
-    ])
-    if (userIdRows.length > 0) {
-      const userId = userIdRows[0].user_id
-      await connection.query('DELETE FROM cart WHERE user_id = ?', [userId])
+      // 8. ลบรายการในตะกร้าหลังชำระเงินสำเร็จ
+      const [userIdRows] = await connection.query('SELECT user_id FROM orders WHERE order_id = ?', [
+        order_id,
+      ])
+      if (userIdRows.length > 0) {
+        const userId = userIdRows[0].user_id
+        await connection.query('DELETE FROM cart WHERE user_id = ?', [userId])
+      }
     }
 
     await connection.commit()
@@ -2478,18 +2629,39 @@ app.patch('/api/payments/:pay_id/status', async (req, res) => {
       await connection.query('UPDATE payment SET status = ? WHERE pay_id = ?', [status, pay_id])
 
       if (status === 'Approved') {
+        // Use payment type to determine correct order status for preorder 2-round payment
         const [payRows] = await connection.query(
-          `SELECT p.order_id, o.Order_type FROM payment p LEFT JOIN orders o ON p.order_id = o.order_id WHERE p.pay_id = ? LIMIT 1`,
+          `SELECT p.order_id, p.type AS pay_type, o.Order_type, o.import_fee_total
+           FROM payment p
+           LEFT JOIN orders o ON p.order_id = o.order_id
+           WHERE p.pay_id = ? LIMIT 1`,
           [pay_id],
         )
 
         if (payRows.length > 0) {
-          const { order_id, Order_type } = payRows[0]
-          const newOrderStatus = Order_type === 'Preorder' ? 'Wait_for_Import_Fee' : 'Paid'
-          await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [
-            newOrderStatus,
-            order_id,
-          ])
+          const { order_id, pay_type, Order_type, import_fee_total } = payRows[0]
+
+          if (Order_type === 'Preorder') {
+            if (pay_type === 'Import_Fee') {
+              // Round 2 approved: mark Paid (do not overwrite total_amount unless needed)
+              await connection.query(
+                'UPDATE orders SET status = ? WHERE order_id = ?',
+                ['Paid', order_id],
+              )
+            } else {
+              // Round 1 (Order_fee) approved: wait for user to pay import fee
+              await connection.query(
+                'UPDATE orders SET status = ? WHERE order_id = ?',
+                ['Wait_for_Import_Fee', order_id],
+              )
+            }
+          } else {
+            // Ready order: straightforward approval
+            await connection.query(
+              'UPDATE orders SET status = ? WHERE order_id = ?',
+              ['Paid', order_id],
+            )
+          }
         }
       }
 
