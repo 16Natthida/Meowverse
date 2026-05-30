@@ -2455,23 +2455,35 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
 
     // 2. Determine payment type and amount based on order status
     let paymentType, paymentAmount
+    let nextOrderType = orderData.Order_type
     if (orderData.Order_type === 'Ready') {
       paymentType = 'Ready pay'
       paymentAmount = orderData.total_amount
-    } else if (orderData.status === 'Wait_for_Import_Fee') {
+    } else if (orderData.Order_type === 'Preorder' && orderData.status === 'Wait_for_Import_Fee') {
       // Round 2: user is paying the import fee
       paymentType = 'Import_Fee'
       paymentAmount = Number(orderData.import_fee_total) || 0
-    } else {
+      nextOrderType = 'Pending_import'
+    } else if (orderData.Order_type === 'Preorder') {
       // Round 1: user is paying the initial order amount
       paymentType = 'Order_fee'
       paymentAmount = orderData.total_amount
+    } else if (orderData.Order_type === 'Pending_import') {
+      // กรณี retry รอบ 2
+      paymentType = 'Import_Fee'
+      paymentAmount = Number(orderData.import_fee_total) || 0
+    } else {
+      return res.status(400).json({ error: 'ไม่รองรับประเภทออเดอร์นี้' })
     }
     await connection.query(
       `INSERT INTO payment (order_id, type, amount, slip_img, Slip_date, status, payment_method)
        VALUES (?, ?, ?, ?, NOW(), 'Pending', ?)`,
       [order_id, paymentType, paymentAmount, slip_url, payment_method || null],
     )
+    // ถ้าเป็นรอบ 2 ของ preorder หรือ retry รอบ 2 ให้เปลี่ยน Order_type เป็น Pending_import
+    if (paymentType === 'Import_Fee') {
+      await connection.query('UPDATE orders SET Order_type = ? WHERE order_id = ?', ['Pending_import', order_id])
+    }
 
 
     // 3. บันทึกที่อยู่ลงตาราง shipping
@@ -2641,12 +2653,12 @@ app.patch('/api/payments/:pay_id/status', async (req, res) => {
         if (payRows.length > 0) {
           const { order_id, pay_type, Order_type, import_fee_total } = payRows[0]
 
-          if (Order_type === 'Preorder') {
+          if (Order_type === 'Preorder' || Order_type === 'Pending_import') {
             if (pay_type === 'Import_Fee') {
-              // Round 2 approved: mark Paid (do not overwrite total_amount unless needed)
+              // Round 2 approved: mark Paid and set Order_type back to Preorder
               await connection.query(
-                'UPDATE orders SET status = ? WHERE order_id = ?',
-                ['Paid', order_id],
+                'UPDATE orders SET status = ?, Order_type = ? WHERE order_id = ?',
+                ['Paid', 'Preorder', order_id],
               )
             } else {
               // Round 1 (Order_fee) approved: wait for user to pay import fee

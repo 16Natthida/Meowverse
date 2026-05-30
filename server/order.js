@@ -386,7 +386,13 @@ router.post('/confirm-payment', async (req, res) => {
     const hasPreorder = cartItems.some(
       (item) => String(item.item_type || '').toLowerCase() === 'preorder' || item.preorder_round_id,
     )
-    const orderType = hasPreorder ? 'Preorder' : 'Ready'
+    // ถ้าเป็นการชำระรอบ 2 (import fee) ให้ตั้ง orderType = 'Pending_import'
+    let orderType = hasPreorder ? 'Preorder' : 'Ready';
+    // ตรวจสอบว่ามี import_fee_total > 0 และสถานะออเดอร์เป็น Wait_for_Import_Fee (รอบ 2)
+    // (สมมติว่ามี logic ตรวจสอบจากฝั่ง client หรือส่ง flag มาด้วย)
+    if (hasPreorder && req.body.is_import_fee_round) {
+      orderType = 'Pending_import';
+    }
 
     const [orderResult] = await connection.query(
       'INSERT INTO orders (user_id, total_amount, status, Order_type) VALUES (?, ?, ?, ?)',

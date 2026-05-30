@@ -35,13 +35,19 @@ const typeCount = computed(() => ({
   ready: payments.value.filter(
     (payment) => String(payment.Order_type || '').toLowerCase() === 'ready',
   ).length,
+  pending_import: payments.value.filter(
+    (payment) => String(payment.Order_type || '').toLowerCase() === 'pending_import',
+  ).length,
 }))
 
 const currentTypeLabel = computed(() => {
   if (typeFilter.value === 'preorder') return 'พรีออเดอร์'
   if (typeFilter.value === 'ready') return 'พร้อมส่ง'
+  if (typeFilter.value === 'pending_import') return 'รออนุมัติรอบ 2'
   return 'ทั้งหมด'
 })
+// เพิ่มตัวเลือกประเภท Pending_import ใน filter
+// ...existing code...
 
 const currentStatusLabel = computed(() => {
   if (filterStatus.value === 'Pending') return 'รอตรวจสอบ'
@@ -311,6 +317,7 @@ onMounted(() => {
                   <option value="all">ทั้งหมด ({{ typeCount.all }})</option>
                   <option value="preorder">พรีออเดอร์ ({{ typeCount.preorder }})</option>
                   <option value="ready">พร้อมส่ง ({{ typeCount.ready }})</option>
+                  <option value="pending_import">รออนุมัติรอบ 2 ({{ typeCount.pending_import }})</option>
                 </select>
               </div>
 
@@ -374,10 +381,13 @@ onMounted(() => {
                   :class="
                     payment.Order_type === 'Preorder'
                       ? 'status status--pending'
-                      : 'status status--paid'
+                      : payment.Order_type === 'Pending_import'
+                        ? 'status status--pending-import'
+                        : 'status status--paid'
                   "
+                  :style="payment.Order_type === 'Pending_import' ? { color: '#a259e6', background: '#f3e8ff', 'font-weight': 'bold' } : {}"
                 >
-                  {{ payment.Order_type === 'Preorder' ? 'Preorder' : 'Ready Stock' }}
+                  {{ payment.Order_type === 'Preorder' ? 'Preorder' : payment.Order_type === 'Pending_import' ? 'Pending Import' : 'Ready Stock' }}
                 </span>
               </td>
               <td>

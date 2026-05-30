@@ -277,6 +277,10 @@ const confirmPayment = async () => {
     const formData = new FormData()
     formData.append('payment_method', selectedPaymentMethod.value)
     if (slipFile.value) formData.append('slip', slipFile.value)
+    // Add type: 'Import_Fee' if in import fee stage
+    if (isImportFeeStage.value) {
+      formData.append('type', 'Import_Fee')
+    }
 
     const res = await fetch(`${API_BASE_URL}/orders/${order.value.order_id}/payment`, {
       method: 'POST',
