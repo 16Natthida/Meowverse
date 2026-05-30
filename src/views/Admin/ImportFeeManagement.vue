@@ -570,11 +570,11 @@ async function saveImportFees() {
   align-items: center;
   gap: 7px;
   padding: 0.55rem 1.25rem;
-  background: #7c3aed;
+  background: #b53ee4;
   color: #fff;
   border: none;
   border-radius: 9px;
-  font-size: 0.9375rem;
+  font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
@@ -640,7 +640,7 @@ async function saveImportFees() {
   width: 18px;
   height: 18px;
   border: 2px solid rgba(124, 58, 237, 0.2);
-  border-top-color: #7c3aed;
+  border-top-color: #7c3ce9;
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
