@@ -29,7 +29,7 @@ const isImportFeeStage = computed(() => order.value?.status === 'Wait_for_Import
 const amountDue = computed(() =>
   isImportFeeStage.value
     ? Number(order.value?.import_fee_total || 0)
-    : Number(order.value?.total_amount || 0)
+    : Number(order.value?.total_amount || 0),
 )
 const readyItems = computed(
   () => order.value?.items?.filter((item) => item.item_type === 'ready-to-ship') || [],
@@ -88,6 +88,21 @@ const postponeStatusLabel = computed(() => {
   return null
 })
 
+function formatThaiDateTime(value, fallback = '-') {
+  if (!value) return fallback
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return fallback
+
+  return new Intl.DateTimeFormat('th-TH-u-ca-buddhist', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
 const fetchLatestPostpone = async (orderId) => {
   if (!orderId) return
   try {
@@ -110,16 +125,7 @@ const fetchLatestPostpone = async (orderId) => {
 }
 
 const orderDeadlineDisplay = computed(() => {
-  if (!order.value?.deadline) return 'ยังไม่กำหนด'
-  const deadline = new Date(order.value.deadline)
-  if (Number.isNaN(deadline.getTime())) return 'ไม่สามารถอ่านได้'
-  return deadline.toLocaleString('th-TH', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return formatThaiDateTime(order.value?.deadline, 'ยังไม่กำหนด')
 })
 
 const isCancelled = computed(
@@ -128,8 +134,6 @@ const isCancelled = computed(
       .trim()
       .toLowerCase() === 'cancelled',
 )
-
-
 
 const onFileChange = (e) => {
   const file = e.target.files[0]
@@ -514,8 +518,11 @@ onMounted(() => {
                     >
                       รสชาติ: {{ it.flavor }}
                     </p>
-                    <p v-if="order.is_import_fee_stage && it.import_fee > 0"
-                       class="item-price-small" style="color: #f59e42; font-weight: 600">
+                    <p
+                      v-if="order.is_import_fee_stage && it.import_fee > 0"
+                      class="item-price-small"
+                      style="color: #f59e42; font-weight: 600"
+                    >
                       ราคานำเข้า: ฿{{ Number(it.import_fee).toLocaleString() }} / ชิ้น
                     </p>
                     <p v-else class="item-price-small">
@@ -607,18 +614,15 @@ onMounted(() => {
                   }}</span>
                 </div>
                 <div class="postpone-latest-banner__detail">
-                  <span
-                    >📅 วันที่ขอเลื่อน:
+                  <span>
+                    📅 วันที่ขอเลื่อน:
                     <strong>{{
-                      new Date(latestPostpone.new_deadline).toLocaleString('th-TH', {
-                        year: 'numeric',
-                        month: 'short',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })
-                    }}</strong></span
-                  >
+                      formatThaiDateTime(
+                        latestPostpone.new_deadline || latestPostpone.Post_date,
+                        'ยังไม่ระบุ',
+                      )
+                    }}</strong>
+                  </span>
                   <span v-if="latestPostpone.request_reason"
                     >💬 เหตุผล: {{ latestPostpone.request_reason }}</span
                   >
@@ -794,9 +798,7 @@ onMounted(() => {
 
               <div class="summary-header">
                 <span class="summary-label">ยอดชำระขณะนี้</span>
-                <strong class="summary-amount">
-                  ฿{{ amountDue.toLocaleString() }}
-                </strong>
+                <strong class="summary-amount"> ฿{{ amountDue.toLocaleString() }} </strong>
               </div>
               <div class="summary-note">ชำระด้วยสลิปโอนเงิน แล้วแอดมินจะตรวจสอบประวัติให้ทันที</div>
               <hr class="divider" />

@@ -97,6 +97,135 @@ function resolveIntakeStatus(orderedQty, receivedQty) {
   return 'partially_received'
 }
 
+const PREORDER_PAYMENT_WINDOW_MS = 48 * 60 * 60 * 1000
+
+async function createPreorderOrdersForClosedRound(connection, roundId) {
+  const [cartRows] = await connection.query(
+    `SELECT
+       c.cart_id,
+       c.user_id,
+       c.prod_id,
+       c.qty,
+       c.flavor,
+       c.item_type,
+       c.preorder_round_id,
+       COALESCE(
+         NULLIF(c.round_price, 0),
+         NULLIF(prp.round_price, 0),
+         NULLIF(p.preorder_price, 0),
+         NULLIF(p.base_price, 0)
+       ) AS price,
+       p.prod_name AS name
+     FROM cart c
+     LEFT JOIN products p ON p.prod_id = c.prod_id
+     LEFT JOIN preorder_round_products prp
+       ON prp.round_id = c.preorder_round_id AND prp.prod_id = c.prod_id
+     WHERE c.item_type = 'preorder'
+       AND c.preorder_round_id = ?
+     ORDER BY c.user_id, c.cart_id`,
+    [roundId],
+  )
+
+  const autoOrderSummary = { created: 0, skipped: 0, errors: [] }
+
+  if (cartRows.length === 0) {
+    return autoOrderSummary
+  }
+
+  const byUser = new Map()
+  for (const row of cartRows) {
+    if (!byUser.has(row.user_id)) byUser.set(row.user_id, [])
+    byUser.get(row.user_id).push(row)
+  }
+
+  for (const [userId, items] of byUser.entries()) {
+    try {
+      const totalAmount = items.reduce(
+        (sum, item) => sum + (Number(item.price) || 0) * Number(item.qty || 0),
+        0,
+      )
+
+      const deadline = new Date(Date.now() + PREORDER_PAYMENT_WINDOW_MS)
+      const [orderResult] = await connection.query(
+        `INSERT INTO orders (user_id, total_amount, status, Order_type, deadline) VALUES (?, ?, 'Pending', 'Preorder', ?)`,
+        [userId, totalAmount, deadline],
+      )
+      const orderId = orderResult.insertId
+
+      for (const item of items) {
+        await connection.query(
+          `INSERT INTO order_details
+             (order_id, prod_id, flavor, Price, qty, received_qty, arrival_status, Import_fee, item_type, preorder_round_id)
+           VALUES (?, ?, ?, ?, ?, 0, 'Pending', 0, 'preorder', ?)`,
+          [
+            orderId,
+            item.prod_id,
+            item.flavor || null,
+            item.price,
+            item.qty,
+            item.preorder_round_id,
+          ],
+        )
+
+        await connection.query(
+          `UPDATE preorder_round_products
+           SET quantity_sold = COALESCE(quantity_sold, 0) + ?
+           WHERE round_id = ? AND prod_id = ?`,
+          [item.qty, item.preorder_round_id, item.prod_id],
+        )
+      }
+
+      const cartIds = items.map((item) => item.cart_id)
+      await connection.query(
+        `DELETE FROM cart WHERE cart_id IN (${cartIds.map(() => '?').join(',')})`,
+        cartIds,
+      )
+
+      autoOrderSummary.created++
+    } catch (userErr) {
+      console.error(`[auto-order] user_id=${userId} round_id=${roundId}`, userErr.message)
+      autoOrderSummary.errors.push({ user_id: userId, error: userErr.message })
+      autoOrderSummary.skipped++
+    }
+  }
+
+  return autoOrderSummary
+}
+
+async function autoCloseExpiredPreorderRounds() {
+  const connection = await pool.getConnection()
+
+  try {
+    await connection.beginTransaction()
+
+    const [roundRows] = await connection.query(
+      `SELECT round_id
+       FROM preorder_rounds
+       WHERE LOWER(status) IN ('active', 'open')
+         AND end_date <= NOW()`,
+    )
+
+    for (const row of roundRows) {
+      const roundId = Number(row.round_id)
+      if (!roundId) continue
+
+      await connection.query('UPDATE preorder_rounds SET status = ? WHERE round_id = ?', [
+        'closed',
+        roundId,
+      ])
+
+      await createPreorderOrdersForClosedRound(connection, roundId)
+    }
+
+    await connection.commit()
+  } catch (error) {
+    await connection.rollback()
+    console.error('[auto-close] failed to close expired preorder rounds:', error.message)
+  } finally {
+    connection.release()
+  }
+}
+
 function normalizeIntakeQuantity(value, fallback = 0) {
   // Ensure we return a non-negative integer.
   // Accept numbers or numeric strings (with commas or other chars) and clamp to >= 0.
@@ -1930,6 +2059,14 @@ app.put('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
         : 'active'
 
   try {
+    const [existingRoundRows] = await pool.query(
+      'SELECT status FROM preorder_rounds WHERE round_id = ? LIMIT 1',
+      [roundId],
+    )
+    const previousStatus = String(existingRoundRows[0]?.status || '')
+      .trim()
+      .toLowerCase()
+
     const [result] = await pool.query(
       `
       UPDATE preorder_rounds
@@ -1974,99 +2111,11 @@ app.put('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
     // ✅ Auto-create orders เมื่อรอบถูกปิด
     // สร้าง order แยกต่อ user จากสินค้า item_type = 'preorder' ของรอบนี้เท่านั้น
     let autoOrderSummary = { created: 0, skipped: 0, errors: [] }
-    if (normalizedStatus === 'closed') {
+    if (normalizedStatus === 'closed' && previousStatus !== 'closed') {
       const connection = await pool.getConnection()
       try {
         await connection.beginTransaction()
-
-        // ดึง cart ทุกใบที่เป็น preorder ของรอบนี้ กรองเฉพาะ item_type = 'preorder'
-        const [cartRows] = await connection.query(
-          `SELECT
-             c.cart_id,
-             c.user_id,
-             c.prod_id,
-             c.qty,
-             c.flavor,
-             c.item_type,
-             c.preorder_round_id,
-             COALESCE(
-               NULLIF(c.round_price, 0),
-               NULLIF(prp.round_price, 0),
-               NULLIF(p.preorder_price, 0),
-               NULLIF(p.base_price, 0)
-             ) AS price,
-             p.prod_name AS name
-           FROM cart c
-           LEFT JOIN products p ON p.prod_id = c.prod_id
-           LEFT JOIN preorder_round_products prp
-             ON prp.round_id = c.preorder_round_id AND prp.prod_id = c.prod_id
-           WHERE c.item_type = 'preorder'
-             AND c.preorder_round_id = ?
-           ORDER BY c.user_id, c.cart_id`,
-          [roundId],
-        )
-
-        if (cartRows.length > 0) {
-          // จัดกลุ่มตาม user_id
-          const byUser = new Map()
-          for (const row of cartRows) {
-            if (!byUser.has(row.user_id)) byUser.set(row.user_id, [])
-            byUser.get(row.user_id).push(row)
-          }
-
-          for (const [userId, items] of byUser.entries()) {
-            try {
-              const totalAmount = items.reduce(
-                (sum, item) => sum + (Number(item.price) || 0) * Number(item.qty || 0),
-                0,
-              )
-
-              const deadline = new Date(Date.now() + 48 * 60 * 60 * 1000)
-              const [orderResult] = await connection.query(
-                `INSERT INTO orders (user_id, total_amount, status, Order_type, deadline) VALUES (?, ?, 'Pending', 'Preorder', ?)`,
-                [userId, totalAmount, deadline],
-              )
-              const orderId = orderResult.insertId
-
-              for (const item of items) {
-                await connection.query(
-                  `INSERT INTO order_details
-                     (order_id, prod_id, flavor, Price, qty, received_qty, arrival_status, Import_fee, item_type, preorder_round_id)
-                   VALUES (?, ?, ?, ?, ?, 0, 'Pending', 0, 'preorder', ?)`,
-                  [
-                    orderId,
-                    item.prod_id,
-                    item.flavor || null,
-                    item.price,
-                    item.qty,
-                    item.preorder_round_id,
-                  ],
-                )
-
-                // อัปเดต quantity_sold ใน preorder_round_products
-                await connection.query(
-                  `UPDATE preorder_round_products
-                   SET quantity_sold = COALESCE(quantity_sold, 0) + ?
-                   WHERE round_id = ? AND prod_id = ?`,
-                  [item.qty, item.preorder_round_id, item.prod_id],
-                )
-              }
-
-              // ลบเฉพาะ cart item ที่ถูกสร้างเป็นออเดอร์แล้ว
-              const cartIds = items.map((i) => i.cart_id)
-              await connection.query(
-                `DELETE FROM cart WHERE cart_id IN (${cartIds.map(() => '?').join(',')})`,
-                cartIds,
-              )
-
-              autoOrderSummary.created++
-            } catch (userErr) {
-              console.error(`[auto-order] user_id=${userId} round_id=${roundId}`, userErr.message)
-              autoOrderSummary.errors.push({ user_id: userId, error: userErr.message })
-              autoOrderSummary.skipped++
-            }
-          }
-        }
+        autoOrderSummary = await createPreorderOrdersForClosedRound(connection, roundId)
 
         await connection.commit()
       } catch (autoErr) {
@@ -2298,9 +2347,13 @@ app.get(
 // ========== Preorder Import Fee Management ========== //
 
 // 1A. GET /api/admin/preorder-import-fee/rounds
-app.get('/api/admin/preorder-import-fee/rounds', authenticateToken, requireAdmin, async (_req, res) => {
-  try {
-    const [rows] = await pool.query(`
+app.get(
+  '/api/admin/preorder-import-fee/rounds',
+  authenticateToken,
+  requireAdmin,
+  async (_req, res) => {
+    try {
+      const [rows] = await pool.query(`
       SELECT
         pr.round_id,
         pr.round_name,
@@ -2332,102 +2385,111 @@ app.get('/api/admin/preorder-import-fee/rounds', authenticateToken, requireAdmin
       ORDER BY pr.round_id DESC, od.prod_id ASC, od.flavor ASC
     `)
 
-    // Group by round
-    const roundMap = new Map()
-    for (const row of rows) {
-      if (!roundMap.has(row.round_id)) {
-        roundMap.set(row.round_id, {
-          round_id: row.round_id,
-          round_name: row.round_name,
-          round_status: row.round_status,
-          start_date: row.start_date,
-          end_date: row.end_date,
-          products: [],
+      // Group by round
+      const roundMap = new Map()
+      for (const row of rows) {
+        if (!roundMap.has(row.round_id)) {
+          roundMap.set(row.round_id, {
+            round_id: row.round_id,
+            round_name: row.round_name,
+            round_status: row.round_status,
+            start_date: row.start_date,
+            end_date: row.end_date,
+            products: [],
+          })
+        }
+        roundMap.get(row.round_id).products.push({
+          prod_id: row.prod_id,
+          product_name: row.product_name,
+          flavor: row.flavor,
+          total_sold_qty: Number(row.total_sold_qty) || 0,
+          unit_price: Number(row.unit_price) || 0,
+          current_import_fee: Number(row.import_fee) || 0,
         })
       }
-      roundMap.get(row.round_id).products.push({
-        prod_id: row.prod_id,
-        product_name: row.product_name,
-        flavor: row.flavor,
-        total_sold_qty: Number(row.total_sold_qty) || 0,
-        unit_price: Number(row.unit_price) || 0,
-        current_import_fee: Number(row.import_fee) || 0,
-      })
+      res.json(Array.from(roundMap.values()))
+    } catch (error) {
+      res.status(500).json({ message: error.message })
     }
-    res.json(Array.from(roundMap.values()))
-  } catch (error) {
-    res.status(500).json({ message: error.message })
-  }
-})
+  },
+)
 
 // 1B. PUT /api/admin/preorder-import-fee/:roundId
-app.put('/api/admin/preorder-import-fee/:roundId', authenticateToken, requireAdmin, async (req, res) => {
-  const roundId = Number(req.params.roundId)
-  const { fees } = req.body || {}
-  if (!Array.isArray(fees) || fees.length === 0) {
-    return res.status(400).json({ success: false, message: 'fees array is required' })
-  }
+app.put(
+  '/api/admin/preorder-import-fee/:roundId',
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    const roundId = Number(req.params.roundId)
+    const { fees } = req.body || {}
+    if (!Array.isArray(fees) || fees.length === 0) {
+      return res.status(400).json({ success: false, message: 'fees array is required' })
+    }
 
-  const connection = await pool.getConnection()
-  try {
-    await connection.beginTransaction()
+    const connection = await pool.getConnection()
+    try {
+      await connection.beginTransaction()
 
-    // Update Import_fee for each product/flavor in this round
-    for (const item of fees) {
-      await connection.query(
-        `UPDATE order_details
+      // Update Import_fee for each product/flavor in this round
+      for (const item of fees) {
+        await connection.query(
+          `UPDATE order_details
          SET Import_fee = ?
          WHERE preorder_round_id = ?
            AND prod_id = ?
            AND COALESCE(flavor, '') = COALESCE(?, '')`,
-        [Number(item.import_fee) || 0, roundId, Number(item.prod_id), item.flavor || '']
-      )
-    }
+          [Number(item.import_fee) || 0, roundId, Number(item.prod_id), item.flavor || ''],
+        )
+      }
 
-
-    // Get all affected order_ids in this round ที่ status = 'Wait_for_Import_Fee', 'Pending', or 'Paid'
-    const [orderRows] = await connection.query(
-      `SELECT DISTINCT o.order_id FROM order_details od
+      // Get all affected order_ids in this round ที่ status = 'Wait_for_Import_Fee', 'Pending', or 'Paid'
+      const [orderRows] = await connection.query(
+        `SELECT DISTINCT o.order_id FROM order_details od
         JOIN orders o ON o.order_id = od.order_id
         WHERE od.preorder_round_id = ?
           AND o.status IN ('Wait_for_Import_Fee', 'Pending', 'Paid')`,
-      [roundId]
-    )
-    // Ensure column exists (run once outside loop)
-    await connection.query(
-      `ALTER TABLE orders ADD COLUMN IF NOT EXISTS import_fee_total DECIMAL(10,2) DEFAULT 0`
-    )
+        [roundId],
+      )
+      // Ensure column exists (run once outside loop)
+      await connection.query(
+        `ALTER TABLE orders ADD COLUMN IF NOT EXISTS import_fee_total DECIMAL(10,2) DEFAULT 0`,
+      )
 
-    let updatedOrders = 0
-    for (const row of orderRows) {
-      const orderId = row.order_id
+      let updatedOrders = 0
+      for (const row of orderRows) {
+        const orderId = row.order_id
 
-      // คำนวณ import_fee_total รวม (Import_fee * qty ทุก item)
-      const [[importTotalRow]] = await connection.query(
-        `SELECT SUM(COALESCE(Import_fee, 0) * qty) AS import_total
+        // คำนวณ import_fee_total รวม (Import_fee * qty ทุก item)
+        const [[importTotalRow]] = await connection.query(
+          `SELECT SUM(COALESCE(Import_fee, 0) * qty) AS import_total
          FROM order_details
          WHERE order_id = ?`,
-        [orderId]
-      )
-      const importTotal = Number(importTotalRow.import_total) || 0
+          [orderId],
+        )
+        const importTotal = Number(importTotalRow.import_total) || 0
 
-      // บันทึก import_fee_total เฉพาะ order ที่พร้อมชำระรอบ 2
-      await connection.query(
-        `UPDATE orders SET import_fee_total = ? WHERE order_id = ?`,
-        [importTotal, orderId]
-      )
-      updatedOrders++
+        // บันทึก import_fee_total เฉพาะ order ที่พร้อมชำระรอบ 2
+        await connection.query(`UPDATE orders SET import_fee_total = ? WHERE order_id = ?`, [
+          importTotal,
+          orderId,
+        ])
+        updatedOrders++
+      }
+
+      await connection.commit()
+      res.json({
+        success: true,
+        message: 'บันทึกค่านำเข้าเรียบร้อย',
+        updated_orders: updatedOrders,
+      })
+    } catch (error) {
+      await connection.rollback()
+      res.status(500).json({ success: false, message: error.message })
+    } finally {
+      connection.release()
     }
-
-    await connection.commit()
-    res.json({ success: true, message: 'บันทึกค่านำเข้าเรียบร้อย', updated_orders: updatedOrders })
-  } catch (error) {
-    await connection.rollback()
-    res.status(500).json({ success: false, message: error.message })
-  } finally {
-    connection.release()
-  }
-})
+  },
+)
 
 // POST /api/orders/:order_id/payment
 app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res) => {
@@ -2439,7 +2501,6 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
   const connection = await pool.getConnection()
   try {
     await connection.beginTransaction()
-
 
     // 1. ตรวจสอบข้อมูล Order เดิมเพื่อยอดเงินและประเภท พร้อมสถานะ
     const [orderRows] = await connection.query(
@@ -2455,7 +2516,6 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
 
     // 2. Determine payment type and amount based on order status
     let paymentType, paymentAmount
-    let nextOrderType = orderData.Order_type
     if (orderData.Order_type === 'Ready') {
       paymentType = 'Ready pay'
       paymentAmount = orderData.total_amount
@@ -2463,7 +2523,6 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
       // Round 2: user is paying the import fee
       paymentType = 'Import_Fee'
       paymentAmount = Number(orderData.import_fee_total) || 0
-      nextOrderType = 'Pending_import'
     } else if (orderData.Order_type === 'Preorder') {
       // Round 1: user is paying the initial order amount
       paymentType = 'Order_fee'
@@ -2482,9 +2541,11 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     )
     // ถ้าเป็นรอบ 2 ของ preorder หรือ retry รอบ 2 ให้เปลี่ยน Order_type เป็น Pending_import
     if (paymentType === 'Import_Fee') {
-      await connection.query('UPDATE orders SET Order_type = ? WHERE order_id = ?', ['Pending_import', order_id])
+      await connection.query('UPDATE orders SET Order_type = ? WHERE order_id = ?', [
+        'Pending_import',
+        order_id,
+      ])
     }
-
 
     // 3. บันทึกที่อยู่ลงตาราง shipping
     await connection.query(
@@ -2651,7 +2712,7 @@ app.patch('/api/payments/:pay_id/status', async (req, res) => {
         )
 
         if (payRows.length > 0) {
-          const { order_id, pay_type, Order_type, import_fee_total } = payRows[0]
+          const { order_id, pay_type, Order_type } = payRows[0]
 
           if (Order_type === 'Preorder' || Order_type === 'Pending_import') {
             if (pay_type === 'Import_Fee') {
@@ -2662,17 +2723,17 @@ app.patch('/api/payments/:pay_id/status', async (req, res) => {
               )
             } else {
               // Round 1 (Order_fee) approved: wait for user to pay import fee
-              await connection.query(
-                'UPDATE orders SET status = ? WHERE order_id = ?',
-                ['Wait_for_Import_Fee', order_id],
-              )
+              await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [
+                'Wait_for_Import_Fee',
+                order_id,
+              ])
             }
           } else {
             // Ready order: straightforward approval
-            await connection.query(
-              'UPDATE orders SET status = ? WHERE order_id = ?',
-              ['Paid', order_id],
-            )
+            await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [
+              'Paid',
+              order_id,
+            ])
           }
         }
       }
@@ -3943,6 +4004,18 @@ app.use((error, _req, res, _next) => {
 async function startServer() {
   try {
     await ensureAdminSchema()
+
+    autoCloseExpiredPreorderRounds().catch((error) => {
+      console.error('[auto-close] initial run failed:', error.message)
+    })
+
+    const preorderRoundAutoCloseTimer = setInterval(() => {
+      autoCloseExpiredPreorderRounds().catch((error) => {
+        console.error('[auto-close] scheduled run failed:', error.message)
+      })
+    }, 60 * 1000)
+
+    preorderRoundAutoCloseTimer.unref?.()
 
     app.listen(port, () => {
       console.log(`API server running at http://localhost:${port}`)
