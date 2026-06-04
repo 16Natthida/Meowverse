@@ -65,6 +65,9 @@ const heroBannerImage = ref(defaultBannerImageUrl)
 const defaultLogoImageUrl = ''
 const logoImage = ref(defaultLogoImageUrl)
 
+// ตัวแปรสำหรับเก็บรอบพรีออเดอร์ที่กำลังเปิดรับ
+const activePreorderRounds = ref([])
+
 const tabs = ['หน้าหลัก', 'พร้อมส่ง', 'พรีออเดอร์','รายการออเดอร์']
 
 const iconMap = [
@@ -127,6 +130,19 @@ function parseFlavorStock(value) {
   return Object.fromEntries(
     Object.entries(data).map(([flavor, qty]) => [String(flavor || '').trim(), Number(qty) || 0]),
   )
+}
+
+// จัดรูปแบบวันที่เปิด-ปิดรอบพรีออเดอร์
+function formatDateTime(dateStr) {
+  if (!dateStr) return '-'
+  const d = new Date(dateStr)
+  return d.toLocaleDateString('th-TH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }) + ' น.'
 }
 
 // ── FETCH CATEGORIES ──
@@ -212,6 +228,23 @@ const fetchCartCount = async () => {
     cartCount.value = arr.reduce((sum, item) => sum + (Number(item.qty) || 1), 0)
   } catch (err) {
     console.error('fetchCartCount:', err)
+  }
+}
+
+// ── FETCH ACTIVE PREORDER ROUNDS ──
+// ── FETCH ACTIVE PREORDER ROUNDS ──
+const fetchPreorderRounds = async () => {
+  try {
+    // เปลี่ยน URL ไปเรียก API เส้นใหม่ที่เพิ่งสร้าง
+    const res = await fetch(`${API_BASE_URL}/preorder-rounds/active`)
+    if (!res.ok) throw new Error('Failed to fetch preorder rounds')
+    const data = await res.json()
+    const rounds = Array.isArray(data) ? data : (data.data || [])
+    
+    // ไม่ต้อง .filter แล้วเพราะ Backend กรอง 'active' มาให้แล้ว
+    activePreorderRounds.value = rounds
+  } catch (err) {
+    console.error('fetchPreorderRounds:', err)
   }
 }
 
@@ -655,13 +688,13 @@ onMounted(async () => {
     fetchCartCount(),
     fetchBannerImage(),
     fetchLogoImage(),
+    fetchPreorderRounds(),
   ])
 })
 </script>
 
 <template>
   <div class="shop">
-    <!-- ───── NAVBAR ───── -->
     <nav class="navbar">
       <div class="navbar__logo">
         <img v-if="logoImage" :src="logoImage" alt="Meowverse logo" class="logo-icon-img" />
@@ -695,7 +728,6 @@ onMounted(async () => {
           <input v-model="searchQuery" type="text" placeholder="ค้นหาสินค้า" class="search-input" />
         </div>
 
-        <!-- ── CART ICON BUTTON ── -->
         <button class="cart-icon-btn" @click="goToCart" title="ตะกร้าสินค้า">
           <svg
             viewBox="0 0 24 24"
@@ -746,7 +778,6 @@ onMounted(async () => {
       </div>
     </nav>
 
-    <!-- ───── CART NOTICE ───── -->
     <transition name="slide-down">
       <div v-if="cartNotice.msg" :class="['cart-notice', `cart-notice--${cartNotice.type}`]">
         <span v-if="cartNotice.type === 'success'">
@@ -771,7 +802,6 @@ onMounted(async () => {
       </div>
     </transition>
 
-    <!-- ───── HERO BANNER ───── -->
     <section class="hero">
       <div class="hero__content">
         <p class="hero__eyebrow">Meowverse Store</p>
@@ -796,7 +826,6 @@ onMounted(async () => {
       </div>
     </section>
 
-    <!-- ───── CATEGORY ICON ROW ───── -->
     <section class="categories">
       <div class="categories__header">
         <div>
@@ -828,7 +857,6 @@ onMounted(async () => {
       </div>
     </section>
 
-    <!-- ───── PRODUCTS SECTION ───── -->
     <section class="products">
       <div class="products__header">
         <div>
@@ -840,6 +868,29 @@ onMounted(async () => {
                 : 'เลือกของดีๆ ให้กับทาสแมวและเจ้าเหมียวตัวฟู'
             }}
           </p>
+        </div>
+      </div>
+
+      <div v-if="activeTab === 'พรีออเดอร์' && activePreorderRounds.length > 0" class="preorder-rounds-container">
+        <h3 class="rounds-title">📢 ประกาศ: รอบพรีออเดอร์ที่กำลังเปิดรับ</h3>
+        <div class="rounds-grid">
+          <div v-for="round in activePreorderRounds" :key="round.round_id" class="round-card">
+            <div class="round-header">
+              <h4 class="round-name">{{ round.round_name }}</h4>
+              <span class="round-status badge--active">กำลังเปิดรับ</span>
+            </div>
+            <p v-if="round.round_description" class="round-desc">{{ round.round_description }}</p>
+            <div class="round-dates">
+              <div class="date-item">
+                <span class="date-label">เปิดรอบ:</span>
+                <span class="date-val">{{ formatDateTime(round.start_date) }}</span>
+              </div>
+              <div class="date-item">
+                <span class="date-label">ปิดรอบ:</span>
+                <span class="date-val">{{ formatDateTime(round.end_date) }}</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -939,7 +990,6 @@ onMounted(async () => {
         </article>
       </div>
 
-      <!-- Pagination -->
       <div v-if="totalPages > 1" class="pagination">
         <button
           v-for="page in totalPages"
@@ -952,7 +1002,6 @@ onMounted(async () => {
       </div>
     </section>
 
-    <!-- ───── PRODUCT DETAIL MODAL ───── -->
     <transition name="fade-scale">
       <div v-if="selectedProduct" class="detail-overlay" @click.self="closeProductDetail">
         <section
@@ -1134,7 +1183,6 @@ onMounted(async () => {
                   >
                 </div>
               </div>
-              <!-- Batch selection: collect multiple flavor+qty pairs before adding all to cart -->
               <div v-if="batchSelections.length" class="batch-selection">
                 <p class="detail-option-label">รายการชุดพรีออเดอร์ที่เตรียมส่ง</p>
                 <div class="batch-list">
@@ -1172,7 +1220,6 @@ onMounted(async () => {
                       : 'เพิ่มลงตะกร้า'
                   }}
                 </button>
-                <!-- batch "save to set" button removed per request -->
                 <button class="btn btn--outline detail-action-btn" @click="closeProductDetail">
                   ปิดหน้าต่าง
                 </button>
@@ -1584,7 +1631,6 @@ onMounted(async () => {
   bottom: 0;
   width: 260px;
   z-index: 0;
-  overflow: hidden;
 }
 .hero__cat-img {
   width: 100%;
@@ -2451,5 +2497,90 @@ onMounted(async () => {
   .detail-media-main {
     max-height: 300px;
   }
+}
+
+/* ── PREORDER ROUNDS INFO ── */
+.preorder-rounds-container {
+  margin-bottom: 1.5rem;
+  background: linear-gradient(160deg, #fffaf5, #fff5f0);
+  border: 1px dashed #f1a17f;
+  border-radius: 16px;
+  padding: 1.25rem;
+}
+.rounds-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: #d56639;
+  margin: 0 0 1rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.rounds-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+}
+.round-card {
+  background: #ffffff;
+  border: 1px solid #ffe3d5;
+  border-radius: 12px;
+  padding: 1.1rem;
+  box-shadow: 0 4px 12px rgba(213, 102, 57, 0.06);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.round-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(213, 102, 57, 0.1);
+}
+.round-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.6rem;
+}
+.round-name {
+  font-size: 1.05rem;
+  font-weight: 900;
+  color: var(--primary-dark);
+  margin: 0;
+}
+.round-status {
+  font-size: 0.75rem;
+  font-weight: 800;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  background: #e8f9f2;
+  color: #187f5d;
+  border: 1px solid #bfead9;
+}
+.round-desc {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.9rem;
+  line-height: 1.45;
+}
+.round-dates {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  background: linear-gradient(160deg, #fcf9ff, #f8f2ff);
+  padding: 0.75rem;
+  border-radius: 10px;
+  border: 1px solid #f0e6ff;
+}
+.date-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.82rem;
+}
+.date-label {
+  color: var(--muted);
+  font-weight: 700;
+}
+.date-val {
+  color: var(--primary-dark);
+  font-weight: 800;
 }
 </style>

@@ -1995,18 +1995,20 @@ app.get('/api/products/alerts/low-stock', async (req, res) => {
 // ============== Preorder Rounds Management ==============
 
 // Get all preorder rounds
-app.get('/api/preorder-rounds', authenticateToken, requireAdmin, async (_req, res) => {
+// Public API: Get active preorder rounds for users
+app.get('/api/preorder-rounds/active', async (_req, res) => {
   try {
     const [rounds] = await pool.query(`
       SELECT
-        round_id AS id,
-        round_name AS name,
-        round_description AS description,
-        start_date AS startDate,
-        end_date AS endDate,
+        round_id,
+        round_name,
+        round_description,
+        start_date,
+        end_date,
         status
       FROM preorder_rounds
-      ORDER BY round_id DESC
+      WHERE status = 'active'
+      ORDER BY end_date ASC
     `)
 
     res.json(rounds)
