@@ -1355,15 +1355,12 @@ app.post('/api/products', async (req, res) => {
   try {
     await connection.beginTransaction()
 
-    const [insertResult] = await connection.query(
+   const [insertResult] = await connection.query(
       `
         INSERT INTO products
           (cat_id, prod_name, description, flavors, flavor_stock, stock_qty, base_price, preorder_price, sku, preorder_enabled, ready_to_ship_enabled)
         VALUES
           (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          (cat_id, prod_name, description, flavors, flavor_stock, stock_qty, base_price, sku, preorder_enabled, ready_to_ship_enabled)
-        VALUES
-          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         Number(payload.categoryId),
@@ -1380,7 +1377,7 @@ app.post('/api/products', async (req, res) => {
         toBooleanNumber(payload.preorderEnabled),
         toBooleanNumber(payload.readyToShipEnabled ?? true),
       ],
-    )
+    ) 
 
     const productId = insertResult.insertId
 

@@ -64,7 +64,6 @@
       <p>กำลังโหลด...</p>
     </div>
 
-    <!-- Create/Edit Round Modal -->
     <div v-if="showRoundModal" class="modal-overlay" @click.self="closeRoundModal">
       <div class="modal">
         <div class="modal-header">
@@ -139,7 +138,6 @@
       </div>
     </div>
 
-    <!-- Edit Round with Products Modal -->
     <div
       v-if="showEditRoundModal && currentRound"
       class="modal-overlay"
@@ -234,7 +232,6 @@
       </div>
     </div>
 
-    <!-- Add Products Modal -->
     <div
       v-if="showAddProductsModal && currentRound"
       class="modal-overlay"
@@ -275,6 +272,15 @@
                       @change="toggleProductSelection(product)"
                     />
                     <span class="checkmark"></span>
+                    
+                    <div class="product-mini-image">
+                      <img
+                        v-if="product.imageUrls && product.imageUrls[0]"
+                        :src="product.imageUrls[0]"
+                        :alt="product.name"
+                      />
+                      <div v-else class="no-image-mini">ไม่มีรูป</div>
+                    </div>
                     <span class="product-label">{{ product.name }}</span>
                   </label>
                 </div>
@@ -326,7 +332,6 @@
       </div>
     </div>
 
-    <!-- Product Detail Modal -->
     <div
       v-if="showProductDetailModal && selectedProduct"
       class="modal-overlay"
@@ -1423,6 +1428,35 @@ onMounted(async () => {
 .checkmark {
   margin-right: 8px;
 }
+
+/* -- ส่วนที่เพิ่มใหม่สำหรับรูป Thumbnail ใน Modal ค้นหาสินค้า -- */
+.product-mini-image {
+  width: 48px;
+  height: 48px;
+  margin-right: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  background-color: #f5f5f5;
+  flex-shrink: 0;
+  border: 1px solid #eee;
+}
+
+.product-mini-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.no-image-mini {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #999;
+  font-size: 10px;
+}
+/* ---------------------------------------------------- */
 
 .product-label {
   font-weight: 500;
