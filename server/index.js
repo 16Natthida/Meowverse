@@ -760,9 +760,10 @@ async function queryProductsByIds(productIds, connection = pool) {
     [productIds],
   )
 
+ // ในฟังก์ชัน queryProductsByIds หาบรรทัดที่ SELECT จาก product_images ให้เปลี่ยนเป็น:
   const [imageRows] = await connection.query(
     `
-      SELECT prod_id AS productId, image_url AS imageUrl
+      SELECT prod_id AS productId, image_url AS imageUrl, flavor
       FROM product_images
       WHERE prod_id IN (?)
       ORDER BY sort_order ASC, img_id ASC
@@ -771,13 +772,22 @@ async function queryProductsByIds(productIds, connection = pool) {
   )
 
   const imageUrlMap = new Map()
+  const fullImageMap = new Map() // แผนที่ใหม่สำหรับเก็บทั้ง url และ flavor
   for (const row of imageRows) {
     const list = imageUrlMap.get(row.productId) || []
     list.push(row.imageUrl)
     imageUrlMap.set(row.productId, list)
+
+    const fullList = fullImageMap.get(row.productId) || []
+    fullList.push({ url: row.imageUrl, flavor: row.flavor || '' })
+    fullImageMap.set(row.productId, fullList)
   }
 
-  return productRows.map((row) => mapProductRow(row, imageUrlMap))
+  return productRows.map((row) => {
+    const mapped = mapProductRow(row, imageUrlMap);
+    mapped.images = fullImageMap.get(row.id) || []; // ส่ง array แบบมี flavor ไปให้แอดมิน
+    return mapped;
+  })
 }
 
 async function queryAllProducts(connection = pool) {
@@ -788,21 +798,30 @@ async function queryAllProducts(connection = pool) {
   return queryProductsByIds(productIds, connection)
 }
 
-async function upsertProductImages(connection, productId, imageUrls = []) {
+async function upsertProductImages(connection, productId, images = []) {
   await connection.query('DELETE FROM product_images WHERE prod_id = ?', [productId])
 
-  if (!Array.isArray(imageUrls) || imageUrls.length === 0) {
+  if (!Array.isArray(images) || images.length === 0) {
     return
   }
 
-  const values = imageUrls
-    .filter((imageUrl) => typeof imageUrl === 'string' && imageUrl.trim() !== '')
-    .map((imageUrl, index) => [productId, imageUrl.trim(), index])
+  // รองรับทั้งแบบ object {url, flavor} และแบบ string เดิม
+  const values = images
+    .filter((img) => {
+      const url = typeof img === 'string' ? img : img.url;
+      return typeof url === 'string' && url.trim() !== '';
+    })
+    .map((img, index) => {
+      const url = typeof img === 'string' ? img.trim() : img.url.trim();
+      const flavor = typeof img === 'object' && img.flavor ? String(img.flavor).trim() : null;
+      return [productId, url, flavor, index];
+    });
 
   if (values.length > 0) {
-    await connection.query('INSERT INTO product_images (prod_id, image_url, sort_order) VALUES ?', [
-      values,
-    ])
+    await connection.query(
+      'INSERT INTO product_images (prod_id, image_url, flavor, sort_order) VALUES ?',
+      [values],
+    )
   }
 }
 
@@ -820,6 +839,7 @@ async function ensureAdminSchema() {
     CREATE TABLE IF NOT EXISTS product_images (
       img_id INT NOT NULL AUTO_INCREMENT,
       prod_id INT NOT NULL,
+      flavor VARCHAR(255) DEFAULT NULL,
       image_url VARCHAR(255) NOT NULL,
       sort_order INT NOT NULL DEFAULT 0,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -829,6 +849,11 @@ async function ensureAdminSchema() {
         FOREIGN KEY (prod_id) REFERENCES products (prod_id)
         ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+  `)
+
+  await pool.query(`
+    ALTER TABLE product_images
+    ADD COLUMN IF NOT EXISTS flavor VARCHAR(255) DEFAULT NULL
   `)
 
   await pool.query(`
@@ -1381,7 +1406,7 @@ app.post('/api/products', async (req, res) => {
 
     const productId = insertResult.insertId
 
-    await upsertProductImages(connection, productId, payload.imageUrls)
+    await upsertProductImages(connection, productId, payload.images)
 
     await connection.commit()
 
@@ -1450,7 +1475,7 @@ app.put('/api/products/:id', async (req, res) => {
       return
     }
 
-    await upsertProductImages(connection, productId, payload.imageUrls)
+    await upsertProductImages(connection, productId, payload.images)
 
     await connection.commit()
 
@@ -2973,15 +2998,18 @@ app.get('/api/admin/inventory-intake/orders', authenticateToken, requireAdmin, a
            p.prod_name AS product_name,
            p.stock_qty AS stock_qty,
            COALESCE(
-             (
-               SELECT pi.image_url
-               FROM product_images pi
-               WHERE pi.prod_id = p.prod_id
-               ORDER BY pi.sort_order ASC, pi.img_id ASC
-               LIMIT 1
-             ),
-             ''
-           ) AS image_url
+         (
+           SELECT pi.image_url
+           FROM product_images pi
+           WHERE pi.prod_id = p.prod_id
+             -- ดึงรูปที่รสชาติตรงกัน หรือถ้าไม่เจอให้ดึงรูปรสชาติว่าง (รูปหลัก)
+             AND (pi.flavor = od.flavor OR pi.flavor IS NULL OR pi.flavor = '')
+           -- เรียงให้ความสำคัญกับรูปที่มีรสชาติตรงกันขึ้นก่อนรูปหลัก
+           ORDER BY CASE WHEN pi.flavor = od.flavor THEN 1 ELSE 2 END ASC, pi.sort_order ASC, pi.img_id ASC
+           LIMIT 1
+         ),
+         ''
+       ) AS image_url
          FROM order_details od
          LEFT JOIN products p ON p.prod_id = od.prod_id
          WHERE od.order_id IN (?)

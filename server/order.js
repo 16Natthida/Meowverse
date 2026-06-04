@@ -834,14 +834,27 @@ router.get('/:order_id', async (req, res) => {
     }
 
     const [detailRows] = await db.query(
-      `SELECT od.detail_id, od.prod_id, od.Price AS unit_price, od.qty, od.received_qty, od.arrival_status, od.Import_fee, od.item_type, od.preorder_round_id, p.prod_name AS name, c.cat_name AS category_name,
-              (
-                SELECT pi.image_url
-                FROM product_images pi
-                WHERE pi.prod_id = od.prod_id
-                ORDER BY pi.sort_order ASC, pi.img_id ASC
-                LIMIT 1
-              ) AS image
+      `SELECT od.detail_id, od.prod_id, od.flavor, od.Price AS unit_price, od.qty, od.received_qty, od.arrival_status, od.Import_fee, od.item_type, od.preorder_round_id, p.prod_name AS name, c.cat_name AS category_name,
+COALESCE(
+         (
+           SELECT pi.image_url
+           FROM product_images pi
+           WHERE pi.prod_id = p.prod_id
+             AND (
+               (od.flavor IS NOT NULL AND od.flavor != '' AND pi.flavor = od.flavor)
+               OR (pi.flavor IS NULL OR pi.flavor = '')
+             )
+           ORDER BY
+             CASE
+               WHEN od.flavor IS NOT NULL AND od.flavor != '' AND pi.flavor = od.flavor THEN 1
+               ELSE 2
+             END ASC,
+             pi.sort_order ASC,
+             pi.img_id ASC
+           LIMIT 1
+         ),
+         ''
+       ) AS image
        FROM order_details od
        LEFT JOIN products p ON od.prod_id = p.prod_id
        LEFT JOIN categories c ON p.cat_id = c.cat_id

@@ -167,10 +167,12 @@ const fetchProducts = async () => {
         p.readyToShipEnabled != null || p.isReadyToShip != null
           ? Boolean(p.readyToShipEnabled ?? p.isReadyToShip)
           : !(p.preorderEnabled ?? p.isPreorder ?? false),
-      imageUrls: [
-        ...(Array.isArray(p.imageUrls) ? p.imageUrls : []),
-        ...(Array.isArray(p.images) ? p.images : []),
-      ].filter(Boolean),
+      imageUrls: Array.isArray(p.imageUrls)
+        ? p.imageUrls.map((item) => (typeof item === 'string' ? item : item?.url || '')).filter(Boolean)
+        : [],
+      images: Array.isArray(p.images)
+        ? p.images.map((img) => ({ url: img?.url || img || '', flavor: img?.flavor || '' })).filter((img) => img.url)
+        : [],
       id: p.id,
       name: p.name,
       description: p.description || '',
@@ -333,26 +335,33 @@ function decreaseDetailQty() {
   detailQty.value = Math.max(1, detailQty.value - 1)
 }
 
+// ทุกรูปของสินค้า (พร้อม flavor) — ใช้แสดงใน thumb row
 const detailImages = computed(() => {
-  const baseList = Array.isArray(selectedProduct.value?.imageUrls)
-    ? selectedProduct.value.imageUrls
-    : []
-  const list = [...baseList]
+  const product = selectedProduct.value
+  if (!product) return []
 
-  if (selectedProduct.value?.image && !list.includes(selectedProduct.value.image)) {
-    list.unshift(selectedProduct.value.image)
-  }
+  const rawImages = Array.isArray(product.images) && product.images.length > 0
+    ? product.images
+    : (Array.isArray(product.imageUrls) ? product.imageUrls.map((url) => ({ url, flavor: '' })) : [])
 
-  return list.filter(Boolean)
+  return rawImages
+    .map((img) => ({ url: img.url || img, flavor: img.flavor || '' }))
+    .filter((img) => img.url)
 })
 
+// รูปที่แสดงใน main — ใช้รูปของ thumb ที่กด
 const activeDetailImage = computed(() => {
-  if (detailImages.value.length === 0) {
-    return ''
+  const list = detailImages.value
+  if (list.length === 0) return ''
+
+  // ถ้าเลือกรสอยู่และมีรูปของรสนั้น ให้แสดงรูปรสก่อนเสมอ
+  if (selectedFlavor.value) {
+    const flavorImg = list.find((img) => img.flavor === selectedFlavor.value)
+    if (flavorImg) return flavorImg.url
   }
 
-  const safeIndex = Math.min(selectedPreviewIndex.value, detailImages.value.length - 1)
-  return detailImages.value[safeIndex] || detailImages.value[0]
+  const safeIndex = Math.min(selectedPreviewIndex.value, list.length - 1)
+  return list[safeIndex]?.url || ''
 })
 
 // ── GET FLAVOR STOCK ──
@@ -969,21 +978,32 @@ onMounted(async () => {
                   :src="activeDetailImage"
                   :alt="selectedProduct.name"
                 />
-                <div v-else class="detail-media__fallback">🐾</div>
+                <div v-else class="detail-media__fallback">
+                  <svg viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+                    <rect width="80" height="80" rx="16" fill="#f0e6ff"/>
+                    <rect x="18" y="22" width="44" height="36" rx="6" stroke="#c9a8f0" stroke-width="2.5" fill="none"/>
+                    <circle cx="30" cy="35" r="5" stroke="#c9a8f0" stroke-width="2" fill="none"/>
+                    <path d="M18 50l14-12 10 10 8-7 12 9" stroke="#c9a8f0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </div>
               </div>
 
               <div v-if="detailImages.length > 1" class="detail-thumb-row">
                 <button
-                  v-for="(image, index) in detailImages"
-                  :key="`${image}-${index}`"
+                  v-for="(img, index) in detailImages"
+                  :key="`${img.url}-${index}`"
                   type="button"
                   :class="[
                     'detail-thumb',
-                    { 'detail-thumb--active': selectedPreviewIndex === index },
+                    {
+                      'detail-thumb--active':
+                        selectedPreviewIndex === index ||
+                        (img.flavor && img.flavor === selectedFlavor),
+                    },
                   ]"
-                  @click="selectedPreviewIndex = index"
+                  @click="selectedPreviewIndex = index; if (img.flavor) selectedFlavor = img.flavor"
                 >
-                  <img :src="image" :alt="`${selectedProduct.name} ${index + 1}`" />
+                  <img :src="img.url" :alt="`${selectedProduct.name} ${index + 1}`" />
                 </button>
               </div>
 
@@ -1029,8 +1049,18 @@ onMounted(async () => {
                       getEffectiveItemType(selectedProduct) !== 'preorder' &&
                       getFlavorStock(flavor) === 0
                     "
-                    @click="selectedFlavor = flavor"
+                    @click="
+                      selectedFlavor = flavor;
+                      const fi = detailImages.findIndex((img) => img.flavor === flavor);
+                      if (fi !== -1) selectedPreviewIndex = fi;
+                    "
                   >
+                    <img
+                      v-if="detailImages.find((img) => img.flavor === flavor)"
+                      :src="detailImages.find((img) => img.flavor === flavor).url"
+                      :alt="flavor"
+                      class="flavor-chip__img"
+                    />
                     <span>{{ flavor }}</span>
                     <span class="flavor-stock">{{ getFlavorStock(flavor) }}</span>
                   </button>
@@ -2059,8 +2089,7 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 5rem;
-  color: #b788ea;
+  background: linear-gradient(135deg, #f8f2ff, #ede0ff);
 }
 
 .detail-thumb-row {
@@ -2174,7 +2203,7 @@ onMounted(async () => {
   background: #fff;
   color: var(--primary-dark);
   border-radius: 8px;
-  padding: 0.42rem 0.88rem;
+  padding: 0.35rem 0.88rem 0.35rem 0.35rem;
   font-size: 0.82rem;
   font-weight: 700;
   cursor: pointer;
@@ -2183,6 +2212,18 @@ onMounted(async () => {
     background 0.18s ease,
     border-color 0.18s ease,
     box-shadow 0.18s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.flavor-chip__img {
+  width: 32px;
+  height: 32px;
+  border-radius: 5px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid #ede0ff;
 }
 
 .flavor-chip:hover {

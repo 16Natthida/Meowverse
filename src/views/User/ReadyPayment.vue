@@ -10,6 +10,56 @@ const currentUser = computed(() => getUser())
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 
 const order = ref(null)
+// ── PRODUCT IMAGE MAP ──
+const productImageMap = ref({})
+
+const fetchProductImages = async (prodIds) => {
+  const uniqueIds = [...new Set(prodIds.filter(Boolean))]
+  await Promise.all(uniqueIds.map(async (prodId) => {
+    if (productImageMap.value[prodId]) return
+    try {
+      const res = await fetch(`${API_BASE_URL}/product-images?prod_id=${prodId}`)
+      if (!res.ok) return
+      const imgs = await res.json()
+      const arr = Array.isArray(imgs) ? imgs : (imgs.data ?? imgs.images ?? [])
+      const map = {}
+      arr.forEach((img) => {
+        const rawFlavor = img.flavor
+        const key = (rawFlavor == null || String(rawFlavor).trim() === '') ? '__default__' : String(rawFlavor).trim()
+        if (map[key] === undefined || img.sort_order < map[key].sort_order) {
+          map[key] = { url: img.image_url, sort_order: img.sort_order }
+        }
+      })
+      const urlMap = {}
+      Object.entries(map).forEach(([k, v]) => { urlMap[k] = v.url })
+      productImageMap.value[prodId] = urlMap
+    } catch { /* ignore */ }
+  }))
+}
+
+// 💡 แก้ไขฟังก์ชันนี้ให้เติม API_BASE_URL ด้านหน้า url รูปภาพ
+function resolveItemImage(it) {
+  const imgs = productImageMap.value[it.prod_id]
+  const flavorKey = it.flavor ? String(it.flavor) : null
+  let finalUrl = it.image ?? null
+  
+  if (imgs) {
+    if (flavorKey && imgs[flavorKey]) finalUrl = imgs[flavorKey]
+    else if (imgs['__default__']) finalUrl = imgs['__default__']
+    else {
+      const first = Object.values(imgs)[0]
+      if (first) finalUrl = first
+    }
+  }
+
+  if (finalUrl && finalUrl.startsWith('/uploads') && API_BASE_URL.includes('http')) {
+    const originServer = new URL(API_BASE_URL).origin
+    return `${originServer}${finalUrl}`
+  }
+  
+  return finalUrl
+}
+
 const loading = ref(true)
 const error = ref(null)
 const notice = ref({ msg: '', type: '' })
@@ -29,7 +79,7 @@ const slipFile = ref(null)
 const slipPreview = ref(null)
 const slipFileInput = ref(null)
 const slipImageUrl = computed(() => slipPreview.value || order.value?.saved_shipping?.slip_url || null)
-const isSlipViewerOpen = ref(false) // 💡 เพิ่มตัวแปรสถานะสำหรับเปิด/ปิดกล่องรูปใหญ่
+const isSlipViewerOpen = ref(false) 
 const imageViewerUrl = ref(null)
 const isImageViewerOpen = ref(false)
 
@@ -186,7 +236,6 @@ const selectPaymentMethod = (methodId) => {
   selectedPaymentMethod.value = methodId
 }
 
-// 💡 ปรับปรุงคีย์ออบเจกต์จัดส่งเพิ่มช่อง carrier รองรับ Dropdown
 const shippingInfo = ref({ name: '', phone: '', address: '', notes: '', carrier: '' })
 
 const onFileChange = (e) => {
@@ -242,6 +291,8 @@ const fetchOrder = async () => {
         Order_type: 'Ready',
         user_id: pendingData.user_id,
       }
+      const pendingProdIds = (pendingData.items || []).map((i) => i.prod_id)
+      await fetchProductImages(pendingProdIds)
     } catch {
       error.value = 'ข้อมูลชั่วคราวเสียหาย'
       setTimeout(() => router.push('/cart'), 2000)
@@ -265,8 +316,9 @@ const fetchOrder = async () => {
       }
     }
     order.value = data
+    const apiProdIds = (data.items || []).map((i) => i.prod_id)
+    await fetchProductImages(apiProdIds)
 
-    // 💡 ระบบดึงประวัติเก่าขึ้นมาพรีวิวอัตโนมัติหากออเดอร์นี้เคยกรอกข้อมูลหรือแนบสลิปไว้แล้ว
     if (data.saved_shipping) {
       shippingInfo.value.name = data.saved_shipping.name || ''
       shippingInfo.value.phone = data.saved_shipping.phone || ''
@@ -480,10 +532,18 @@ onMounted(async () => {
             <div class="item-list">
               <div v-for="it in order.items" :key="it.detail_id" class="order-item">
                 <div class="item-img">
-                  <img v-if="it.image" :src="it.image" /><span v-else style="display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: #d6bcfa;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg></span>
+                  <img v-if="resolveItemImage(it)" :src="resolveItemImage(it)" :alt="it.name" />
+                  <div v-else class="item-img-placeholder">
+                    <svg viewBox="0 0 40 40" fill="none" width="28" height="28"><rect width="40" height="40" rx="8" fill="#f0e6ff"/><rect x="8" y="10" width="24" height="20" rx="4" stroke="#c9a8f0" stroke-width="2" fill="none"/><circle cx="14" cy="18" r="3" stroke="#c9a8f0" stroke-width="1.5" fill="none"/><path d="M8 26l8-7 6 6 4-4 6 5" stroke="#c9a8f0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </div>
                 </div>
                 <div class="item-info">
-                  <p class="item-name">{{ it.name }}</p>
+                  <p class="item-name">
+                      {{ it.name || it.prod_name }}
+                      <span v-if="it.flavor || it.Flavor" style="display: block; color: #8b5cf6; font-size: 0.85em; font-weight: 600; margin-top: 2px;">
+                       ({{ it.flavor || it.Flavor }})
+                      </span>
+                    </p>
                   <p class="item-price-small">
                     ราคา ฿{{ Number(it.price || it.Price || it.unit_price || 0).toLocaleString() }}
                     / ชิ้น
@@ -599,7 +659,6 @@ onMounted(async () => {
 
               <h3 class="section-title" style="display: flex; align-items: center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg> แนบหลักฐานการโอน</h3>
 
-              <!-- ── INVALID SLIP ALERT ── -->
               <div v-if="isInvalidSlip" class="invalid-slip-banner">
                 <div class="invalid-slip-banner__icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></div>
                 <div class="invalid-slip-banner__text">
@@ -893,6 +952,15 @@ onMounted(async () => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+.item-img-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #f8f2ff, #ede0ff);
+  border-radius: inherit;
 }
 .item-info {
   min-width: 0;

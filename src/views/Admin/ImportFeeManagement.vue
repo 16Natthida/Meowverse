@@ -56,39 +56,38 @@
               <th class="num">ค่านำเข้า (฿)</th>
             </tr>
           </thead>
-          <tbody>
-            <tr
-              v-for="item in selectedRound.products"
-              :key="getFeeKey(item.prod_id, item.flavor)"
-              :class="{ 'row--filled': feeInputs[getFeeKey(item.prod_id, item.flavor)] > 0 }"
-            >
-              <td class="cell-product">{{ item.product_name }}</td>
-              <td class="cell-flavor">
-                <span v-if="item.flavor" class="flavor-tag">{{ item.flavor }}</span>
-                <span v-else class="cell-muted">—</span>
-              </td>
-              <td class="num">
-                <span class="qty-badge">{{ item.total_sold_qty }} ชิ้น</span>
-              </td>
-              <td class="num cell-price">{{ formatMoney(item.unit_price) }}</td>
-              <td class="num">
-                <div class="fee-input-wrap">
-                  <span class="fee-prefix">฿</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    class="fee-input"
-                    v-model.number="feeInputs[getFeeKey(item.prod_id, item.flavor)]"
-                    @input="onFeeInput(item.prod_id, item.flavor)"
-                    :disabled="saving"
-                    placeholder="0"
-                  />
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+<!-- แทนที่ <tbody> เดิมด้วยโค้ดนี้ -->
+<tbody>
+  <tr
+    v-for="item in groupedProducts"
+    :key="item.prod_id"
+    :class="{ 'row--filled': feeInputs[item.prod_id] > 0 }"
+  >
+    <td class="cell-product">{{ item.product_name }}</td>
+    <td class="cell-flavor">
+      <span v-if="item.flavorDisplay" class="flavor-tag">{{ item.flavorDisplay }}</span>
+      <span v-else class="cell-muted">—</span>
+    </td>
+    <td class="num">
+      <span class="qty-badge">{{ item.total_sold_qty }} ชิ้น</span>
+    </td>
+    <td class="num cell-price">{{ formatMoney(item.unit_price) }}</td>
+    <td class="num">
+      <div class="fee-input-wrap">
+        <span class="fee-prefix">฿</span>
+        <!-- ลบ @input="onFeeInput(...)" ออก เพราะไม่ต้องซิงค์ข้ามแถวแล้ว -->
+        <input
+          type="text"
+          inputmode="numeric"
+          class="fee-input"
+          v-model="feeInputs[item.prod_id]"
+          :disabled="saving"
+          placeholder="0"
+        />
+      </div>
+    </td>
+  </tr>
+</tbody>        </table>
       </div>
 
       <!-- Warning note -->
@@ -167,6 +166,36 @@ const selectedRound = computed(() =>
   rounds.value.find(r => r.round_id === selectedRoundId.value) || null
 )
 
+// จัดกลุ่มสินค้าตาม prod_id รวมยอดขาย และนำรสชาติมาต่อกันด้วยลูกน้ำ
+const groupedProducts = computed(() => {
+  if (!selectedRound.value || !selectedRound.value.products) return []
+
+  const groups = {}
+  for (const item of selectedRound.value.products) {
+    if (!groups[item.prod_id]) {
+      groups[item.prod_id] = {
+        ...item,
+        flavors: new Set(),
+        total_sold_qty: 0
+      }
+    }
+    
+    // เก็บชื่อรสชาติ (ไม่ให้ซ้ำกัน)
+    if (item.flavor) {
+      groups[item.prod_id].flavors.add(item.flavor)
+    }
+    
+    // รวมยอดขายของทุกรสชาติเข้าด้วยกัน
+    groups[item.prod_id].total_sold_qty += Number(item.total_sold_qty || 0)
+  }
+
+  // แปลง Set ให้เป็น String เพื่อนำไปแสดงผล
+  return Object.values(groups).map(g => ({
+    ...g,
+    flavorDisplay: g.flavors.size > 0 ? Array.from(g.flavors).join(', ') : null
+  }))
+})
+
 function authHeaders() {
   const user = currentUser.value || {}
   return {
@@ -182,12 +211,14 @@ function statusBadgeClass(status) {
   if (s === 'closed') return 'badge--closed'
   return 'badge--default'
 }
+
 function statusLabel(status) {
   const s = String(status || '').toLowerCase()
   if (s === 'active') return 'เปิดอยู่'
   if (s === 'closed') return 'ปิดแล้ว'
   return status
 }
+
 function formatMoney(value) {
   return new Intl.NumberFormat('th-TH', {
     style: 'currency',
@@ -195,21 +226,7 @@ function formatMoney(value) {
     maximumFractionDigits: 0,
   }).format(Number(value) || 0)
 }
-function getFeeKey(prod_id, flavor) {
-  return `${prod_id}|${flavor || ''}`
-}
-function onFeeInput(prod_id, flavor) {
-  const key = getFeeKey(prod_id, flavor)
-  const value = feeInputs.value[key]
-  for (const item of selectedRound.value?.products || []) {
-    if (item.prod_id === prod_id) {
-      const k = getFeeKey(item.prod_id, item.flavor)
-      if (k !== key && (feeInputs.value[k] === undefined || feeInputs.value[k] === '')) {
-        feeInputs.value[k] = value
-      }
-    }
-  }
-}
+
 async function fetchRounds() {
   loading.value = true
   errorMessage.value = ''
@@ -229,34 +246,38 @@ async function fetchRounds() {
     loading.value = false
   }
 }
+
+// เซ็ตค่า Input ให้สอดคล้องกับสินค้าที่ถูกจัดกลุ่มแล้ว
 watch(selectedRoundId, () => {
   feeInputs.value = {}
   if (selectedRound.value) {
-    for (const item of selectedRound.value.products) {
-      feeInputs.value[getFeeKey(item.prod_id, item.flavor)] =
-        item.current_import_fee != null ? Number(item.current_import_fee) : ''
+    for (const item of groupedProducts.value) {
+      const fee = Number(item.current_import_fee) || 0
+      feeInputs.value[item.prod_id] = fee > 0 ? fee : null
     }
   }
   successMessage.value = ''
   errorMessage.value = ''
 })
+
 onMounted(fetchRounds)
 
+// บันทึกค่านำเข้าโดยดึงจาก prod_id เป็นหลัก
 async function saveImportFees() {
   if (!selectedRound.value) return
   errorMessage.value = ''
   successMessage.value = ''
-  const feesByProduct = new Map()
-  for (const item of selectedRound.value.products) {
-    const key = getFeeKey(item.prod_id, item.flavor)
-    const val = feeInputs.value[key]
+  
+  const fees = []
+  for (const item of groupedProducts.value) {
+    const val = feeInputs.value[item.prod_id]
     if (val === '' || val == null || isNaN(val) || Number(val) < 0) {
       errorMessage.value = 'กรุณากรอกค่านำเข้าทุกแถว (ต้องไม่ติดลบ)'
       return
     }
-    feesByProduct.set(item.prod_id, { prod_id: item.prod_id, import_fee: Number(val) })
+    fees.push({ prod_id: item.prod_id, import_fee: Number(val) })
   }
-  const fees = Array.from(feesByProduct.values())
+
   saving.value = true
   try {
     const res = await fetch(`${API_BASE_URL}/admin/preorder-import-fee/${selectedRound.value.round_id}`, {
@@ -667,3 +688,4 @@ async function saveImportFees() {
   transform: translateY(4px);
 }
 </style>
+// End of file

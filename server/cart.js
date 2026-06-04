@@ -145,15 +145,25 @@ router.get('/', async (req, res) => {
            ELSE p.base_price
          END) AS price,
          COALESCE(
-           (
-             SELECT pi.image_url
-             FROM product_images pi
-             WHERE pi.prod_id = p.prod_id
-             ORDER BY pi.sort_order ASC, pi.img_id ASC
-             LIMIT 1
-           ),
-           ''
-         ) AS image,
+         (
+           SELECT pi.image_url
+           FROM product_images pi
+           WHERE pi.prod_id = p.prod_id
+             AND (
+               (c.flavor IS NOT NULL AND c.flavor != '' AND pi.flavor = c.flavor)
+               OR (pi.flavor IS NULL OR pi.flavor = '')
+             )
+           ORDER BY
+             CASE
+               WHEN c.flavor IS NOT NULL AND c.flavor != '' AND pi.flavor = c.flavor THEN 1
+               ELSE 2
+             END ASC,
+             pi.sort_order ASC,
+             pi.img_id ASC
+           LIMIT 1
+         ),
+         ''
+       ) AS image,
          p.stock_qty AS stock,
          NULL AS preorder_remaining
        FROM cart c

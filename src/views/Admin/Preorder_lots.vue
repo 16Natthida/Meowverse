@@ -64,6 +64,7 @@
       <p>กำลังโหลด...</p>
     </div>
 
+    <!-- Create/Edit Round Modal -->
     <div v-if="showRoundModal" class="modal-overlay" @click.self="closeRoundModal">
       <div class="modal">
         <div class="modal-header">
@@ -138,6 +139,7 @@
       </div>
     </div>
 
+    <!-- Edit Round with Products Modal -->
     <div
       v-if="showEditRoundModal && currentRound"
       class="modal-overlay"
@@ -232,6 +234,7 @@
       </div>
     </div>
 
+    <!-- Add Products Modal -->
     <div
       v-if="showAddProductsModal && currentRound"
       class="modal-overlay"
@@ -281,7 +284,14 @@
                       />
                       <div v-else class="no-image-mini">ไม่มีรูป</div>
                     </div>
-                    <span class="product-label">{{ product.name }}</span>
+
+                    <!-- ✅ เพิ่มเงื่อนไขแสดงรสชาติหลังชื่อสินค้าตามที่คุณขอ โดยไม่แก้ CSS -->
+                    <span class="product-label">
+                      {{ product.name }}
+                      <span v-if="product.flavors && product.flavors.length" style="color: #8b5cf6; font-size: 0.85em; font-weight: 600; margin-left: 6px;">
+                        ({{ product.flavors.join(', ') }})
+                      </span>
+                    </span>
                   </label>
                 </div>
                 <div v-if="selectedProductIds.includes(product.id)" class="selection-field-row">
@@ -332,6 +342,7 @@
       </div>
     </div>
 
+    <!-- Product Detail Modal -->
     <div
       v-if="showProductDetailModal && selectedProduct"
       class="modal-overlay"

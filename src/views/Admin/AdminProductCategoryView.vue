@@ -43,6 +43,7 @@ const form = reactive({
   preorderPrice: 0,
   flavorStock: {},
   imageUrls: [],
+  images: [], 
   preorderEnabled: false,
   stock: 0,
   readyToShipEnabled: true,
@@ -166,7 +167,6 @@ function addFlavorFromInput() {
     const alreadyExists = currentItems.some((item) => item.toLowerCase() === value.toLowerCase())
     if (!alreadyExists) {
       currentItems.push(value)
-      // Initialize flavor stock for new flavor
       if (!(value in form.flavorStock)) {
         form.flavorStock[value] = 0
       }
@@ -182,7 +182,6 @@ function removeFlavor(index) {
   const currentItems = parseFlavorsText(form.flavorsText)
   const removedFlavor = currentItems[index]
   currentItems.splice(index, 1)
-  // Remove flavor stock entry when flavor is removed
   if (removedFlavor in form.flavorStock) {
     delete form.flavorStock[removedFlavor]
   }
@@ -208,6 +207,7 @@ async function handleImageSelected(event) {
   for (const file of filesToUpload) {
     try {
       const result = await store.uploadProductImage(file)
+      form.images.push({ url: result.url, flavor: '' }) 
       form.imageUrls.push(result.url)
       uploadedCount += 1
     } catch {
@@ -228,11 +228,11 @@ async function handleImageSelected(event) {
 }
 
 function clearImage(index) {
+  form.images.splice(index, 1)
   form.imageUrls.splice(index, 1)
 }
 
 async function submitForm() {
-  // Auto-commit any typed flavor before submit so user does not lose input.
   addFlavorFromInput()
 
   if (!form.name.trim() || !form.sku.trim() || !form.categoryId) {
@@ -248,6 +248,11 @@ async function submitForm() {
   isSubmitting.value = true
 
   try {
+    const processedImages = form.images.map(img => ({
+      url: img.url,
+      flavor: img.flavor || ''
+    }))
+
     const payload = {
       name: form.name.trim(),
       description: form.description.trim(),
@@ -257,7 +262,8 @@ async function submitForm() {
       basePrice: Number(form.basePrice) || 0,
       preorderPrice: Number(form.preorderPrice) || 0,
       flavorStock: { ...form.flavorStock },
-      imageUrls: [...form.imageUrls],
+      images: processedImages,
+      imageUrls: processedImages.map((img) => img.url),
       preorderEnabled: form.preorderEnabled,
       readyToShipEnabled: form.readyToShipEnabled,
       stock:
@@ -267,7 +273,6 @@ async function submitForm() {
     }
 
     if (editingProductId.value) {
-      // Edit mode: keep stock and readyToShipEnabled from existing product
       const existingProduct = store.products.find(
         (p) => String(p.id) === String(editingProductId.value),
       )
@@ -275,13 +280,6 @@ async function submitForm() {
         payload.stock = Number(existingProduct.stock) || 0
         payload.readyToShipEnabled = Boolean(existingProduct.readyToShipEnabled)
       }
-      await store.updateProduct(editingProductId.value, payload)
-      setNotice('success', 'อัปเดตสินค้าเรียบร้อยแล้ว')
-    } else {
-      // Create mode keeps the form-derived stock and ready-to-ship flag.
-    }
-
-    if (editingProductId.value) {
       await store.updateProduct(editingProductId.value, payload)
       setNotice('success', 'อัปเดตสินค้าเรียบร้อยแล้ว')
     } else {
@@ -403,7 +401,17 @@ function editProduct(product) {
   form.basePrice = Number(product.basePrice) || 0
   form.preorderPrice = Number(product.preorderPrice ?? product.basePrice) || 0
   form.flavorStock = typeof product.flavorStock === 'object' ? { ...product.flavorStock } : {}
-  form.imageUrls = [...(product.imageUrls || [])]
+  
+  const safeImages = product.images 
+    ? JSON.parse(JSON.stringify(product.images)) 
+    : (product.imageUrls || []).map(item => ({ 
+        url: typeof item === 'string' ? item : (item.url || item.imageUrl || ''), 
+        flavor: item.flavor || '' 
+      }))
+  
+  form.images = safeImages
+  form.imageUrls = safeImages.map(img => img.url)
+
   form.preorderEnabled = Boolean(product.preorderEnabled)
   form.stock = Number(product.stock) || 0
   form.readyToShipEnabled = Boolean(product.readyToShipEnabled)
@@ -420,6 +428,7 @@ function resetForm() {
   form.preorderPrice = 0
   form.flavorStock = {}
   form.imageUrls = []
+  form.images = [] 
   form.preorderEnabled = false
   form.stock = 0
   form.readyToShipEnabled = true
@@ -469,7 +478,17 @@ async function submitAddStock() {
           ? Object.values(stockForm.flavorStock).reduce((sum, qty) => sum + Number(qty || 0), 0)
           : Number(stockForm.quantity) || 0,
       flavorStock: { ...stockForm.flavorStock },
-      imageUrls: selectedProductForStock.value.imageUrls || [],
+      images: Array.isArray(selectedProductForStock.value.images)
+        ? selectedProductForStock.value.images
+        : (selectedProductForStock.value.imageUrls || []).map((item) => ({
+            url: typeof item === 'string' ? item : item.url || '',
+            flavor: typeof item === 'object' ? item.flavor || '' : '',
+          })),
+      imageUrls: Array.isArray(selectedProductForStock.value.images)
+        ? selectedProductForStock.value.images.map((img) => img.url)
+        : (selectedProductForStock.value.imageUrls || []).map((item) =>
+            typeof item === 'string' ? item : item.url || '',
+          ),
       preorderEnabled: Boolean(selectedProductForStock.value.preorderEnabled),
       readyToShipEnabled: Boolean(stockForm.readyToShipEnabled),
     }
@@ -491,9 +510,10 @@ function getImageCount(product) {
 
 function getPrimaryImage(product) {
   if (Array.isArray(product.imageUrls) && product.imageUrls.length > 0) {
-    return resolveImageUrl(product.imageUrls[0])
+    const firstImg = product.imageUrls[0]
+    const url = typeof firstImg === 'object' ? firstImg.url : firstImg
+    return resolveImageUrl(url)
   }
-
   return ''
 }
 
@@ -807,9 +827,9 @@ onMounted(async () => {
         </label>
 
         <label class="upload-field">
-          รูปภาพ ({{ form.imageUrls.length }}/{{ MAX_IMAGE_COUNT }})
+          รูปภาพ ({{ form.images.length }}/{{ MAX_IMAGE_COUNT }})
           <input
-            :disabled="form.imageUrls.length >= MAX_IMAGE_COUNT"
+            :disabled="form.images.length >= MAX_IMAGE_COUNT"
             accept="image/*"
             multiple
             type="file"
@@ -819,12 +839,20 @@ onMounted(async () => {
 
         <div class="image-list">
           <div
-            v-for="(imageUrl, imageIndex) in form.imageUrls"
-            :key="`${imageUrl}-${imageIndex}`"
+            v-for="(url, imageIndex) in form.imageUrls"
+            :key="`${url}-${imageIndex}`"
             class="image-item"
           >
-            <img :src="resolveImageUrl(imageUrl)" alt="product" />
-            <button class="ghost" type="button" @click="clearImage(imageIndex)">ลบรูป</button>
+            <img :src="resolveImageUrl(url)" alt="product" />
+            
+            <select v-if="form.images[imageIndex]" v-model="form.images[imageIndex].flavor" style="width: 100%; margin: 6px 0; padding: 4px; font-size: 0.8rem; border-radius: 4px; border: 1px solid #ced4da; background-color: #fff;">
+              <option value="">(รูปหลัก)</option>
+              <option v-for="f in flavorItems" :key="f" :value="f">{{ f }}</option>
+            </select>
+
+            <button class="ghost" type="button" @click="clearImage(imageIndex)">
+              ลบรูป
+            </button>
           </div>
         </div>
 
@@ -906,7 +934,6 @@ onMounted(async () => {
       </button>
     </section>
 
-    <!-- Add Stock Modal -->
     <div
       v-if="showAddStockModal && selectedProductForStock"
       class="modal-overlay"

@@ -17,6 +17,45 @@ useAuth()
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 
 const order = ref(null)
+// ── PRODUCT IMAGE MAP ──
+const productImageMap = ref({})
+
+const fetchProductImages = async (prodIds) => {
+  const uniqueIds = [...new Set(prodIds.filter(Boolean))]
+  await Promise.all(uniqueIds.map(async (prodId) => {
+    if (productImageMap.value[prodId]) return
+    try {
+      const res = await fetch(`${API_BASE_URL}/product-images?prod_id=${prodId}`)
+      if (!res.ok) return
+      const imgs = await res.json()
+      const arr = Array.isArray(imgs) ? imgs : (imgs.data ?? imgs.images ?? [])
+      const map = {}
+      arr.forEach((img) => {
+        const rawFlavor = img.flavor
+        const key = (rawFlavor == null || String(rawFlavor).trim() === '') ? '__default__' : String(rawFlavor).trim()
+        if (map[key] === undefined || img.sort_order < map[key].sort_order) {
+          map[key] = { url: img.image_url, sort_order: img.sort_order }
+        }
+      })
+      const urlMap = {}
+      Object.entries(map).forEach(([k, v]) => { urlMap[k] = v.url })
+      productImageMap.value[prodId] = urlMap
+    } catch { /* ignore */ }
+  }))
+}
+
+function resolveItemImage(it) {
+  const imgs = productImageMap.value[it.prod_id]
+  const flavorKey = it.flavor ? String(it.flavor) : null
+  if (imgs) {
+    if (flavorKey && imgs[flavorKey]) return imgs[flavorKey]
+    if (imgs['__default__']) return imgs['__default__']
+    const first = Object.values(imgs)[0]
+    if (first) return first
+  }
+  return it.image ?? null
+}
+
 const loading = ref(true)
 const error = ref(null)
 const notice = ref({ msg: '', type: '' })
@@ -328,6 +367,8 @@ const fetchOrder = async () => {
         Order_type: 'Preorder',
         user_id: pendingData.user_id,
       }
+      const pendingProdIds = (pendingData.items || []).map((i) => i.prod_id)
+      await fetchProductImages(pendingProdIds)
     } catch {
       error.value = 'ข้อมูลชั่วคราวเสียหาย'
       setTimeout(() => router.push('/cart'), 2000)
@@ -350,6 +391,8 @@ const fetchOrder = async () => {
       return
     }
     order.value = data
+    const apiProdIds = (data.items || []).map((i) => i.prod_id)
+    await fetchProductImages(apiProdIds)
 
     await fetchLatestPostpone(data.order_id)
 
@@ -657,16 +700,17 @@ onMounted(async () => {
               <div class="item-list">
                 <div v-for="it in readyItems" :key="it.detail_id" class="order-item">
                   <div class="item-img">
-                    <img v-if="it.image" :src="it.image" /><span v-else style="display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: #d6bcfa;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg></span>
+                    <img v-if="resolveItemImage(it)" :src="resolveItemImage(it)" :alt="it.name" />
+                    <div v-else class="item-img-placeholder">
+                      <svg viewBox="0 0 40 40" fill="none" width="28" height="28"><rect width="40" height="40" rx="8" fill="#f0e6ff"/><rect x="8" y="10" width="24" height="20" rx="4" stroke="#c9a8f0" stroke-width="2" fill="none"/><circle cx="14" cy="18" r="3" stroke="#c9a8f0" stroke-width="1.5" fill="none"/><path d="M8 26l8-7 6 6 4-4 6 5" stroke="#c9a8f0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </div>
                   </div>
                   <div class="item-info">
-                    <p class="item-name">{{ it.name }}</p>
-                    <p
-                      v-if="it.flavor"
-                      class="item-price-small"
-                      style="color: #8b5cf6; font-weight: 600"
-                    >
-                      รสชาติ: {{ it.flavor }}
+                    <p class="item-name">
+                      {{ it.name || it.prod_name }}
+                      <span v-if="it.flavor || it.Flavor" style="display: block; color: #8b5cf6; font-size: 0.85em; font-weight: 600; margin-top: 2px;">
+                       ({{ it.flavor || it.Flavor }})
+                      </span>
                     </p>
                     <p class="item-price-small">
                       ราคา ฿{{ displayPrice(it).toLocaleString() }} / ชิ้น
@@ -695,16 +739,17 @@ onMounted(async () => {
               <div class="item-list">
                 <div v-for="it in preorderItems" :key="it.detail_id" class="order-item">
                   <div class="item-img">
-                    <img v-if="it.image" :src="it.image" /><span v-else style="display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: #d6bcfa;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg></span>
+                    <img v-if="resolveItemImage(it)" :src="resolveItemImage(it)" :alt="it.name" />
+                    <div v-else class="item-img-placeholder">
+                      <svg viewBox="0 0 40 40" fill="none" width="28" height="28"><rect width="40" height="40" rx="8" fill="#f0e6ff"/><rect x="8" y="10" width="24" height="20" rx="4" stroke="#c9a8f0" stroke-width="2" fill="none"/><circle cx="14" cy="18" r="3" stroke="#c9a8f0" stroke-width="1.5" fill="none"/><path d="M8 26l8-7 6 6 4-4 6 5" stroke="#c9a8f0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </div>
                   </div>
                   <div class="item-info">
-                    <p class="item-name">{{ it.name }}</p>
-                    <p
-                      v-if="it.flavor"
-                      class="item-price-small"
-                      style="color: #8b5cf6; font-weight: 600"
-                    >
-                      รสชาติ: {{ it.flavor }}
+                    <p class="item-name">
+                      {{ it.name || it.prod_name }}
+                      <span v-if="it.flavor || it.Flavor" style="display: block; color: #8b5cf6; font-size: 0.85em; font-weight: 600; margin-top: 2px;">
+                       ({{ it.flavor || it.Flavor }})
+                      </span>
                     </p>
                     <p
                       v-if="order.is_import_fee_stage && it.import_fee > 0"
@@ -739,16 +784,17 @@ onMounted(async () => {
               <div class="item-list">
                 <div v-for="it in unspecifiedItems" :key="it.detail_id" class="order-item">
                   <div class="item-img">
-                    <img v-if="it.image" :src="it.image" /><span v-else style="display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: #d6bcfa;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg></span>
+                    <img v-if="resolveItemImage(it)" :src="resolveItemImage(it)" :alt="it.name" />
+                    <div v-else class="item-img-placeholder">
+                      <svg viewBox="0 0 40 40" fill="none" width="28" height="28"><rect width="40" height="40" rx="8" fill="#f0e6ff"/><rect x="8" y="10" width="24" height="20" rx="4" stroke="#c9a8f0" stroke-width="2" fill="none"/><circle cx="14" cy="18" r="3" stroke="#c9a8f0" stroke-width="1.5" fill="none"/><path d="M8 26l8-7 6 6 4-4 6 5" stroke="#c9a8f0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </div>
                   </div>
                   <div class="item-info">
-                    <p class="item-name">{{ it.name }}</p>
-                    <p
-                      v-if="it.flavor"
-                      class="item-price-small"
-                      style="color: #8b5cf6; font-weight: 600"
-                    >
-                      รสชาติ: {{ it.flavor }}
+                    <p class="item-name">
+                      {{ it.name || it.prod_name }}
+                      <span v-if="it.flavor || it.Flavor" style="display: block; color: #8b5cf6; font-size: 0.85em; font-weight: 600; margin-top: 2px;">
+                       ({{ it.flavor || it.Flavor }})
+                      </span>
                     </p>
                     <p class="item-price-small">
                       ราคา ฿{{ displayPrice(it).toLocaleString() }} / ชิ้น
@@ -1349,6 +1395,15 @@ onMounted(async () => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+.item-img-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #f8f2ff, #ede0ff);
+  border-radius: inherit;
 }
 .item-info {
   min-width: 0;

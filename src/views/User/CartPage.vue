@@ -17,6 +17,59 @@ const deletingId = ref(null)
 const activeCartView = ref('ready')
 const isCheckingOut = ref(false)
 
+// Cache รูปภาพรายสินค้า: { [prod_id]: { default: url, [flavor]: url } }
+const productImageMap = ref({})
+
+// ดึงรูปภาพจาก product_images แล้วจัดเก็บใน map
+const fetchProductImages = async (prodIds) => {
+  const uniqueIds = [...new Set(prodIds)]
+  await Promise.all(
+    uniqueIds.map(async (prodId) => {
+      if (productImageMap.value[prodId]) return // มีแล้ว ไม่ต้องดึงซ้ำ
+      try {
+        const res = await fetch(`${API_BASE_URL}/product-images?prod_id=${prodId}`)
+        if (!res.ok) return
+        const imgs = await res.json()
+        const arr = Array.isArray(imgs) ? imgs : (imgs.data ?? imgs.images ?? [])
+        const map = {}
+        arr.forEach((img) => {
+          const rawFlavor = img.flavor
+          const key = (rawFlavor == null || String(rawFlavor).trim() === '') ? '__default__' : String(rawFlavor).trim()
+          // เก็บรูปแรกของแต่ละ flavor (sort_order ต่ำสุด)
+          if (map[key] === undefined || img.sort_order < map[key].sort_order) {
+            map[key] = { url: img.image_url, sort_order: img.sort_order }
+          }
+        })
+        // แปลงให้เก็บแค่ url
+        const urlMap = {}
+        Object.entries(map).forEach(([k, v]) => {
+          urlMap[k] = v.url
+        })
+        productImageMap.value[prodId] = urlMap
+      } catch {
+        // ignore
+      }
+    }),
+  )
+}
+
+// หา URL รูปที่ตรงกับ flavor ของ item นั้น
+// ลำดับ: รูปของ flavor นั้น → รูป default (sort_order=0) → รูปแรกที่มี → item.image จาก backend
+function resolveItemImage(item) {
+  const imgs = productImageMap.value[item.prod_id]
+  const flavorKey = item.flavor ? String(item.flavor) : null
+
+  if (imgs) {
+    if (flavorKey && imgs[flavorKey]) return imgs[flavorKey]
+    if (imgs['__default__']) return imgs['__default__']
+    const first = Object.values(imgs)[0]
+    if (first) return first
+  }
+
+  // fallback: รูปที่ backend ส่งมาใน cart row
+  return item.image ?? null
+}
+
 function resolveUserId(user) {
   return user?.id ?? user?.user_id ?? null
 }
@@ -66,6 +119,10 @@ const fetchCart = async () => {
             ? null
             : Math.max(0, Number(item.preorder_remaining) || 0),
       }))
+
+    // ดึงรูปภาพตาม prod_id ทั้งหมดในตะกร้า
+    const prodIds = cartItems.value.map((it) => it.prod_id).filter(Boolean)
+    if (prodIds.length > 0) await fetchProductImages(prodIds)
 
     const hasReadyItems = cartItems.value.some((item) => !item.isPreorder)
     const hasPreorderItems = cartItems.value.some((item) => item.isPreorder)
@@ -424,8 +481,18 @@ onMounted(fetchCart)
               >
                 <!-- Thumbnail -->
                 <div class="item-img">
-                  <img v-if="item.image" :src="item.image" :alt="item.name" />
-                  <span v-else class="item-emoji">🐾</span>
+                  <img
+                    v-if="resolveItemImage(item)"
+                    :src="resolveItemImage(item)"
+                    :alt="item.name"
+                  />
+                  <div v-else class="item-img-placeholder">
+                    <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" width="32" height="32">
+                      <rect width="40" height="40" rx="8" fill="#f0e6ff"/>
+                      <path d="M13 27c0-3.866 3.134-7 7-7s7 3.134 7 7" stroke="#c9a8f0" stroke-width="2" stroke-linecap="round"/>
+                      <circle cx="20" cy="15" r="4" stroke="#c9a8f0" stroke-width="2"/>
+                    </svg>
+                  </div>
                 </div>
 
                 <!-- Info -->
@@ -544,8 +611,18 @@ onMounted(fetchCart)
               >
                 <!-- Thumbnail -->
                 <div class="item-img">
-                  <img v-if="item.image" :src="item.image" :alt="item.name" />
-                  <span v-else class="item-emoji">🐾</span>
+                  <img
+                    v-if="resolveItemImage(item)"
+                    :src="resolveItemImage(item)"
+                    :alt="item.name"
+                  />
+                  <div v-else class="item-img-placeholder">
+                    <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" width="32" height="32">
+                      <rect width="40" height="40" rx="8" fill="#f0e6ff"/>
+                      <path d="M13 27c0-3.866 3.134-7 7-7s7 3.134 7 7" stroke="#c9a8f0" stroke-width="2" stroke-linecap="round"/>
+                      <circle cx="20" cy="15" r="4" stroke="#c9a8f0" stroke-width="2"/>
+                    </svg>
+                  </div>
                   <span class="item-preorder-badge">พรีออเดอร์</span>
                 </div>
 
@@ -1030,8 +1107,14 @@ onMounted(fetchCart)
   height: 100%;
   object-fit: cover;
 }
-.item-emoji {
-  font-size: 2rem;
+.item-img-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #f8f2ff, #ede0ff);
+  border-radius: inherit;
 }
 .item-preorder-badge {
   position: absolute;
