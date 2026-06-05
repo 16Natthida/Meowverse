@@ -1994,7 +1994,29 @@ app.get('/api/products/alerts/low-stock', async (req, res) => {
 
 // ============== Preorder Rounds Management ==============
 
-// Get all preorder rounds
+// Admin API: Get ALL preorder rounds (ทุกสถานะ)
+app.get('/api/preorder-rounds', authenticateToken, requireAdmin, async (_req, res) => {
+  try {
+    const [rounds] = await pool.query(`
+      SELECT
+        round_id          AS id,
+        round_name        AS name,
+        round_description AS description,
+        start_date        AS startDate,
+        end_date          AS endDate,
+        status,
+        created_at        AS createdAt,
+        updated_at        AS updatedAt
+      FROM preorder_rounds
+      ORDER BY round_id DESC
+    `)
+
+    res.json(rounds)
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
+
 // Public API: Get active preorder rounds for users
 app.get('/api/preorder-rounds/active', async (_req, res) => {
   try {

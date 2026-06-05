@@ -448,10 +448,57 @@ const roundForm = ref({
   status: 'active',
 })
 
-const preorderRounds = computed(() => preorderStore.preorderRounds)
-const currentRound = computed(() => preorderStore.currentRound)
+// Normalize round object: รองรับทั้ง camelCase (จาก store) และ snake_case (จาก API โดยตรง)
+function normalizeRound(round) {
+  if (!round) return round
+  return {
+    ...round,
+    id: round.id ?? round.round_id,
+    name: round.name ?? round.round_name,
+    description: round.description ?? round.round_description,
+    startDate: round.startDate ?? round.start_date,
+    endDate: round.endDate ?? round.end_date,
+    status: round.status,
+    products: (round.products || []).map(normalizeProduct),
+  }
+}
+
+// Normalize product object: รองรับทั้ง camelCase และ snake_case
+function normalizeProduct(product) {
+  if (!product) return product
+  const rawFlavors = product.flavors
+  const parsedFlavors = rawFlavors
+    ? typeof rawFlavors === 'string'
+      ? (() => { try { return JSON.parse(rawFlavors) } catch { return [] } })()
+      : rawFlavors
+    : []
+  const rawFlavorStock = product.flavorStock ?? product.flavor_stock
+  const parsedFlavorStock = rawFlavorStock
+    ? typeof rawFlavorStock === 'string'
+      ? (() => { try { return JSON.parse(rawFlavorStock) } catch { return {} } })()
+      : rawFlavorStock
+    : {}
+  return {
+    ...product,
+    id: product.id ?? product.prod_id,
+    name: product.name ?? product.prod_name,
+    sku: product.sku,
+    categoryName: product.categoryName ?? product.category_name,
+    basePrice: product.basePrice ?? product.base_price,
+    preorderPrice: product.preorderPrice ?? product.preorder_price,
+    roundPrice: product.roundPrice ?? product.round_price,
+    quantityAvailable:
+      product.quantityAvailable ?? product.quantity_available ?? product.stock_qty,
+    imageUrls: product.imageUrls ?? (product.image_url ? [product.image_url] : []),
+    flavors: parsedFlavors,
+    flavorStock: parsedFlavorStock,
+  }
+}
+
+const preorderRounds = computed(() => preorderStore.preorderRounds.map(normalizeRound))
+const currentRound = computed(() => normalizeRound(preorderStore.currentRound))
 const isLoading = computed(() => preorderStore.isLoading)
-const allProducts = computed(() => adminProductStore.products)
+const allProducts = computed(() => (adminProductStore.products || []).map(normalizeProduct))
 
 const filteredAvailableProducts = computed(() => {
   const currentProductIds = currentRound.value?.products?.map((p) => p.id) || []
@@ -492,12 +539,12 @@ function formatPrice(price) {
 
 function getStatusLabel(status) {
   const labels = {
-    Open: 'เปิด',
-    Closed: 'ปิด',
-    Archived: 'เก็บถาวร',
     active: 'เปิด',
+    open: 'เปิด',
+    closed: 'ปิด',
+    archived: 'เก็บถาวร',
   }
-  return labels[status] || status
+  return labels[String(status || '').toLowerCase()] || status
 }
 
 function getStatusClass(status) {
@@ -846,7 +893,9 @@ async function toggleRoundStatus(round) {
 
 onMounted(async () => {
   await preorderStore.fetchRounds()
-  await adminProductStore.fetchProducts()
+  if (typeof adminProductStore.fetchProducts === 'function') {
+    await adminProductStore.fetchProducts()
+  }
 })
 </script>
 
