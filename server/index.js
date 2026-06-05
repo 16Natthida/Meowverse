@@ -2624,30 +2624,40 @@ app.put(
         )
       }
 
+      // ดึง order_details ที่เป็น preorder ของรอบนี้ พร้อม import_fee_per_products ล่าสุด
       const [detailRows] = await connection.query(
         `SELECT od.detail_id, od.order_id, od.prod_id, od.qty,
                 COALESCE(prp.import_fee_per_products, 0) AS import_fee_per_products,
-                COALESCE(prp.quantity_sold, 0) AS quantity_sold
+                COALESCE(prp.quantity_sold, 1) AS quantity_sold
          FROM order_details od
          JOIN preorder_round_products prp
            ON prp.round_id = ?
           AND prp.prod_id = od.prod_id
-         WHERE od.preorder_round_id = ?`,
+         WHERE od.preorder_round_id = ?
+           AND od.item_type = 'preorder'`,
         [roundId, roundId],
       )
 
+      // คำนวณ qty รวมต่อ prod_id ก่อน (total qty ที่ลูกค้าทั้งหมดสั่งสินค้านี้ในรอบ)
+      const totalQtyByProd = {}
+      for (const row of detailRows) {
+        const pid = row.prod_id
+        totalQtyByProd[pid] = (totalQtyByProd[pid] || 0) + Number(row.qty)
+      }
+
       const orderTotals = {}
       for (const row of detailRows) {
-        const quantitySold = Number(row.quantity_sold) || 0
-        const perUnitImport = quantitySold ? Number(row.import_fee_per_products) / quantitySold : 0
-        const detailImportFee = perUnitImport
+        const totalQty = totalQtyByProd[row.prod_id] || 1
+        const importFeeTotal = Number(row.import_fee_per_products)
+        // ค่านำเข้าของ line นี้ = ค่านำเข้ารวม × (qty ที่ลูกค้าคนนี้สั่ง / qty รวมทั้งหมด)
+        const detailImportFee = importFeeTotal * (Number(row.qty) / totalQty)
 
         await connection.query('UPDATE order_details SET Import_fee = ? WHERE detail_id = ?', [
-          detailImportFee,
+          Math.round(detailImportFee * 100) / 100,
           row.detail_id,
         ])
 
-        orderTotals[row.order_id] = (orderTotals[row.order_id] || 0) + detailImportFee * Number(row.qty)
+        orderTotals[row.order_id] = (orderTotals[row.order_id] || 0) + detailImportFee
       }
 
       await connection.query(
@@ -2724,9 +2734,9 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     if (orderData.Order_type === 'Ready') {
       paymentType = 'Ready pay'
       paymentAmount = orderData.total_amount
-    } else if (
+} else if (
       orderData.Order_type === 'Preorder' &&
-      ['Wait_for_Import_Fee', 'Pending_import_fee'].includes(orderData.status)
+      ['Wait_for_Import_Fee', 'Pending_import_fee', 'Import_slip_submitted', 'Invalid import slip'].includes(orderData.status)
     ) {
       // Round 2: user is paying the import fee
       paymentType = 'Import_Fee'
@@ -2750,9 +2760,9 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     // ถ้าเป็นรอบ 2 ของ preorder หรือ retry รอบ 2 ให้เปลี่ยน Order_type เป็น Pending_import
 // แก้ไขใน index.js (ฟังก์ชันส่งสลิปโอนเงิน)
 if (paymentType === 'Import_Fee') {
-  // เปลี่ยนมา UPDATE status แทน Order_type เพื่อไม่ให้ค่าพรีออเดอร์หาย
+  // เปลี่ยนเป็น Import_slip_submitted เพื่อให้แอดมินรู้ว่า user แนบสลิปค่านำเข้ามาแล้ว
   await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [
-    'Pending_import_fee', 
+    'Import_slip_submitted',
     order_id,
   ])
 }
@@ -2770,10 +2780,10 @@ if (paymentType === 'Import_Fee') {
       ],
     )
 
-    // 4-8. เฉพาะรอบแรกเท่านั้น (orderData.status !== 'Wait_for_Import_Fee' && orderData.status !== 'Pending_import_fee')
+// 4-8. เฉพาะรอบแรกเท่านั้น (orderData.status !== 'Wait_for_Import_Fee' && orderData.status !== 'Pending_import_fee')
     // Round 1: reset to Pending so admin can see it for approval
     // Round 2: keep import-fee status — do NOT overwrite; admin needs to see it
-    if (!['Wait_for_Import_Fee', 'Pending_import_fee'].includes(orderData.status)) {
+    if (!['Wait_for_Import_Fee', 'Pending_import_fee', 'Import_slip_submitted', 'Invalid import slip'].includes(orderData.status)) {
       // 4. ดึงรายละเอียดออเดอร์เพื่อเคลียร์ตะกร้าและปรับสต็อกหลังชำระเงินจริง
       const [detailRows] = await connection.query(
         `SELECT od.prod_id, od.qty, od.Price AS unit_price, od.flavor
@@ -2810,8 +2820,8 @@ if (paymentType === 'Import_Fee') {
         }
       }
 
-      // 7. อัปเดตสถานะในตาราง orders เป็น 'Pending' (เฉพาะรอบแรก)
-      await connection.query(`UPDATE orders SET status = 'Pending' WHERE order_id = ?`, [order_id])
+      // 7. อัปเดตสถานะในตาราง orders เป็น 'Slip_submitted' เพื่อให้แอดมินรู้ว่า user แนบสลิปมาแล้ว
+      await connection.query(`UPDATE orders SET status = 'Slip_submitted' WHERE order_id = ?`, [order_id])
 
       // 8. ลบรายการในตะกร้าหลังชำระเงินสำเร็จ
       const [userIdRows] = await connection.query('SELECT user_id FROM orders WHERE order_id = ?', [

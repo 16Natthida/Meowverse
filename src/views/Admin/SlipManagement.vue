@@ -139,13 +139,14 @@ async function updatePaymentStatus(payId, status, orderId = null) {
     if (_orderId) {
       let nextOrderStatus = null
       if (status === 'Rejected') {
-        // ตรวจสอบสถานะออเดอร์ก่อน: ถ้าเป็น Pending_import_fee ให้ใช้ Invalid import slip
-        if (!orderData) {
-          const orderRes = await fetch(`${API_BASE_URL}/orders/${_orderId}`)
-          orderData = orderRes.ok ? await orderRes.json() : null
-        }
-        nextOrderStatus =
-          orderData?.status === 'Pending_import_fee' ? 'Invalid import slip' : 'Invalid slip'
+        // ให้ backend ตัดสินใจเองว่าเป็น "Invalid slip" หรือ "Invalid import slip"
+        // โดยเช็คจาก order status ปัจจุบัน
+        // (Pending_import_fee / Import_slip_submitted → Invalid import slip)
+        const rejectRes = await fetch(`${API_BASE_URL}/orders/${_orderId}/reject-slip`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+        })
+        if (!rejectRes.ok) console.warn('อัปเดตสถานะออเดอร์ไม่สำเร็จ')
       } else if (status === 'Approved') {
         if (targetPayment?.type === 'Order_fee') {
           nextOrderStatus = 'Wait_for_Import_Fee'

@@ -66,7 +66,7 @@ const importFeeTotal = computed(() => Number(order.value?.import_fee_total || 0)
 // แสดงกล่องข้อมูลจัดส่งเมื่อเข้าสู่สเตจค่านำเข้า รวมถึงสถานะหลังจากนั้นทั้งหมดด้วย
 const isImportFeeStage = computed(() => {
   const status = String(order.value?.status || '').trim().toLowerCase().replace(/_/g, ' ')
-  return ['wait for import fee', 'pending import fee', 'invalid import slip', 'paid', 'ready to ship'].includes(status)
+  return ['wait for import fee', 'pending import fee', 'import slip submitted', 'invalid import slip', 'paid', 'ready to ship'].includes(status)
 })
 
 // รอแอดมินแจ้งค่านำเข้า: ล็อกทุกอย่างยกเว้นขอเลื่อนเวลา
@@ -79,13 +79,13 @@ const isWaitingForImportFee = computed(() => {
 // ไม่ล็อกตอน invalid import slip เพราะต้องให้ผู้ใช้แนบสลิปค่านำเข้าใหม่ได้
 const isReadOnlyStage = computed(() => {
   const status = String(order.value?.status || '').trim().toLowerCase()
-  return ['ready_to_ship', 'cancelled', 'wait_for_import_fee'].includes(status)
+  return ['ready_to_ship', 'cancelled', 'wait_for_import_fee', 'slip_submitted'].includes(status)
 })
 
 // ✅ ซ่อนปุ่มขอเลื่อนกำหนดชำระเงิน และสกัดการเลือกช่องทางการโอนเมื่อออเดอร์จ่ายเสร็จสมบูรณ์/จัดส่งแล้ว
 const isFullyPaid = computed(() => {
   const status = String(order.value?.status || '').trim().toLowerCase()
-  return ['paid', 'ready_to_ship'].includes(status)
+  return ['ready_to_ship', 'slip_submitted'].includes(status)
 })
 
 // ✅ ปรับเงื่อนไข Amount Due ถ้ายืนยันชำระครบ (Paid หรือ Ready to Ship) ให้แสดงยอดรวม 2 รอบ
@@ -96,7 +96,7 @@ const amountDue = computed(() => {
     return Number(order.value?.total_amount || 0) + Number(order.value?.import_fee_total || 0)
   }
 
-  const isFeeDue = ['wait for import fee', 'pending import fee', 'invalid import slip'].includes(status)
+  const isFeeDue = ['wait for import fee', 'pending import fee', 'import slip submitted', 'invalid import slip'].includes(status)
   return isFeeDue
     ? Number(order.value?.import_fee_total || 0)
     : Number(order.value?.total_amount || 0)
@@ -134,7 +134,7 @@ const slipImageUrl = computed(() => {
     return slipPreview.value || null
   }
   // หน้าจ่ายค่านำเข้ารอบปกติ → แสดง import_fee_slip ถ้ามี (ไม่เอา Order_fee slip)
-  if (['wait for import fee', 'pending import fee'].includes(status)) {
+  if (['wait for import fee', 'pending import fee', 'import slip submitted'].includes(status)) {
     return slipPreview.value || order.value?.saved_shipping?.import_fee_slip_url || null
   }
   return slipPreview.value || order.value?.saved_shipping?.slip_url || null
@@ -161,12 +161,14 @@ const orderStatusDisplay = computed(() => {
 
   const map = {
     'pending':              { label: 'รอชำระเงิน',              color: '#f59e0b', icon: getIcon('<circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline>') },
-    'paid':                 { label: 'ชำระเงินแล้ว',             color: '#10b981', icon: getIcon('<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>') },
+    'slip submitted':       { label: 'แนบสลิปแล้ว รอตรวจสอบ',    color: '#3b82f6', icon: getIcon('<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>') },
+    'paid':                 { label: 'จ่ายเงินสำเร็จ รอแอดมินเรียกเก็บค่าจัดส่งในLINE',             color: '#10b981', icon: getIcon('<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>') },
     'wait for import fee':  { label: 'รอแจ้งค่านำเข้า',         color: '#6366f1', icon: getIcon('<line x1="16.5" y1="9.4" x2="7.5" y2="4.21"></line><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line>') },
     'pending import fee':   { label: 'รอชำระค่านำเข้า',         color: '#f59e0b', icon: getIcon('<rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line>') },
+    'import slip submitted': { label: 'แนบสลิปค่านำเข้าแล้ว รอตรวจสอบ', color: '#3b82f6', icon: getIcon('<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>') },
     'invalid slip':         { label: 'สลิปไม่ถูกต้อง',           color: '#ef4444', icon: getIcon('<circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>') },
     'invalid import slip':  { label: 'สลิปค่านำเข้าไม่ถูกต้อง', color: '#ef4444', icon: getIcon('<circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>') },
-    'ready to ship':        { label: 'เตรียมจัดส่งแล้ว',         color: '#10b981', icon: getIcon('<rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle>') },
+    'ready to ship':        { label: 'เตรียมพร้อมส่ง',         color: '#10b981', icon: getIcon('<rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle>') },
     'cancelled':            { label: 'ยกเลิกแล้ว',               color: '#6b7280', icon: getIcon('<circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>') },
   }
   return map[s] || { label: order.value?.status || '-', color: '#6b7280', icon: getIcon('<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>') }
@@ -326,17 +328,19 @@ const onFileChange = async (e) => {
   slipFile.value = file
   slipPreview.value = URL.createObjectURL(file)
 
-  // ถ้าสถานะเป็น Invalid import slip → เปลี่ยนกลับเป็น Pending_import_fee ทันทีที่แนบสลิปใหม่
+  // ลบส่วนที่เคยยิง API fetch PATCH status ออกไปทั้งหมด
+  // ปล่อยให้หน้าที่การบันทึกสลิปและเปลี่ยนสถานะเป็นของฝั่ง Backend ตอนที่กด confirmPayment 
+  // ถ้าสถานะเป็น Invalid import slip → อัปเดตเป็น Import_slip_submitted ทันทีที่แนบสลิปใหม่
   const currentStatus = String(order.value?.status || '').trim().toLowerCase().replace(/_/g, ' ')
   if (currentStatus === 'invalid import slip' && order.value?.order_id) {
     try {
       const res = await fetch(`${API_BASE_URL}/orders/${order.value.order_id}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'Pending_import_fee' }),
+        body: JSON.stringify({ status: 'Import_slip_submitted' }),
       })
       if (res.ok) {
-        order.value = { ...order.value, status: 'Pending_import_fee' }
+        order.value = { ...order.value, status: 'Import_slip_submitted' }
       }
     } catch {
       // ไม่รบกวน UX ถ้า call ล้มเหลว จะ retry ตอน confirmPayment
@@ -408,7 +412,7 @@ const fetchOrder = async () => {
       // - หน้าค่านำเข้า (Wait/Pending_import_fee/Invalid import slip) → ใช้ import_fee_slip_url
       // - หน้าอื่น → ใช้ slip_url (Order_fee)
       const orderStatus = String(data.status || '').trim().toLowerCase().replace(/_/g, ' ')
-      const isImportFeeRound = ['wait for import fee', 'pending import fee', 'invalid import slip'].includes(orderStatus)
+      const isImportFeeRound = ['wait for import fee', 'pending import fee', 'import slip submitted', 'invalid import slip'].includes(orderStatus)
       const slipToLoad = isImportFeeRound
         ? data.saved_shipping.import_fee_slip_url
         : data.saved_shipping.slip_url
@@ -439,7 +443,7 @@ const confirmPayment = async () => {
   const normalizedStatus = currentStatus.replace(/_/g, ' ')
   
   // หากเป็นกรณีสเตจพรีออเดอร์ทั่วไป ให้ตรวจสอบค่าความถูกต้องของอินพุตจัดส่งก่อนส่งฟอร์มเสมอ
-  const isInputActiveStage = ['wait for import fee', 'pending import fee', 'invalid import slip', 'paid'].includes(normalizedStatus)
+  const isInputActiveStage = ['wait for import fee', 'pending import fee', 'import slip submitted', 'invalid import slip', 'paid'].includes(normalizedStatus)
 
   if (isInputActiveStage) {
     if (!shippingInfo.value.name || !shippingInfo.value.phone || !shippingInfo.value.address || !shippingInfo.value.carrier) {
@@ -496,22 +500,41 @@ const confirmPayment = async () => {
       return
     }
 
-    // กรณีที่ไม่ได้อัปโหลดไฟล์สลิปใหม่ แต่อาจเข้ามาแก้ไขแค่ข้อมูลที่อยู่จัดส่ง
-    const formData = new FormData()
-    
-    // ✅ ถ้าสถานะไม่ใช่ Paid จะทำการส่ง payment_method และแนบ slip (ถ้ามี)
-    // แต่ถ้าสถานะเป็น Paid จะข้ามส่วนนี้ไป เพื่ออัปเดตแค่ตาราง shipping
-    if (normalizedStatus !== 'paid') {
-      formData.append('payment_method', getSelectedPaymentMethodValue())
-      if (slipFile.value) formData.append('slip', slipFile.value)
+    // สถานะที่ต้องการแค่อัปเดตที่อยู่จัดส่ง ไม่ต้องส่ง payment และไม่ต้องเปลี่ยน status
+    const isShippingOnlyStage = ['paid'].includes(normalizedStatus)
+
+    if (isShippingOnlyStage) {
+      // อัปเดตแค่ที่อยู่จัดส่ง ผ่าน /shipping endpoint ที่ไม่แตะ payment และ status
+      const res = await fetch(`${API_BASE_URL}/orders/${order.value.order_id}/shipping`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          shipping_name: shippingInfo.value.name,
+          shipping_phone: shippingInfo.value.phone,
+          shipping_address: shippingInfo.value.address,
+          shipping_carrier: shippingInfo.value.carrier,
+          notes: shippingInfo.value.notes || '',
+        }),
+      })
+      if (!res.ok) {
+        const errorBody = await res.json().catch(() => null)
+        throw new Error(errorBody?.error || errorBody?.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลจัดส่ง')
+      }
+      showNotice('อัปเดตข้อมูลการจัดส่งเรียบร้อยแล้ว!', 'success')
+      setTimeout(() => router.push('/order-list'), 2500)
+      return
     }
 
+    // สถานะอื่นๆ → ส่ง payment พร้อม slip ตามปกติ
+    const formData = new FormData()
+    formData.append('payment_method', getSelectedPaymentMethodValue())
+    if (slipFile.value) formData.append('slip', slipFile.value)
     formData.append('shipping_name', shippingInfo.value.name)
     formData.append('shipping_phone', shippingInfo.value.phone)
     formData.append('shipping_address', shippingInfo.value.address)
     formData.append('shipping_carrier', shippingInfo.value.carrier)
     formData.append('notes', shippingInfo.value.notes || '')
-    
+
     if (['wait for import fee', 'pending import fee', 'invalid import slip'].includes(normalizedStatus)) {
       formData.append('type', 'Import_Fee')
     }
@@ -1143,7 +1166,7 @@ onMounted(async () => {
                     ? 'กำลังประมวลผล...'
                     : isReadOnlyStage
                       ? 'ออเดอร์ถูกเตรียมจัดส่งแล้ว'
-                      : order.status && ['pending_import_fee', 'paid'].includes(String(order.status).toLowerCase())
+                      : order.status && ['paid'].includes(String(order.status).toLowerCase())
                         ? 'บันทึกอัปเดตข้อมูลจัดส่ง'
                         : importFeeTotal > 0
                           ? 'ยืนยันการชำระค่านำเข้า'

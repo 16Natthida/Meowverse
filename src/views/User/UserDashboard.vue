@@ -55,6 +55,7 @@ const searchQuery = ref('')
 const cartNotice = ref({ msg: '', type: '' })
 const cartLoading = ref({})
 const cartCount = ref(0) // จำนวนสินค้าใน cart badge
+const orderNotifDot = ref('') // 'red' | 'green' | ''
 const selectedProduct = ref(null)
 const selectedFlavor = ref('')
 const selectedPreviewIndex = ref(0)
@@ -231,8 +232,32 @@ const fetchCartCount = async () => {
   }
 }
 
-// ── FETCH ACTIVE PREORDER ROUNDS ──
-// ── FETCH ACTIVE PREORDER ROUNDS ──
+// ── FETCH ORDER NOTIFICATION DOT ──
+const RED_DOT_STATUSES = ['pending', 'pending_import_fee', 'cancelled', 'invalid_slip', 'invalid_import_slip']
+const GREEN_DOT_STATUSES = ['paid', 'ready_to_ship']
+
+function normalizeStatus(status) {
+  return String(status || '').trim().toLowerCase().replace(/[\s]+/g, '_')
+}
+
+const fetchOrderNotif = async () => {
+  const user = currentUser.value
+  if (!user?.id) return
+  try {
+    const res = await fetch(`${API_BASE_URL}/orders?user_id=${user.id}`)
+    if (!res.ok) return
+    const data = await res.json()
+    const arr = Array.isArray(data) ? data : (data.orders ?? [])
+    const hasRed = arr.some((o) => RED_DOT_STATUSES.includes(normalizeStatus(o.status)))
+    if (hasRed) { orderNotifDot.value = 'red'; return }
+    const hasGreen = arr.some((o) => GREEN_DOT_STATUSES.includes(normalizeStatus(o.status)))
+    orderNotifDot.value = hasGreen ? 'green' : ''
+  } catch (err) {
+    console.error('fetchOrderNotif:', err)
+  }
+}
+
+
 const fetchPreorderRounds = async () => {
   try {
     // เปลี่ยน URL ไปเรียก API เส้นใหม่ที่เพิ่งสร้าง
@@ -689,6 +714,7 @@ onMounted(async () => {
     fetchBannerImage(),
     fetchLogoImage(),
     fetchPreorderRounds(),
+    fetchOrderNotif(),
   ])
 })
 </script>
@@ -709,7 +735,17 @@ onMounted(async () => {
           :class="['nav-tab', { 'nav-tab--active': activeTab === tab }]"
           @click="handleTabClick(tab)"
         >
-          {{ tab }}
+          <span class="nav-tab__label-wrap">
+            {{ tab }}
+            <span
+              v-if="tab === 'รายการออเดอร์' && orderNotifDot === 'red'"
+              class="order-notif-dot order-notif-dot--red"
+            ></span>
+            <span
+              v-else-if="tab === 'รายการออเดอร์' && orderNotifDot === 'green'"
+              class="order-notif-dot order-notif-dot--green"
+            ></span>
+          </span>
           <span v-if="activeTab === tab" class="nav-tab__underline" />
         </li>
       </ul>
@@ -897,7 +933,7 @@ onMounted(async () => {
       <div v-if="loading" class="state-msg">กำลังโหลดสินค้า...</div>
       <div v-else-if="error" class="error-msg">{{ error }}</div>
       <div v-else-if="paginatedProducts.length === 0" class="state-msg">
-        ไม่พบสินค้าในหมวดหมู่นี้
+        ไม่พบรอบสินค้าพรีออเดอร์ที่เปิดในขณะนี้
       </div>
 
       <div v-else class="product-grid">
@@ -2579,8 +2615,37 @@ onMounted(async () => {
   color: var(--muted);
   font-weight: 700;
 }
-.date-val {
-  color: var(--primary-dark);
-  font-weight: 800;
+/* ── ORDER NOTIF DOT (navbar tab) ── */
+.nav-tab__label-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+}
+.order-notif-dot {
+  position: absolute;
+  top: -5px;
+  right: -10px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid #fff;
+  flex-shrink: 0;
+}
+.order-notif-dot--red {
+  background: #ef4444;
+  animation: pulse-red-nav 2s infinite;
+}
+.order-notif-dot--green {
+  background: #22c55e;
+  animation: pulse-green-nav 2s infinite;
+}
+@keyframes pulse-red-nav {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.6); }
+  50%       { box-shadow: 0 0 0 4px rgba(239,68,68,0); }
+}
+@keyframes pulse-green-nav {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.6); }
+  50%       { box-shadow: 0 0 0 4px rgba(34,197,94,0); }
 }
 </style>

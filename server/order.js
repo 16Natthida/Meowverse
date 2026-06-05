@@ -947,9 +947,11 @@ router.patch('/:order_id/status', async (req, res) => {
 
   const ALLOWED_STATUSES = [
     'Pending',
+    'Slip_submitted',
     'Paid',
     'Wait_for_Import_Fee',
     'Pending_import_fee',
+    'Import_slip_submitted',
     'Ready_to_Ship',
     'Cancelled',
     'Invalid slip',
@@ -976,7 +978,7 @@ router.patch('/:order_id/status', async (req, res) => {
 
     // เฉพาะ Preorder เท่านั้นที่อนุญาต Wait_for_Import_Fee, Paid (2 รอบ)
     if (
-      (status === 'Wait_for_Import_Fee' || status === 'Pending_import_fee' || status === 'Paid') &&
+      (['Wait_for_Import_Fee', 'Pending_import_fee', 'Import_slip_submitted', 'Slip_submitted', 'Paid'].includes(status)) &&
       orderType !== 'preorder'
     ) {
       return res
@@ -987,10 +989,10 @@ router.patch('/:order_id/status', async (req, res) => {
     // อื่นๆ (Ready, ฯลฯ) อนุญาตเฉพาะ Pending, Ready_to_Ship, Cancelled, Invalid slip
     if (
       orderType !== 'preorder' &&
-      (status === 'Wait_for_Import_Fee' || status === 'Pending_import_fee' || status === 'Paid')
+      (['Wait_for_Import_Fee', 'Pending_import_fee', 'Import_slip_submitted', 'Slip_submitted', 'Paid'].includes(status))
     ) {
       return res.status(400).json({
-        error: 'เฉพาะ Preorder เท่านั้นที่เปลี่ยนสถานะเป็น Wait_for_Import_Fee, Pending_import_fee หรือ Paid ได้',
+        error: 'เฉพาะ Preorder เท่านั้นที่เปลี่ยนสถานะเป็น Wait_for_Import_Fee, Pending_import_fee, Slip_submitted, Import_slip_submitted หรือ Paid ได้',
       })
     }
 
@@ -1007,6 +1009,41 @@ router.patch('/:order_id/status', async (req, res) => {
   } catch (err) {
     console.error('[PATCH /api/orders/:order_id/status]', err)
     res.status(500).json({ error: 'เกิดข้อผิดพลาดในการอัปเดตสถานะออเดอร์' })
+  }
+})
+
+// ─────────────────────────────────────────────
+// PATCH /api/orders/:order_id/reject-slip
+// แอดมินปฏิเสธสลิป — ระบบตรวจสอบ order status เอง
+// ถ้าเป็นรอบค่านำเข้า (Import_slip_submitted / Pending_import_fee)
+//   → Invalid import slip
+// ถ้าเป็นรอบแรก (Slip_submitted / Pending ฯลฯ)
+//   → Invalid slip
+// ─────────────────────────────────────────────
+router.patch('/:order_id/reject-slip', async (req, res) => {
+  const { order_id } = req.params
+
+  try {
+    const db = getDB(req)
+    const [rows] = await db.query(
+      'SELECT status FROM orders WHERE order_id = ? LIMIT 1',
+      [order_id],
+    )
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'ไม่พบออเดอร์ที่ระบุ' })
+    }
+
+    const currentStatus = String(rows[0].status || '').trim()
+    const isImportFeeRound = ['Pending_import_fee', 'Import_slip_submitted'].includes(currentStatus)
+    const nextStatus = isImportFeeRound ? 'Invalid import slip' : 'Invalid slip'
+
+    await db.query('UPDATE orders SET status = ? WHERE order_id = ?', [nextStatus, order_id])
+
+    res.json({ success: true, order_id: Number(order_id), status: nextStatus })
+  } catch (err) {
+    console.error('[PATCH /api/orders/:order_id/reject-slip]', err)
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการอัปเดตสถานะ' })
   }
 })
 

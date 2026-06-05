@@ -177,7 +177,7 @@ const displayStatus = computed(() => {
   if (normalized === 'paid') return 'จ่ายเงินสำเร็จ รอแอดมินเรียกเก็บค่าจัดส่งในLINE'
 
   if (normalized === 'ready to ship' || status === 'ready_to_ship' || status === 'readytoship')
-    return 'เตรียมพร้อมส่งรอเก็บค่าขนส่ง กรุณารอแอดมินติดต่อกลับทาง LINE'
+    return 'เตรียมพร้อมส่ง'
 
   if (normalized === 'invalid slip') return 'สลิปไม่ถูกต้อง'
 

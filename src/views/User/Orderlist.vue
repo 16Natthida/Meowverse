@@ -20,12 +20,18 @@ const error = ref(null)
 const statusConfig = {
   Pending: { label: 'รอดำเนินการ', color: '#f59e0b', bg: '#fffbeb' },
   Paid: { label: 'ชำระแล้ว', color: '#10b981', bg: '#ecfdf5' },
+  Slip_submitted: { label: 'แนบสลิปแล้ว รอตรวจสอบ', color: '#3b82f6', bg: '#eff6ff' },
+  Import_slip_submitted: { label: 'แนบสลิปค่านำเข้าแล้ว รอตรวจสอบ', color: '#3b82f6', bg: '#eff6ff' },
   Wait_for_Import_Fee: { label: 'รอค่านำเข้า', color: '#6366f1', bg: '#eef2ff' },
-  Pending_import_fee: { label: 'รอค่านำเข้า', color: '#6366f1', bg: '#eef2ff' },
+  Pending_import_fee: { label: 'รอจ่ายค่านำเข้า', color: '#6366f1', bg: '#eef2ff' },
   Ready_to_Ship: { label: 'พร้อมจัดส่ง', color: '#0ea5e9', bg: '#f0f9ff' },
+  Shipped: { label: 'จัดส่งแล้ว', color: '#0ea5e9', bg: '#f0f9ff' },
+  Completed: { label: 'สำเร็จ', color: '#10b981', bg: '#ecfdf5' },
   Cancelled: { label: 'ยกเลิกแล้ว', color: '#ef4444', bg: '#fef2f2' },
   'Invalid slip': { label: 'สลิปไม่ถูกต้อง', color: '#dc2626', bg: '#fef2f2' },
   Invalid_Slip: { label: 'สลิปไม่ถูกต้อง', color: '#dc2626', bg: '#fef2f2' },
+  'Invalid import slip': { label: 'สลิปค่านำเข้าไม่ถูกต้อง', color: '#dc2626', bg: '#fef2f2' },
+  Invalid_import_slip: { label: 'สลิปค่านำเข้าไม่ถูกต้อง', color: '#dc2626', bg: '#fef2f2' },
 }
 
 function getStatus(status) {
@@ -37,8 +43,27 @@ function getStatus(status) {
   return { label: normalized || 'ไม่ทราบสถานะ', color: '#888', bg: '#f5f5f5' }
 }
 
+// ── NOTIFICATION DOT HELPERS ──
+const RED_DOT_STATUSES = ['Pending', 'Pending_import_fee', 'Cancelled', 'Invalid slip', 'Invalid import slip']
+const GREEN_DOT_STATUSES = ['Paid', 'Ready_to_Ship']
+
+function hasRedDot(status) {
+  const normalized = String(status || '').trim()
+  return RED_DOT_STATUSES.some(
+    (s) => s.toLowerCase() === normalized.toLowerCase()
+  )
+}
+
+function hasGreenDot(status) {
+  const normalized = String(status || '').trim()
+  return GREEN_DOT_STATUSES.some(
+    (s) => s.toLowerCase() === normalized.toLowerCase()
+  )
+}
+
 function isInvalidSlipStatus(status) {
-  return String(status || '').trim().toLowerCase().replace(/[_\s]+/g, ' ') === 'invalid slip'
+  const normalized = String(status || '').trim().toLowerCase().replace(/[_\s]+/g, ' ')
+  return normalized === 'invalid slip' || normalized === 'invalid import slip'
 }
 
 // ── FETCH ORDERS ──
@@ -164,6 +189,10 @@ onMounted(() => {
             class="section-card order-row"
             @click="goToOrder(order)"
           >
+            <!-- 🔴 Red dot: requires user action -->
+            <span v-if="hasRedDot(order.status)" class="notif-dot notif-dot--red" aria-label="ต้องดำเนินการ"></span>
+            <!-- 🟢 Green dot: positive status -->
+            <span v-else-if="hasGreenDot(order.status)" class="notif-dot notif-dot--green" aria-label="อัพเดทสถานะใหม่"></span>
             <div class="order-row__head">
               <div class="order-id-badge">#{{ order.order_id }}</div>
               <span
@@ -347,6 +376,7 @@ onMounted(() => {
 
 .order-row {
   cursor: pointer;
+  position: relative;
   transition:
     transform 0.15s ease,
     box-shadow 0.15s ease,
@@ -356,6 +386,35 @@ onMounted(() => {
   transform: translateY(-2px);
   box-shadow: 0 8px 20px rgba(111, 80, 160, 0.12);
   border-color: #c9a8e8;
+}
+
+/* ── NOTIFICATION DOTS ── */
+.notif-dot {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2.5px solid #fff;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.18);
+  z-index: 2;
+}
+.notif-dot--red {
+  background: #ef4444;
+  animation: pulse-red 2s infinite;
+}
+.notif-dot--green {
+  background: #22c55e;
+  animation: pulse-green 2s infinite;
+}
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.55), 0 2px 6px rgba(0,0,0,0.18); }
+  50%       { box-shadow: 0 0 0 5px rgba(239,68,68,0),   0 2px 6px rgba(0,0,0,0.18); }
+}
+@keyframes pulse-green {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.55), 0 2px 6px rgba(0,0,0,0.18); }
+  50%       { box-shadow: 0 0 0 5px rgba(34,197,94,0),  0 2px 6px rgba(0,0,0,0.18); }
 }
 
 /* ── ORDER ROW HEAD ── */
