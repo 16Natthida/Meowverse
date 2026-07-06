@@ -81,12 +81,18 @@ const router = createRouter({
       component: () => import('../views/Admin/InventoryIntakeManagement.vue'),
       meta: { requiresAuth: true, roles: ['admin'] },
     },
-      {
-        path: '/admin/import-fee',
-        name: 'admin-import-fee',
-        component: () => import('../views/Admin/ImportFeeManagement.vue'),
-        meta: { requiresAuth: true, roles: ['admin'] },
-      },
+    {
+      path: '/admin/missing-items',
+      name: 'admin-missing-items',
+      component: () => import('../views/Admin/MissingItemsReport.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/admin/import-fee',
+      name: 'admin-import-fee',
+      component: () => import('../views/Admin/ImportFeeManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
     {
       path: '/dashboard',
       name: 'userDashboard',

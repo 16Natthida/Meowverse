@@ -1,113 +1,87 @@
 <template>
   <div class="import-fee-page">
+
     <!-- Header -->
     <div class="page-header">
       <div class="page-header__icon" aria-hidden="true">
-        <svg
-          width="22"
-          height="22"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <path d="M12 2L2 7l10 5 10-5-10-5z" />
-          <path d="M2 17l10 5 10-5" />
-          <path d="M2 12l10 5 10-5" />
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+          <path d="M2 17l10 5 10-5"/>
+          <path d="M2 12l10 5 10-5"/>
         </svg>
       </div>
       <div>
-        <h2 class="page-header__title">กรอกค่านำเข้าสินค้าพรีออเดอร์</h2>
-        <p class="page-header__sub">บันทึกค่านำเข้าเพื่อคำนวณยอดชำระรอบที่ 2 ของลูกค้า</p>
+        <h2 class="page-header__title">เธเธฃเธญเธเธเนเธฒเธเธณเน€เธเนเธฒเธชเธดเธเธเนเธฒเธเธฃเธตเธญเธญเน€เธ”เธญเธฃเน</h2>
+        <p class="page-header__sub">เธเธฑเธเธ—เธถเธเธเนเธฒเธเธณเน€เธเนเธฒเน€เธเธทเนเธญเธเธณเธเธงเธ“เธขเธญเธ”เธเธณเธฃเธฐเธฃเธญเธเธ—เธตเน 2 เธเธญเธเธฅเธนเธเธเนเธฒ</p>
       </div>
     </div>
 
     <!-- Round selector -->
     <div class="card selector-card">
-      <label class="field-label">เลือกรอบพรีออเดอร์</label>
+      <label class="field-label">เน€เธฅเธทเธญเธเธฃเธญเธเธเธฃเธตเธญเธญเน€เธ”เธญเธฃเน</label>
       <div class="select-row">
         <div class="select-wrap">
           <select v-model="selectedRoundId" class="round-select" :disabled="loading">
-            <option value="" disabled>— เลือกรอบพรีออเดอร์ —</option>
+            <option value="" disabled>โ€” เน€เธฅเธทเธญเธเธฃเธญเธเธเธฃเธตเธญเธญเน€เธ”เธญเธฃเน โ€”</option>
             <option v-for="r in rounds" :key="r.round_id" :value="r.round_id">
               {{ r.round_name }}
             </option>
           </select>
-          <svg
-            class="select-chevron"
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            aria-hidden="true"
-          >
-            <polyline points="6 9 12 15 18 9" />
+          <svg class="select-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9"/>
           </svg>
         </div>
-        <span
-          v-if="selectedRound"
-          class="round-badge"
-          :class="statusBadgeClass(selectedRound.round_status)"
-        >
+        <span v-if="selectedRound" class="round-badge" :class="statusBadgeClass(selectedRound.round_status)">
           {{ statusLabel(selectedRound.round_status) }}
         </span>
-        <span v-if="loading" class="spinner" aria-label="กำลังโหลด"></span>
+        <span v-if="loading" class="spinner" aria-label="เธเธณเธฅเธฑเธเนเธซเธฅเธ”"></span>
       </div>
     </div>
 
     <!-- Product table -->
     <div v-if="selectedRound" class="card table-card">
       <div class="table-header">
-        <span class="table-title"
-          >รายการสินค้าในรอบ <b>{{ selectedRound.round_name }}</b></span
-        >
-        <span class="table-count">{{ selectedRound.products.length }} รายการ</span>
+        <span class="table-title">เธฃเธฒเธขเธเธฒเธฃเธชเธดเธเธเนเธฒเนเธเธฃเธญเธ <b>{{ selectedRound.round_name }}</b></span>
+        <span class="table-count">{{ selectedRound.products.length }} เธฃเธฒเธขเธเธฒเธฃ</span>
       </div>
 
       <div class="table-wrap">
         <table class="fee-table">
           <thead>
             <tr>
-              <th>สินค้า</th>
-              <th>รสชาติ / ขนาด</th>
-              <th class="num">รับจริง</th>
-              <th class="num">ราคา/ชิ้น</th>
-              <th class="num">ค่านำเข้า (฿)</th>
+              <th>เธชเธดเธเธเนเธฒ</th>
+              <th>เธฃเธชเธเธฒเธ•เธด / เธเธเธฒเธ”</th>
+              <th class="num">เธเธฒเธขเนเธ”เน</th>
+              <th class="num">เธฃเธฒเธเธฒ/เธเธดเนเธ</th>
+              <th class="num">เธเนเธฒเธเธณเน€เธเนเธฒ (เธฟ)</th>
             </tr>
           </thead>
-          <!-- แทนที่ <tbody> เดิมด้วยโค้ดนี้ -->
           <tbody>
             <tr
-              v-for="item in groupedProducts"
-              :key="item.prod_id"
-              :class="{
-                'row--filled': feeInputs[item.prod_id] > 0,
-                'row--locked': !item.hasReceivedQty,
-              }"
+              v-for="item in selectedRound.products"
+              :key="getFeeKey(item.prod_id, item.flavor)"
+              :class="{ 'row--filled': feeInputs[getFeeKey(item.prod_id, item.flavor)] > 0 }"
             >
               <td class="cell-product">{{ item.product_name }}</td>
               <td class="cell-flavor">
-                <span v-if="item.flavorDisplay" class="flavor-tag">{{ item.flavorDisplay }}</span>
-                <span v-else class="cell-muted">—</span>
+                <span v-if="item.flavor" class="flavor-tag">{{ item.flavor }}</span>
+                <span v-else class="cell-muted">โ€”</span>
               </td>
               <td class="num">
-                <span class="qty-badge">{{ item.total_received_qty }} ชิ้น</span>
+                <span class="qty-badge">{{ item.total_sold_qty }} เธเธดเนเธ</span>
               </td>
               <td class="num cell-price">{{ formatMoney(item.unit_price) }}</td>
               <td class="num">
                 <div class="fee-input-wrap">
-                  <span class="fee-prefix">฿</span>
-                  <!-- ลบ @input="onFeeInput(...)" ออก เพราะไม่ต้องซิงค์ข้ามแถวแล้ว -->
+                  <span class="fee-prefix">เธฟ</span>
                   <input
-                    type="text"
-                    inputmode="numeric"
+                    type="number"
+                    min="0"
+                    step="1"
                     class="fee-input"
-                    v-model="feeInputs[item.prod_id]"
-                    :disabled="saving || !item.hasReceivedQty"
+                    v-model.number="feeInputs[getFeeKey(item.prod_id, item.flavor)]"
+                    @input="onFeeInput(item.prod_id, item.flavor)"
+                    :disabled="saving"
                     placeholder="0"
                   />
                 </div>
@@ -119,58 +93,30 @@
 
       <!-- Warning note -->
       <div class="note-warning">
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          aria-hidden="true"
-        >
-          <path
-            d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"
-          />
-          <line x1="12" y1="9" x2="12" y2="13" />
-          <line x1="12" y1="17" x2="12.01" y2="17" />
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/>
+          <line x1="12" y1="17" x2="12.01" y2="17"/>
         </svg>
-        ค่านำเข้าที่กรอกเป็นค่ารวมต่อสินค้าประเภทนี้ในรอบ หากมีการสั่งหลายชิ้นหรือหลายคำสั่งซื้อ
-        จะถูกเฉลี่ยตามจำนวนที่รับจริง
+        เธเนเธฒเธเธณเน€เธเนเธฒเธ—เธตเนเธเธฃเธญเธเธเธฐเธ–เธนเธเธเธณเนเธเธเธดเธ”เธขเธญเธ”เธ—เธตเนเธฅเธนเธเธเนเธฒเธ•เนเธญเธเธเธณเธฃเธฐเนเธเธฃเธญเธเธ—เธตเน 2
       </div>
 
       <!-- Actions -->
       <div class="actions">
         <button class="btn-save" @click="saveImportFees" :disabled="saving || loading">
           <span v-if="saving" class="spinner spinner--sm" aria-hidden="true"></span>
-          <svg
-            v-else
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            aria-hidden="true"
-          >
-            <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z" />
-            <polyline points="17 21 17 13 7 13 7 21" />
-            <polyline points="7 3 7 8 15 8" />
+          <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/>
+            <polyline points="17 21 17 13 7 13 7 21"/>
+            <polyline points="7 3 7 8 15 8"/>
           </svg>
-          {{ saving ? 'กำลังบันทึก...' : 'บันทึกค่านำเข้า' }}
+          {{ saving ? 'เธเธณเธฅเธฑเธเธเธฑเธเธ—เธถเธ...' : 'เธเธฑเธเธ—เธถเธเธเนเธฒเธเธณเน€เธเนเธฒ' }}
         </button>
 
         <transition name="fade">
           <div v-if="successMessage" class="toast toast--success">
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.5"
-              aria-hidden="true"
-            >
-              <polyline points="20 6 9 17 4 12" />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+              <polyline points="20 6 9 17 4 12"/>
             </svg>
             {{ successMessage }}
           </div>
@@ -178,18 +124,10 @@
 
         <transition name="fade">
           <div v-if="errorMessage" class="toast toast--error">
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.5"
-              aria-hidden="true"
-            >
-              <circle cx="12" cy="12" r="10" />
-              <line x1="15" y1="9" x2="9" y2="15" />
-              <line x1="9" y1="9" x2="15" y2="15" />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="15" y1="9" x2="9" y2="15"/>
+              <line x1="9" y1="9" x2="15" y2="15"/>
             </svg>
             {{ errorMessage }}
           </div>
@@ -199,26 +137,17 @@
 
     <!-- Empty state -->
     <div v-else-if="!loading" class="empty-state">
-      <svg
-        width="40"
-        height="40"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.2"
-        aria-hidden="true"
-      >
-        <path
-          d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"
-        />
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true">
+        <path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/>
       </svg>
-      <p>เลือกรอบพรีออเดอร์เพื่อเริ่มกรอกค่านำเข้า</p>
+      <p>เน€เธฅเธทเธญเธเธฃเธญเธเธเธฃเธตเธญเธญเน€เธ”เธญเธฃเนเน€เธเธทเนเธญเน€เธฃเธดเนเธกเธเธฃเธญเธเธเนเธฒเธเธณเน€เธเนเธฒ</p>
     </div>
+
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useAuth } from '../../composables/useAuth'
 import translateError from '../../utils/translateError'
 
@@ -234,42 +163,9 @@ const saving = ref(false)
 const successMessage = ref('')
 const errorMessage = ref('')
 
-const selectedRound = computed(
-  () => rounds.value.find((r) => r.round_id === selectedRoundId.value) || null,
+const selectedRound = computed(() =>
+  rounds.value.find(r => r.round_id === selectedRoundId.value) || null
 )
-
-// จัดกลุ่มสินค้าตาม prod_id รวมยอดขาย และนำรสชาติมาต่อกันด้วยลูกน้ำ
-const groupedProducts = computed(() => {
-  if (!selectedRound.value || !selectedRound.value.products) return []
-
-  const groups = {}
-  for (const item of selectedRound.value.products) {
-    if (!groups[item.prod_id]) {
-      groups[item.prod_id] = {
-        ...item,
-        flavors: new Set(),
-        total_sold_qty: 0,
-        total_received_qty: 0,
-      }
-    }
-
-    // เก็บชื่อรสชาติ (ไม่ให้ซ้ำกัน)
-    if (item.flavor) {
-      groups[item.prod_id].flavors.add(item.flavor)
-    }
-
-    // รวมยอดขายและยอดรับจริงของทุกรสชาติเข้าด้วยกัน
-    groups[item.prod_id].total_sold_qty += Number(item.total_sold_qty || 0)
-    groups[item.prod_id].total_received_qty += Number(item.total_received_qty || 0)
-  }
-
-  // แปลง Set ให้เป็น String เพื่อนำไปแสดงผล
-  return Object.values(groups).map((g) => ({
-    ...g,
-    flavorDisplay: g.flavors.size > 0 ? Array.from(g.flavors).join(', ') : null,
-    hasReceivedQty: Number(g.total_received_qty || 0) > 0,
-  }))
-})
 
 function authHeaders() {
   const user = currentUser.value || {}
@@ -286,14 +182,12 @@ function statusBadgeClass(status) {
   if (s === 'closed') return 'badge--closed'
   return 'badge--default'
 }
-
 function statusLabel(status) {
   const s = String(status || '').toLowerCase()
-  if (s === 'active') return 'เปิดอยู่'
-  if (s === 'closed') return 'ปิดแล้ว'
+  if (s === 'active') return 'เน€เธเธดเธ”เธญเธขเธนเน'
+  if (s === 'closed') return 'เธเธดเธ”เนเธฅเนเธง'
   return status
 }
-
 function formatMoney(value) {
   return new Intl.NumberFormat('th-TH', {
     style: 'currency',
@@ -301,7 +195,21 @@ function formatMoney(value) {
     maximumFractionDigits: 0,
   }).format(Number(value) || 0)
 }
-
+function getFeeKey(prod_id, flavor) {
+  return `${prod_id}|${flavor || ''}`
+}
+function onFeeInput(prod_id, flavor) {
+  const key = getFeeKey(prod_id, flavor)
+  const value = feeInputs.value[key]
+  for (const item of selectedRound.value?.products || []) {
+    if (item.prod_id === prod_id) {
+      const k = getFeeKey(item.prod_id, item.flavor)
+      if (k !== key && (feeInputs.value[k] === undefined || feeInputs.value[k] === '')) {
+        feeInputs.value[k] = value
+      }
+    }
+  }
+}
 async function fetchRounds() {
   loading.value = true
   errorMessage.value = ''
@@ -309,7 +217,7 @@ async function fetchRounds() {
     const res = await fetch(`${API_BASE_URL}/admin/preorder-import-fee/rounds`, {
       headers: authHeaders(),
     })
-    if (!res.ok) throw new Error(`โหลดรอบพรีออเดอร์ไม่สำเร็จ (${res.status})`)
+    if (!res.ok) throw new Error(`เนเธซเธฅเธ”เธฃเธญเธเธเธฃเธตเธญเธญเน€เธ”เธญเธฃเนเนเธกเนเธชเธณเน€เธฃเนเธ (${res.status})`)
     const data = await res.json()
     rounds.value = data
     if (!selectedRoundId.value && data.length > 0) {
@@ -321,66 +229,45 @@ async function fetchRounds() {
     loading.value = false
   }
 }
-
-// เซ็ตค่า Input ให้สอดคล้องกับสินค้าที่ถูกจัดกลุ่มแล้ว
 watch(selectedRoundId, () => {
   feeInputs.value = {}
   if (selectedRound.value) {
-    for (const item of groupedProducts.value) {
-      const fee = Number(item.current_import_fee) || 0
-      feeInputs.value[item.prod_id] = item.hasReceivedQty && fee > 0 ? fee : 0
+    for (const item of selectedRound.value.products) {
+      feeInputs.value[getFeeKey(item.prod_id, item.flavor)] =
+        item.current_import_fee != null ? Number(item.current_import_fee) : ''
     }
   }
   successMessage.value = ''
   errorMessage.value = ''
 })
-
 onMounted(fetchRounds)
 
-function handleInventoryIntakeUpdated() {
-  fetchRounds()
-}
-
-onMounted(() => {
-  window.addEventListener('meowverse:inventory-intake-updated', handleInventoryIntakeUpdated)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('meowverse:inventory-intake-updated', handleInventoryIntakeUpdated)
-})
-
-// บันทึกค่านำเข้าโดยดึงจาก prod_id เป็นหลัก
 async function saveImportFees() {
   if (!selectedRound.value) return
   errorMessage.value = ''
   successMessage.value = ''
-
   const fees = []
-  for (const item of groupedProducts.value) {
-    const val = item.hasReceivedQty ? feeInputs.value[item.prod_id] : 0
+  for (const item of selectedRound.value.products) {
+    const key = getFeeKey(item.prod_id, item.flavor)
+    const val = feeInputs.value[key]
     if (val === '' || val == null || isNaN(val) || Number(val) < 0) {
-      errorMessage.value = 'กรุณากรอกค่านำเข้าทุกแถว (ต้องไม่ติดลบ)'
+      errorMessage.value = 'เธเธฃเธธเธ“เธฒเธเธฃเธญเธเธเนเธฒเธเธณเน€เธเนเธฒเธ—เธธเธเนเธ–เธง (เธ•เนเธญเธเนเธกเนเธ•เธดเธ”เธฅเธ)'
       return
     }
-    fees.push({ prod_id: item.prod_id, import_fee: item.hasReceivedQty ? Number(val) : 0 })
+    fees.push({ prod_id: item.prod_id, flavor: item.flavor, import_fee: Number(val) })
   }
-
   saving.value = true
   try {
-    const res = await fetch(
-      `${API_BASE_URL}/admin/preorder-import-fee/${selectedRound.value.round_id}`,
-      {
-        method: 'PUT',
-        headers: authHeaders(),
-        body: JSON.stringify({ fees }),
-      },
-    )
+    const res = await fetch(`${API_BASE_URL}/admin/preorder-import-fee/${selectedRound.value.round_id}`, {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify({ fees }),
+    })
     const data = await res.json().catch(() => ({}))
     if (!res.ok || !data.success) {
-      throw new Error(data.message || `บันทึกค่านำเข้าไม่สำเร็จ (${res.status})`)
+      throw new Error(data.message || `เธเธฑเธเธ—เธถเธเธเนเธฒเธเธณเน€เธเนเธฒเนเธกเนเธชเธณเน€เธฃเนเธ (${res.status})`)
     }
-
-    successMessage.value = data.message || 'บันทึกค่านำเข้าเรียบร้อย'
+    successMessage.value = data.message || 'เธเธฑเธเธ—เธถเธเธเนเธฒเธเธณเน€เธเนเธฒเน€เธฃเธตเธขเธเธฃเนเธญเธข'
     await fetchRounds()
   } catch (e) {
     errorMessage.value = translateError(e)
@@ -391,14 +278,14 @@ async function saveImportFees() {
 </script>
 
 <style scoped>
-/* ── Page layout ── */
+/* โ”€โ”€ Page layout โ”€โ”€ */
 .import-fee-page {
   padding: 1.5rem 1.75rem;
   width: 100%;
   box-sizing: border-box;
 }
 
-/* ── Page header ── */
+/* โ”€โ”€ Page header โ”€โ”€ */
 .page-header {
   display: flex;
   align-items: center;
@@ -429,7 +316,7 @@ async function saveImportFees() {
   margin: 0;
 }
 
-/* ── Cards ── */
+/* โ”€โ”€ Cards โ”€โ”€ */
 .card {
   background: #fff;
   border: 1px solid #ede9f8;
@@ -438,7 +325,7 @@ async function saveImportFees() {
   margin-bottom: 1.25rem;
 }
 
-/* ── Selector card ── */
+/* โ”€โ”€ Selector card โ”€โ”€ */
 .selector-card {
   display: flex;
   flex-direction: column;
@@ -471,9 +358,7 @@ async function saveImportFees() {
   font-size: 0.9375rem;
   color: #1a1a2e;
   cursor: pointer;
-  transition:
-    border-color 0.15s,
-    box-shadow 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
   outline: none;
 }
 .round-select:focus {
@@ -518,7 +403,7 @@ async function saveImportFees() {
   border: 1px solid #e5e7eb;
 }
 
-/* ── Table card ── */
+/* โ”€โ”€ Table card โ”€โ”€ */
 .table-card {
   padding: 0;
   overflow: hidden;
@@ -627,9 +512,7 @@ async function saveImportFees() {
   border: 1.5px solid #e5e7eb;
   border-radius: 8px;
   overflow: hidden;
-  transition:
-    border-color 0.15s,
-    box-shadow 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 .fee-input-wrap:focus-within {
   border-color: #7c3aed;
@@ -694,10 +577,7 @@ async function saveImportFees() {
   font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
-  transition:
-    background 0.15s,
-    transform 0.1s,
-    box-shadow 0.15s;
+  transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
   box-shadow: 0 2px 8px rgba(124, 58, 237, 0.25);
 }
 .btn-save:hover:not(:disabled) {
@@ -767,21 +647,17 @@ async function saveImportFees() {
 .spinner--sm {
   width: 15px;
   height: 15px;
-  border-color: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255,255,255,0.3);
   border-top-color: #fff;
 }
 @keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+  to { transform: rotate(360deg); }
 }
 
 /* Fade transition */
 .fade-enter-active,
 .fade-leave-active {
-  transition:
-    opacity 0.25s,
-    transform 0.25s;
+  transition: opacity 0.25s, transform 0.25s;
 }
 .fade-enter-from,
 .fade-leave-to {
@@ -789,4 +665,3 @@ async function saveImportFees() {
   transform: translateY(4px);
 }
 </style>
-// End of file

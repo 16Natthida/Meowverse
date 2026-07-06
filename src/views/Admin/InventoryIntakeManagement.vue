@@ -83,7 +83,9 @@ function setSelectedIntakeOrder(orderId) {
   const draft = {}
 
   for (const item of order?.items || []) {
-    draft[item.detail_id] = Number(item.received_qty) || 0
+    const orderedQty = Math.max(Number(item.ordered_qty) || 0, 0)
+    const receivedQty = Math.max(Number(item.received_qty) || 0, 0)
+    draft[item.detail_id] = Math.min(receivedQty, orderedQty)
   }
 
   receivedDraft.value = draft
@@ -98,9 +100,13 @@ function clearSelectedIntakeOrder() {
 
 function updateDraft(detailId, rawValue) {
   const value = Number(rawValue)
+  const selectedItem = selectedIntakeOrder.value?.items?.find(
+    (item) => String(item.detail_id) === String(detailId),
+  )
+  const maxQty = Math.max(Number(selectedItem?.ordered_qty) || 0, 0)
   receivedDraft.value = {
     ...receivedDraft.value,
-    [detailId]: Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0,
+    [detailId]: Number.isFinite(value) && value >= 0 ? Math.min(Math.floor(value), maxQty) : 0,
   }
 }
 
@@ -175,6 +181,7 @@ async function processIntake() {
 
     intakeMessage.value = `บันทึกสำเร็จ ยอดคืน: ${formatMoney(data.refund_amount || 0)}`
     await fetchIntakeOrders()
+    window.dispatchEvent(new Event('meowverse:inventory-intake-updated'))
 
     const refreshedOrder = intakeOrders.value.find(
       (order) => Number(order.round_id) === Number(data.round_id),
@@ -266,7 +273,7 @@ onMounted(() => {
               </div>
               <div class="order-card__footer">
                 <span>{{ order.summary?.total_qty || 0 }} ชิ้น</span>
-                <span>{{ order.summary?.total_orders || 0 }} ออเดอร์</span>
+                <span>{{ order.summary?.total_orders || 0 }} ออเดอร์ในรอบ</span>
               </div>
             </button>
           </div>
@@ -279,7 +286,7 @@ onMounted(() => {
                 <h3>ตรวจรับรอบ #{{ selectedIntakeOrder.round_id }}</h3>
                 <p>
                   {{ selectedIntakeOrder.round_name || `รอบ #${selectedIntakeOrder.round_id}` }} ·
-                  {{ selectedIntakeSummary?.total_orders || 0 }} ออเดอร์ ·
+                  {{ selectedIntakeSummary?.total_orders || 0 }} ออเดอร์ในรอบ ·
                   {{ selectedIntakeSummary?.total_qty || 0 }} ชิ้น
                 </p>
               </div>
@@ -330,6 +337,7 @@ onMounted(() => {
                 <div>
                   <input
                     :value="receivedDraft[item.detail_id] ?? 0"
+                    :max="item.ordered_qty"
                     class="qty-input"
                     min="0"
                     type="number"

@@ -43,7 +43,7 @@ const form = reactive({
   preorderPrice: 0,
   flavorStock: {},
   imageUrls: [],
-  images: [], 
+  images: [],
   preorderEnabled: false,
   stock: 0,
   readyToShipEnabled: true,
@@ -207,7 +207,7 @@ async function handleImageSelected(event) {
   for (const file of filesToUpload) {
     try {
       const result = await store.uploadProductImage(file)
-      form.images.push({ url: result.url, flavor: '' }) 
+      form.images.push({ url: result.url, flavor: '' })
       form.imageUrls.push(result.url)
       uploadedCount += 1
     } catch {
@@ -248,9 +248,9 @@ async function submitForm() {
   isSubmitting.value = true
 
   try {
-    const processedImages = form.images.map(img => ({
+    const processedImages = form.images.map((img) => ({
       url: img.url,
-      flavor: img.flavor || ''
+      flavor: img.flavor || '',
     }))
 
     const payload = {
@@ -401,16 +401,16 @@ function editProduct(product) {
   form.basePrice = Number(product.basePrice) || 0
   form.preorderPrice = Number(product.preorderPrice ?? product.basePrice) || 0
   form.flavorStock = typeof product.flavorStock === 'object' ? { ...product.flavorStock } : {}
-  
-  const safeImages = product.images 
-    ? JSON.parse(JSON.stringify(product.images)) 
-    : (product.imageUrls || []).map(item => ({ 
-        url: typeof item === 'string' ? item : (item.url || item.imageUrl || ''), 
-        flavor: item.flavor || '' 
+
+  const safeImages = product.images
+    ? JSON.parse(JSON.stringify(product.images))
+    : (product.imageUrls || []).map((item) => ({
+        url: typeof item === 'string' ? item : item.url || item.imageUrl || '',
+        flavor: item.flavor || '',
       }))
-  
+
   form.images = safeImages
-  form.imageUrls = safeImages.map(img => img.url)
+  form.imageUrls = safeImages.map((img) => img.url)
 
   form.preorderEnabled = Boolean(product.preorderEnabled)
   form.stock = Number(product.stock) || 0
@@ -428,7 +428,7 @@ function resetForm() {
   form.preorderPrice = 0
   form.flavorStock = {}
   form.imageUrls = []
-  form.images = [] 
+  form.images = []
   form.preorderEnabled = false
   form.stock = 0
   form.readyToShipEnabled = true
@@ -844,15 +844,25 @@ onMounted(async () => {
             class="image-item"
           >
             <img :src="resolveImageUrl(url)" alt="product" />
-            
-            <select v-if="form.images[imageIndex]" v-model="form.images[imageIndex].flavor" style="width: 100%; margin: 6px 0; padding: 4px; font-size: 0.8rem; border-radius: 4px; border: 1px solid #ced4da; background-color: #fff;">
+
+            <select
+              v-if="form.images[imageIndex]"
+              v-model="form.images[imageIndex].flavor"
+              style="
+                width: 100%;
+                margin: 6px 0;
+                padding: 4px;
+                font-size: 0.8rem;
+                border-radius: 4px;
+                border: 1px solid #ced4da;
+                background-color: #fff;
+              "
+            >
               <option value="">(รูปหลัก)</option>
               <option v-for="f in flavorItems" :key="f" :value="f">{{ f }}</option>
             </select>
 
-            <button class="ghost" type="button" @click="clearImage(imageIndex)">
-              ลบรูป
-            </button>
+            <button class="ghost" type="button" @click="clearImage(imageIndex)">ลบรูป</button>
           </div>
         </div>
 
@@ -1229,6 +1239,7 @@ onMounted(async () => {
 }
 
 .image-item img {
+  display: block;
   width: 100%;
   height: 86px;
   object-fit: cover;
@@ -1300,6 +1311,7 @@ onMounted(async () => {
 }
 
 .media img {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;

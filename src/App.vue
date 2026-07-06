@@ -265,7 +265,8 @@ onUnmounted(() => {
           <RouterLink to="/admin/preorder-rounds">รอบนำเข้าสินค้า</RouterLink>
           <RouterLink to="/admin/postpones">คำขอเลื่อนการชำระเงิน</RouterLink>
           <RouterLink to="/admin/inventory-intake">รับสินค้าเข้า</RouterLink>
-            <RouterLink to="/admin/import-fee">กรอกค่านำเข้า</RouterLink>
+          <RouterLink to="/admin/missing-items">สินค้าตกหล่น / ขาด</RouterLink>
+          <RouterLink to="/admin/import-fee">กรอกค่านำเข้า</RouterLink>
           <RouterLink to="/admin/shipping">รายการจัดส่ง</RouterLink>
           <RouterLink to="/admin/settings">ตั้งค่าระบบ</RouterLink>
           <RouterLink to="/admin/qrcodes">ตั้งค่า QR Payment</RouterLink>
@@ -311,8 +312,6 @@ onUnmounted(() => {
               ชื่อแอดมิน
               <input v-model="profileForm.name" type="text" />
             </label>
-
-      
 
             <div class="field">
               รูปโปรไฟล์

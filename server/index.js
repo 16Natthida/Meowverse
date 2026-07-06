@@ -760,7 +760,7 @@ async function queryProductsByIds(productIds, connection = pool) {
     [productIds],
   )
 
- // ในฟังก์ชัน queryProductsByIds หาบรรทัดที่ SELECT จาก product_images ให้เปลี่ยนเป็น:
+  // ในฟังก์ชัน queryProductsByIds หาบรรทัดที่ SELECT จาก product_images ให้เปลี่ยนเป็น:
   const [imageRows] = await connection.query(
     `
       SELECT prod_id AS productId, image_url AS imageUrl, flavor
@@ -784,9 +784,9 @@ async function queryProductsByIds(productIds, connection = pool) {
   }
 
   return productRows.map((row) => {
-    const mapped = mapProductRow(row, imageUrlMap);
-    mapped.images = fullImageMap.get(row.id) || []; // ส่ง array แบบมี flavor ไปให้แอดมิน
-    return mapped;
+    const mapped = mapProductRow(row, imageUrlMap)
+    mapped.images = fullImageMap.get(row.id) || [] // ส่ง array แบบมี flavor ไปให้แอดมิน
+    return mapped
   })
 }
 
@@ -808,14 +808,14 @@ async function upsertProductImages(connection, productId, images = []) {
   // รองรับทั้งแบบ object {url, flavor} และแบบ string เดิม
   const values = images
     .filter((img) => {
-      const url = typeof img === 'string' ? img : img.url;
-      return typeof url === 'string' && url.trim() !== '';
+      const url = typeof img === 'string' ? img : img.url
+      return typeof url === 'string' && url.trim() !== ''
     })
     .map((img, index) => {
-      const url = typeof img === 'string' ? img.trim() : img.url.trim();
-      const flavor = typeof img === 'object' && img.flavor ? String(img.flavor).trim() : null;
-      return [productId, url, flavor, index];
-    });
+      const url = typeof img === 'string' ? img.trim() : img.url.trim()
+      const flavor = typeof img === 'object' && img.flavor ? String(img.flavor).trim() : null
+      return [productId, url, flavor, index]
+    })
 
   if (values.length > 0) {
     await connection.query(
@@ -1380,7 +1380,7 @@ app.post('/api/products', async (req, res) => {
   try {
     await connection.beginTransaction()
 
-   const [insertResult] = await connection.query(
+    const [insertResult] = await connection.query(
       `
         INSERT INTO products
           (cat_id, prod_name, description, flavors, flavor_stock, stock_qty, base_price, preorder_price, sku, preorder_enabled, ready_to_ship_enabled)
@@ -1402,7 +1402,7 @@ app.post('/api/products', async (req, res) => {
         toBooleanNumber(payload.preorderEnabled),
         toBooleanNumber(payload.readyToShipEnabled ?? true),
       ],
-    ) 
+    )
 
     const productId = insertResult.insertId
 
@@ -2537,6 +2537,7 @@ app.get(
         p.prod_name AS product_name,
         od.flavor,
         SUM(od.qty) AS total_sold_qty,
+        SUM(COALESCE(od.received_qty, 0)) AS total_received_qty,
         od.Price AS unit_price,
         COALESCE(prp.import_fee_per_products, 0) AS import_fee
       FROM preorder_rounds pr
@@ -2579,6 +2580,7 @@ app.get(
           product_name: row.product_name,
           flavor: row.flavor,
           total_sold_qty: Number(row.total_sold_qty) || 0,
+          total_received_qty: Number(row.total_received_qty) || 0,
           unit_price: Number(row.unit_price) || 0,
           current_import_fee: Number(row.import_fee) || 0,
         })
@@ -2627,6 +2629,7 @@ app.put(
       // ดึง order_details ที่เป็น preorder ของรอบนี้ พร้อม import_fee_per_products ล่าสุด
       const [detailRows] = await connection.query(
         `SELECT od.detail_id, od.order_id, od.prod_id, od.qty,
+          COALESCE(od.received_qty, 0) AS received_qty,
                 COALESCE(prp.import_fee_per_products, 0) AS import_fee_per_products,
                 COALESCE(prp.quantity_sold, 1) AS quantity_sold
          FROM order_details od
@@ -2638,19 +2641,22 @@ app.put(
         [roundId, roundId],
       )
 
-      // คำนวณ qty รวมต่อ prod_id ก่อน (total qty ที่ลูกค้าทั้งหมดสั่งสินค้านี้ในรอบ)
-      const totalQtyByProd = {}
+      // คำนวณ qty ที่รับจริงรวมต่อ prod_id ก่อน เพื่อไม่ให้นับของที่ขาดในค่านำเข้า
+      const totalReceivedQtyByProd = {}
       for (const row of detailRows) {
         const pid = row.prod_id
-        totalQtyByProd[pid] = (totalQtyByProd[pid] || 0) + Number(row.qty)
+        const receivedQty = Math.max(Number(row.received_qty) || 0, 0)
+        totalReceivedQtyByProd[pid] = (totalReceivedQtyByProd[pid] || 0) + receivedQty
       }
 
       const orderTotals = {}
       for (const row of detailRows) {
-        const totalQty = totalQtyByProd[row.prod_id] || 1
+        const receivedQty = Math.max(Number(row.received_qty) || 0, 0)
+        const totalReceivedQty = totalReceivedQtyByProd[row.prod_id] || 0
         const importFeeTotal = Number(row.import_fee_per_products)
-        // ค่านำเข้าของ line นี้ = ค่านำเข้ารวม × (qty ที่ลูกค้าคนนี้สั่ง / qty รวมทั้งหมด)
-        const detailImportFee = importFeeTotal * (Number(row.qty) / totalQty)
+        // ค่านำเข้าของ line นี้ = ค่านำเข้ารวม × (qty ที่รับจริงของแถวนี้ / qty ที่รับจริงรวมทั้งหมด)
+        const detailImportFee =
+          totalReceivedQty > 0 ? importFeeTotal * (receivedQty / totalReceivedQty) : 0
 
         await connection.query('UPDATE order_details SET Import_fee = ? WHERE detail_id = ?', [
           Math.round(detailImportFee * 100) / 100,
@@ -2681,11 +2687,11 @@ app.put(
 
         // เปลี่ยนสถานะและตั้ง deadline เฉพาะออเดอร์ที่แอดมินอนุมัติสลิปรอบแรกแล้ว (Wait_for_Import_Fee) เท่านั้น
         await connection.query(
-          `UPDATE orders 
-           SET status = 'Pending_import_fee', 
-               deadline = ? 
-           WHERE order_id IN (${placeholders}) 
-             AND Order_type = 'Preorder' 
+          `UPDATE orders
+           SET status = 'Pending_import_fee',
+               deadline = ?
+           WHERE order_id IN (${placeholders})
+             AND Order_type = 'Preorder'
              AND status = 'Wait_for_Import_Fee'`,
           [deadline48h, ...orderIds],
         )
@@ -2734,9 +2740,14 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     if (orderData.Order_type === 'Ready') {
       paymentType = 'Ready pay'
       paymentAmount = orderData.total_amount
-} else if (
+    } else if (
       orderData.Order_type === 'Preorder' &&
-      ['Wait_for_Import_Fee', 'Pending_import_fee', 'Import_slip_submitted', 'Invalid import slip'].includes(orderData.status)
+      [
+        'Wait_for_Import_Fee',
+        'Pending_import_fee',
+        'Import_slip_submitted',
+        'Invalid import slip',
+      ].includes(orderData.status)
     ) {
       // Round 2: user is paying the import fee
       paymentType = 'Import_Fee'
@@ -2758,14 +2769,14 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
       [order_id, paymentType, paymentAmount, slip_url, payment_method || null],
     )
     // ถ้าเป็นรอบ 2 ของ preorder หรือ retry รอบ 2 ให้เปลี่ยน Order_type เป็น Pending_import
-// แก้ไขใน index.js (ฟังก์ชันส่งสลิปโอนเงิน)
-if (paymentType === 'Import_Fee') {
-  // เปลี่ยนเป็น Import_slip_submitted เพื่อให้แอดมินรู้ว่า user แนบสลิปค่านำเข้ามาแล้ว
-  await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [
-    'Import_slip_submitted',
-    order_id,
-  ])
-}
+    // แก้ไขใน index.js (ฟังก์ชันส่งสลิปโอนเงิน)
+    if (paymentType === 'Import_Fee') {
+      // เปลี่ยนเป็น Import_slip_submitted เพื่อให้แอดมินรู้ว่า user แนบสลิปค่านำเข้ามาแล้ว
+      await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [
+        'Import_slip_submitted',
+        order_id,
+      ])
+    }
 
     // 3. บันทึกที่อยู่ลงตาราง shipping
     await connection.query(
@@ -2780,10 +2791,17 @@ if (paymentType === 'Import_Fee') {
       ],
     )
 
-// 4-8. เฉพาะรอบแรกเท่านั้น (orderData.status !== 'Wait_for_Import_Fee' && orderData.status !== 'Pending_import_fee')
+    // 4-8. เฉพาะรอบแรกเท่านั้น (orderData.status !== 'Wait_for_Import_Fee' && orderData.status !== 'Pending_import_fee')
     // Round 1: reset to Pending so admin can see it for approval
     // Round 2: keep import-fee status — do NOT overwrite; admin needs to see it
-    if (!['Wait_for_Import_Fee', 'Pending_import_fee', 'Import_slip_submitted', 'Invalid import slip'].includes(orderData.status)) {
+    if (
+      ![
+        'Wait_for_Import_Fee',
+        'Pending_import_fee',
+        'Import_slip_submitted',
+        'Invalid import slip',
+      ].includes(orderData.status)
+    ) {
       // 4. ดึงรายละเอียดออเดอร์เพื่อเคลียร์ตะกร้าและปรับสต็อกหลังชำระเงินจริง
       const [detailRows] = await connection.query(
         `SELECT od.prod_id, od.qty, od.Price AS unit_price, od.flavor
@@ -2821,7 +2839,9 @@ if (paymentType === 'Import_Fee') {
       }
 
       // 7. อัปเดตสถานะในตาราง orders เป็น 'Slip_submitted' เพื่อให้แอดมินรู้ว่า user แนบสลิปมาแล้ว
-      await connection.query(`UPDATE orders SET status = 'Slip_submitted' WHERE order_id = ?`, [order_id])
+      await connection.query(`UPDATE orders SET status = 'Slip_submitted' WHERE order_id = ?`, [
+        order_id,
+      ])
 
       // 8. ลบรายการในตะกร้าหลังชำระเงินสำเร็จ
       const [userIdRows] = await connection.query('SELECT user_id FROM orders WHERE order_id = ?', [
@@ -2943,21 +2963,21 @@ app.patch('/api/payments/:pay_id/status', async (req, res) => {
               )
             } else {
               // Round 1 (Order_fee) approved: เช็กก่อนว่ามีค่านำเข้าหรือยัง
-              const importFeeTotal = Number(payRows[0].import_fee_total || 0);
-              
+              const importFeeTotal = Number(payRows[0].import_fee_total || 0)
+
               if (importFeeTotal > 0) {
                 // ถ้าแอดมินเคยใส่ค่านำเข้ารอไว้แล้วตอนสถานะ Pending ให้กระโดดไปรอบ 2 เลย
-                const deadline48h = new Date(Date.now() + 48 * 60 * 60 * 1000);
+                const deadline48h = new Date(Date.now() + 48 * 60 * 60 * 1000)
                 await connection.query(
-                  'UPDATE orders SET status = ?, deadline = ? WHERE order_id = ?', 
-                  ['Pending_import_fee', deadline48h, order_id]
-                );
+                  'UPDATE orders SET status = ?, deadline = ? WHERE order_id = ?',
+                  ['Pending_import_fee', deadline48h, order_id],
+                )
               } else {
                 // ถ้ายังไม่มีค่านำเข้า ก็ให้ไปรอตามปกติ
                 await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [
                   'Wait_for_Import_Fee',
                   order_id,
-                ]);
+                ])
               }
             }
           } else {
@@ -3082,7 +3102,10 @@ app.get('/api/admin/inventory-intake/orders', authenticateToken, requireAdmin, a
         unit_price: unitPrice,
         line_total: lineTotal,
         received_total: receivedTotal,
-        refund_amount: missingQty * unitPrice,
+        refund_amount:
+          String(detail.arrival_status || 'Pending').toLowerCase() === 'missing'
+            ? missingQty * unitPrice
+            : 0,
         image_url: detail.image_url || '',
       })
     }
@@ -3851,6 +3874,128 @@ app.post(
 )
 
 // ─────────────────────────────────────────────
+// PATCH /api/admin/inventory-intake/item/:detail_id
+// ปรับสถานะสินค้าที่ขาดระหว่างการรับสินค้าเข้า: คืนเงินหรือรอของ
+// ─────────────────────────────────────────────
+app.patch(
+  '/api/admin/inventory-intake/item/:detail_id',
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    const detailId = Number(req.params.detail_id)
+    const action = String(req.body?.action || '')
+      .trim()
+      .toLowerCase()
+
+    if (!detailId) {
+      return res.status(400).json({ error: 'detail_id is required' })
+    }
+
+    if (!['refund', 'delay'].includes(action)) {
+      return res.status(400).json({ error: 'action must be refund or delay' })
+    }
+
+    const connection = await pool.getConnection()
+    try {
+      await connection.beginTransaction()
+
+      const [detailRows] = await connection.query(
+        `SELECT od.detail_id, od.order_id, od.qty AS ordered_qty, COALESCE(od.received_qty, 0) AS received_qty,
+                od.Price AS unit_price, COALESCE(od.arrival_status, 'Pending') AS arrival_status
+         FROM order_details od
+         WHERE od.detail_id = ?
+         LIMIT 1`,
+        [detailId],
+      )
+
+      if (detailRows.length === 0) {
+        await connection.rollback()
+        return res.status(404).json({ error: 'ไม่พบรายการสินค้านี้' })
+      }
+
+      const detail = detailRows[0]
+      const orderId = Number(detail.order_id)
+      const targetStatus = action === 'refund' ? 'Missing' : 'Delayed'
+
+      await connection.query(`UPDATE order_details SET arrival_status = ? WHERE detail_id = ?`, [
+        targetStatus,
+        detailId,
+      ])
+
+      const [orderDetails] = await connection.query(
+        `SELECT od.qty AS ordered_qty, COALESCE(od.received_qty, 0) AS received_qty,
+                COALESCE(od.arrival_status, 'Pending') AS arrival_status, od.Price AS unit_price
+         FROM order_details od
+         WHERE od.order_id = ?`,
+        [orderId],
+      )
+
+      const orderedAmount = orderDetails.reduce(
+        (sum, item) => sum + (Number(item.ordered_qty) || 0) * (Number(item.unit_price) || 0),
+        0,
+      )
+
+      const refundAmount = orderDetails.reduce((sum, item) => {
+        const itemMissingQty = Math.max(
+          (Number(item.ordered_qty) || 0) - (Number(item.received_qty) || 0),
+          0,
+        )
+        return (
+          sum +
+          (String(item.arrival_status || 'Pending').toLowerCase() === 'missing'
+            ? itemMissingQty * (Number(item.unit_price) || 0)
+            : 0)
+        )
+      }, 0)
+
+      const allReceived = orderDetails.every(
+        (item) => (Number(item.received_qty) || 0) >= (Number(item.ordered_qty) || 0),
+      )
+      const allMissing = orderDetails.every(
+        (item) =>
+          (Number(item.received_qty) || 0) === 0 &&
+          String(item.arrival_status || 'Pending').toLowerCase() === 'missing',
+      )
+      const newStatus = allReceived
+        ? 'Ready_to_Ship'
+        : allMissing
+          ? 'Missing'
+          : 'Partially_Received'
+
+      await connection.query(`UPDATE orders SET total_amount = ?, status = ? WHERE order_id = ?`, [
+        Math.max(orderedAmount - refundAmount, 0),
+        newStatus,
+        orderId,
+      ])
+
+      await connection.query(
+        `UPDATE inventory_intake_session_items
+         SET arrival_status = ?, refund_amount = CASE WHEN ? = 'Missing' THEN missing_qty * unit_price ELSE 0 END
+         WHERE detail_id = ?`,
+        [targetStatus, targetStatus, detailId],
+      )
+
+      await connection.commit()
+
+      res.json({
+        success: true,
+        detail_id: detailId,
+        order_id: orderId,
+        action: targetStatus,
+        refund_amount: refundAmount,
+        order_status: newStatus,
+        total_amount: Math.max(orderedAmount - refundAmount, 0),
+      })
+    } catch (error) {
+      await connection.rollback()
+      res.status(500).json({ error: error.message })
+    } finally {
+      connection.release()
+    }
+  },
+)
+
+// ─────────────────────────────────────────────
 // GET /api/dashboard/overview
 // ส่วนหลัก dashboard data
 // ─────────────────────────────────────────────
@@ -4240,7 +4385,7 @@ app.get('/api/admin/qrcodes', authenticateToken, requireAdmin, async (_req, res)
       `SELECT q.qr_id, q.payment_method, q.qr_image, q.user_id, q.is_active, q.updated_at, a.username, a.full_name
        FROM admin_qrcodes q
        LEFT JOIN accounts a ON a.user_id = q.user_id
-       ORDER BY q.updated_at DESC`
+       ORDER BY q.updated_at DESC`,
     )
 
     const list = rows.map((r) => ({
@@ -4268,7 +4413,7 @@ app.get('/api/qrcodes', async (_req, res) => {
        FROM admin_qrcodes q
        LEFT JOIN accounts a ON a.user_id = q.user_id
        WHERE q.is_active = 1
-       ORDER BY q.updated_at DESC`
+       ORDER BY q.updated_at DESC`,
     )
 
     const list = rows.map((r) => ({
@@ -4309,7 +4454,10 @@ app.post(
         [payment_method || null, imageUrl, userId, 1],
       )
 
-      const [rows] = await pool.query('SELECT qr_id, payment_method, qr_image, user_id, is_active, updated_at FROM admin_qrcodes WHERE qr_id = ? LIMIT 1', [result.insertId])
+      const [rows] = await pool.query(
+        'SELECT qr_id, payment_method, qr_image, user_id, is_active, updated_at FROM admin_qrcodes WHERE qr_id = ? LIMIT 1',
+        [result.insertId],
+      )
       res.status(201).json(rows[0])
     } catch (error) {
       res.status(500).json({ error: error.message })
@@ -4339,10 +4487,16 @@ app.patch('/api/admin/qrcodes/:id', authenticateToken, requireAdmin, async (req,
     if (updates.length === 0) return res.status(400).json({ error: 'No fields to update' })
 
     params.push(id)
-    const [result] = await pool.query(`UPDATE admin_qrcodes SET ${updates.join(', ')} WHERE qr_id = ?`, params)
+    const [result] = await pool.query(
+      `UPDATE admin_qrcodes SET ${updates.join(', ')} WHERE qr_id = ?`,
+      params,
+    )
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Not found' })
 
-    const [rows] = await pool.query('SELECT qr_id, payment_method, qr_image, user_id, is_active, updated_at FROM admin_qrcodes WHERE qr_id = ? LIMIT 1', [id])
+    const [rows] = await pool.query(
+      'SELECT qr_id, payment_method, qr_image, user_id, is_active, updated_at FROM admin_qrcodes WHERE qr_id = ? LIMIT 1',
+      [id],
+    )
     res.json(rows[0])
   } catch (error) {
     res.status(500).json({ error: error.message })
@@ -4355,7 +4509,9 @@ app.delete('/api/admin/qrcodes/:id', authenticateToken, requireAdmin, async (req
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'Invalid id' })
 
   try {
-    const [rows] = await pool.query('SELECT qr_image FROM admin_qrcodes WHERE qr_id = ? LIMIT 1', [id])
+    const [rows] = await pool.query('SELECT qr_image FROM admin_qrcodes WHERE qr_id = ? LIMIT 1', [
+      id,
+    ])
     const row = rows[0]
     const [result] = await pool.query('DELETE FROM admin_qrcodes WHERE qr_id = ?', [id])
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Not found' })
@@ -4364,7 +4520,7 @@ app.delete('/api/admin/qrcodes/:id', authenticateToken, requireAdmin, async (req
       const filePath = path.join(uploadsDir, path.basename(row.qr_image))
       try {
         await unlink(filePath)
-      } catch (e) {
+      } catch {
         // ignore unlink errors
       }
     }

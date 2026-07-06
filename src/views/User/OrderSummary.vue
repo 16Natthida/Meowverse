@@ -1,35 +1,15 @@
 ﻿<script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { useAuth } from '../../composables/useAuth'
 
 const router = useRouter()
 const route = useRoute()
-const { getUser } = useAuth()
-const currentUser = computed(() => getUser())
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 
 const order = ref(null)
 const loading = ref(true)
 const error = ref(null)
 const notice = ref({ msg: '', type: '' })
-
-// ── SLIP MANAGEMENT ──
-const slipFile = ref(null)
-const slipPreview = ref(null)
-
-const onFileChange = (e) => {
-  const file = e.target.files[0]
-  if (file) {
-    // ตรวจสอบขนาดไฟล์ (เช่น ไม่เกิน 5MB)
-    if (file.size > 5 * 1024 * 1024) {
-      showNotice('ขนาดไฟล์ต้องไม่เกิน 5MB', 'error')
-      return
-    }
-    slipFile.value = file
-    slipPreview.value = URL.createObjectURL(file)
-  }
-}
 
 // ── FETCH ORDER ──
 const fetchOrder = async () => {
@@ -53,81 +33,57 @@ const fetchOrder = async () => {
   }
 }
 
-// ── PAYMENT METHODS ──
-
-// Removed cash-on-delivery option per request
-const paymentMethods = [
-  { id: 'bank_transfer', name: 'โอนเงินผ่านธนาคาร', icon: '🏦' },
-  { id: 'promptpay', name: 'พร้อมเพย์', icon: '📱' },
-]
-
-const selectedPaymentMethod = ref('bank_transfer')
-
-// ── SHIPPING INFO ──
-const shippingInfo = ref({
-  name: '',
-  phone: '',
-  address: '',
-  notes: '',
+const hasInventoryTracking = computed(() => {
+  const status = String(order.value?.status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, ' ')
+  return [
+    'ready to ship',
+    'partially received',
+    'missing',
+    'paid',
+    'slip submitted',
+    'invalid import slip',
+  ].includes(status)
 })
 
-// ── CONFIRM PAYMENT ──
-const confirmPayment = async () => {
-  // 1. ตรวจสอบข้อมูลที่จำเป็น
-  if (!shippingInfo.value.name || !shippingInfo.value.phone || !shippingInfo.value.address) {
-    showNotice('กรุณากรอกข้อมูลการจัดส่งให้ครบถ้วน', 'error')
-    return
-  }
+const orderItems = computed(() => {
+  if (!order.value?.items) return []
 
-  // 2. ตรวจสอบสลิป
-  if (!slipFile.value) {
-    showNotice('กรุณาแนบหลักฐานการโอนเงิน', 'error')
-    return
-  }
+  return order.value.items.map((item) => {
+    const qty = Number(item.qty || 0)
+    const rawReceived = item.received_qty != null ? Number(item.received_qty) : qty
+    const receivedQty = hasInventoryTracking.value ? rawReceived : qty
+    const missingQty = Math.max(qty - receivedQty, 0)
+    const unitPrice = Number(item.Price || 0)
+    const arrivalStatus = String(item.arrival_status || '').toLowerCase()
+    const refundAmount = arrivalStatus === 'missing' ? missingQty * unitPrice : 0
 
-  try {
-    loading.value = true
-    const formData = new FormData()
-
-    // ข้อมูลจัดส่ง
-    formData.append('shipping_name', shippingInfo.value.name)
-    formData.append('shipping_phone', shippingInfo.value.phone)
-    formData.append('shipping_address', shippingInfo.value.address)
-    formData.append('notes', shippingInfo.value.notes)
-    formData.append('payment_method', selectedPaymentMethod.value)
-
-    // แนบไฟล์สลิป
-    if (slipFile.value) {
-      formData.append('slip', slipFile.value)
+    return {
+      ...item,
+      qty,
+      receivedQty,
+      missingQty,
+      arrivalStatus,
+      itemTotal: qty * unitPrice,
+      receivedTotal: receivedQty * unitPrice,
+      refundAmount,
     }
+  })
+})
 
-    const res = await fetch(`${API_BASE_URL}/orders/${order.value.order_id}/payment`, {
-      method: 'POST',
-      body: formData,
-    })
-
-    if (!res.ok) throw new Error('เกิดข้อผิดพลาดในการส่งข้อมูล')
-
-    showNotice('ส่งหลักฐานเรียบร้อย! ขอบคุณที่ใช้บริการ', 'success')
-
-    setTimeout(() => {
-      router.push('/')
-    }, 2500)
-  } catch (err) {
-    showNotice(err.message, 'error')
-  } finally {
-    loading.value = false
-  }
-}
-
-let noticeTimer = null
-function showNotice(msg, type = 'success') {
-  notice.value = { msg, type }
-  clearTimeout(noticeTimer)
-  noticeTimer = setTimeout(() => {
-    notice.value = { msg: '', type: '' }
-  }, 5000)
-}
+const hasMissingItems = computed(() => orderItems.value.some((item) => item.missingQty > 0))
+const totalReceivedAmount = computed(() =>
+  orderItems.value.reduce((sum, item) => sum + item.receivedTotal, 0),
+)
+const refundAmount = computed(() =>
+  orderItems.value.reduce((sum, item) => sum + Number(item.refundAmount || 0), 0),
+)
+const displayOrderTotal = computed(() => {
+  if (order.value?.total_amount != null) return Number(order.value.total_amount)
+  return totalReceivedAmount.value
+})
 
 function goBack() {
   router.push('/order-list')
@@ -166,15 +122,8 @@ function getStatusLabel() {
   return statusLabelMap[status] || status
 }
 
-function shouldShowPaymentForm() {
-  return order.value && String(order.value.status || '').toLowerCase() === 'pending'
-}
-
 onMounted(() => {
   fetchOrder()
-  if (currentUser.value) {
-    shippingInfo.value.name = currentUser.value.full_name || ''
-  }
 })
 </script>
 
@@ -262,7 +211,7 @@ onMounted(() => {
           </div>
 
           <div class="items-grid">
-            <div v-for="item in order.items" :key="item.detail_id" class="grid-row">
+            <div v-for="item in orderItems" :key="item.detail_id" class="grid-row">
               <div class="cell col-product">
                 <div class="product-cell">
                   <div class="product-image">
@@ -279,12 +228,13 @@ onMounted(() => {
                 <span class="price-value">฿{{ Number(item.Price).toLocaleString() }}</span>
               </div>
               <div class="cell col-qty">
-                <span class="qty-badge">{{ item.qty }}</span>
+                <span class="qty-badge">{{ item.receivedQty }} / {{ item.qty }}</span>
+                <div v-if="item.missingQty > 0" class="item-note">
+                  ขาด {{ item.missingQty }} ชิ้น
+                </div>
               </div>
               <div class="cell col-total">
-                <span class="total-value"
-                  >฿{{ (Number(item.Price) * Number(item.qty)).toLocaleString() }}</span
-                >
+                <span class="total-value">฿{{ item.receivedTotal.toLocaleString() }}</span>
               </div>
             </div>
           </div>
@@ -292,19 +242,23 @@ onMounted(() => {
           <!-- Summary -->
           <div class="items-summary">
             <div class="summary-row">
-              <span class="summary-label">ยอดรวม</span>
-              <span class="summary-total">
-                ฿{{
-                  order.items
-                    .reduce((sum, item) => sum + Number(item.Price) * Number(item.qty), 0)
-                    .toLocaleString()
-                }}
+              <span class="summary-label">ยอดรวมสินค้า</span>
+              <span class="summary-total">฿{{ displayOrderTotal.toLocaleString() }}</span>
+            </div>
+
+            <div class="summary-row" v-if="hasMissingItems">
+              <span class="summary-label" style="color: #ef4444">ยอดคืน (ของขาด)</span>
+              <span class="summary-total" style="color: #ef4444">
+                ฿{{ refundAmount.toLocaleString() }}
               </span>
             </div>
-            <!-- แสดงค่านำเข้ารอบที่ 2 ถ้าเป็นพรีออเดอร์และมี import_fee_total > 0 -->
-            <div class="summary-row" v-if="order.Order_type === 'Preorder' && Number(order.import_fee_total) > 0">
-              <span class="summary-label" style="color:#b67300;">ค่านำเข้ารอบที่ 2</span>
-              <span class="summary-total" style="color:#b67300;">
+
+            <div
+              class="summary-row"
+              v-if="order.Order_type === 'Preorder' && Number(order.import_fee_total) > 0"
+            >
+              <span class="summary-label" style="color: #b67300">ค่านำเข้ารอบที่ 2</span>
+              <span class="summary-total" style="color: #b67300">
                 ฿{{ Number(order.import_fee_total).toLocaleString() }}
               </span>
             </div>

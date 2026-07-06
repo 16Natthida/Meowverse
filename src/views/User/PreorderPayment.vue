@@ -22,26 +22,35 @@ const productImageMap = ref({})
 
 const fetchProductImages = async (prodIds) => {
   const uniqueIds = [...new Set(prodIds.filter(Boolean))]
-  await Promise.all(uniqueIds.map(async (prodId) => {
-    if (productImageMap.value[prodId]) return
-    try {
-      const res = await fetch(`${API_BASE_URL}/product-images?prod_id=${prodId}`)
-      if (!res.ok) return
-      const imgs = await res.json()
-      const arr = Array.isArray(imgs) ? imgs : (imgs.data ?? imgs.images ?? [])
-      const map = {}
-      arr.forEach((img) => {
-        const rawFlavor = img.flavor
-        const key = (rawFlavor == null || String(rawFlavor).trim() === '') ? '__default__' : String(rawFlavor).trim()
-        if (map[key] === undefined || img.sort_order < map[key].sort_order) {
-          map[key] = { url: img.image_url, sort_order: img.sort_order }
-        }
-      })
-      const urlMap = {}
-      Object.entries(map).forEach(([k, v]) => { urlMap[k] = v.url })
-      productImageMap.value[prodId] = urlMap
-    } catch { /* ignore */ }
-  }))
+  await Promise.all(
+    uniqueIds.map(async (prodId) => {
+      if (productImageMap.value[prodId]) return
+      try {
+        const res = await fetch(`${API_BASE_URL}/product-images?prod_id=${prodId}`)
+        if (!res.ok) return
+        const imgs = await res.json()
+        const arr = Array.isArray(imgs) ? imgs : (imgs.data ?? imgs.images ?? [])
+        const map = {}
+        arr.forEach((img) => {
+          const rawFlavor = img.flavor
+          const key =
+            rawFlavor == null || String(rawFlavor).trim() === ''
+              ? '__default__'
+              : String(rawFlavor).trim()
+          if (map[key] === undefined || img.sort_order < map[key].sort_order) {
+            map[key] = { url: img.image_url, sort_order: img.sort_order }
+          }
+        })
+        const urlMap = {}
+        Object.entries(map).forEach(([k, v]) => {
+          urlMap[k] = v.url
+        })
+        productImageMap.value[prodId] = urlMap
+      } catch {
+        /* ignore */
+      }
+    }),
+  )
 }
 
 function resolveItemImage(it) {
@@ -65,38 +74,62 @@ const importFeeTotal = computed(() => Number(order.value?.import_fee_total || 0)
 
 // แสดงกล่องข้อมูลจัดส่งเมื่อเข้าสู่สเตจค่านำเข้า รวมถึงสถานะหลังจากนั้นทั้งหมดด้วย
 const isImportFeeStage = computed(() => {
-  const status = String(order.value?.status || '').trim().toLowerCase().replace(/_/g, ' ')
-  return ['wait for import fee', 'pending import fee', 'import slip submitted', 'invalid import slip', 'paid', 'ready to ship'].includes(status)
+  const status = String(order.value?.status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, ' ')
+  return [
+    'wait for import fee',
+    'pending import fee',
+    'import slip submitted',
+    'invalid import slip',
+    'paid',
+    'ready to ship',
+  ].includes(status)
 })
 
 // รอแอดมินแจ้งค่านำเข้า: ล็อกทุกอย่างยกเว้นขอเลื่อนเวลา
 const isWaitingForImportFee = computed(() => {
-  const status = String(order.value?.status || '').trim().toLowerCase()
+  const status = String(order.value?.status || '')
+    .trim()
+    .toLowerCase()
   return status === 'wait_for_import_fee'
 })
 
-// ล็อกฟอร์มเมื่อสถานะเป็น Ready_to_Ship, Cancelled หรือ Wait_for_Import_Fee
-// ไม่ล็อกตอน invalid import slip เพราะต้องให้ผู้ใช้แนบสลิปค่านำเข้าใหม่ได้
+// ล็อกฟอร์มเมื่อสถานะเป็น Ready_to_Ship หรือ Cancelled
+// ยังให้แก้ไขได้ในช่วงรอค่านำเข้าและตอนสลิปค่านำเข้าไม่ถูกต้อง
 const isReadOnlyStage = computed(() => {
-  const status = String(order.value?.status || '').trim().toLowerCase()
-  return ['ready_to_ship', 'cancelled', 'wait_for_import_fee', 'slip_submitted'].includes(status)
+  const status = String(order.value?.status || '')
+    .trim()
+    .toLowerCase()
+  return ['ready_to_ship', 'cancelled'].includes(status)
 })
 
 // ✅ ซ่อนปุ่มขอเลื่อนกำหนดชำระเงิน และสกัดการเลือกช่องทางการโอนเมื่อออเดอร์จ่ายเสร็จสมบูรณ์/จัดส่งแล้ว
 const isFullyPaid = computed(() => {
-  const status = String(order.value?.status || '').trim().toLowerCase()
+  const status = String(order.value?.status || '')
+    .trim()
+    .toLowerCase()
   return ['ready_to_ship', 'slip_submitted'].includes(status)
 })
 
 // ✅ ปรับเงื่อนไข Amount Due ถ้ายืนยันชำระครบ (Paid หรือ Ready to Ship) ให้แสดงยอดรวม 2 รอบ
 const amountDue = computed(() => {
-  const status = String(order.value?.status || '').trim().toLowerCase().replace(/_/g, ' ')
-  
+  const status = String(order.value?.status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, ' ')
+
   if (['paid', 'ready to ship'].includes(status)) {
     return Number(order.value?.total_amount || 0) + Number(order.value?.import_fee_total || 0)
   }
 
-  const isFeeDue = ['wait for import fee', 'pending import fee', 'import slip submitted', 'invalid import slip'].includes(status)
+  const isFeeDue = [
+    'wait for import fee',
+    'pending import fee',
+    'import slip submitted',
+    'invalid import slip',
+  ].includes(status)
   return isFeeDue
     ? Number(order.value?.import_fee_total || 0)
     : Number(order.value?.total_amount || 0)
@@ -128,7 +161,10 @@ const slipFile = ref(null)
 const slipPreview = ref(null)
 const slipFileInput = ref(null)
 const slipImageUrl = computed(() => {
-  const status = String(order.value?.status || '').trim().toLowerCase().replace(/_/g, ' ')
+  const status = String(order.value?.status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, ' ')
   // invalid import slip → ล้างสลิปเก่าออก ต้องแนบใหม่เสมอ
   if (status === 'invalid import slip') {
     return slipPreview.value || null
@@ -139,7 +175,6 @@ const slipImageUrl = computed(() => {
   }
   return slipPreview.value || order.value?.saved_shipping?.slip_url || null
 })
-const isSlipViewerOpen = ref(false)
 const imageViewerUrl = ref(null)
 const isImageViewerOpen = ref(false)
 
@@ -155,43 +190,129 @@ const viewSlipImage = () => {
 
 // ── label + สีสถานะที่แสดงให้ลูกค้าเห็น (Preorder) ──
 const orderStatusDisplay = computed(() => {
-  const s = String(order.value?.status || '').trim().toLowerCase().replace(/_/g, ' ')
-  
-  const getIcon = (svgContent) => `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">${svgContent}</svg>`
+  const s = String(order.value?.status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, ' ')
+
+  const getIcon = (svgContent) =>
+    `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">${svgContent}</svg>`
 
   const map = {
-    'pending':              { label: 'รอชำระเงิน',              color: '#f59e0b', icon: getIcon('<circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline>') },
-    'slip submitted':       { label: 'แนบสลิปแล้ว รอตรวจสอบ',    color: '#3b82f6', icon: getIcon('<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>') },
-    'paid':                 { label: 'จ่ายเงินสำเร็จ รอแอดมินเรียกเก็บค่าจัดส่งในLINE',             color: '#10b981', icon: getIcon('<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>') },
-    'wait for import fee':  { label: 'รอแจ้งค่านำเข้า',         color: '#6366f1', icon: getIcon('<line x1="16.5" y1="9.4" x2="7.5" y2="4.21"></line><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line>') },
-    'pending import fee':   { label: 'รอชำระค่านำเข้า',         color: '#f59e0b', icon: getIcon('<rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line>') },
-    'import slip submitted': { label: 'แนบสลิปค่านำเข้าแล้ว รอตรวจสอบ', color: '#3b82f6', icon: getIcon('<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>') },
-    'invalid slip':         { label: 'สลิปไม่ถูกต้อง',           color: '#ef4444', icon: getIcon('<circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>') },
-    'invalid import slip':  { label: 'สลิปค่านำเข้าไม่ถูกต้อง', color: '#ef4444', icon: getIcon('<circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>') },
-    'ready to ship':        { label: 'เตรียมพร้อมส่ง',         color: '#10b981', icon: getIcon('<rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle>') },
-    'cancelled':            { label: 'ยกเลิกแล้ว',               color: '#6b7280', icon: getIcon('<circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>') },
+    pending: {
+      label: 'รอชำระเงิน',
+      color: '#f59e0b',
+      icon: getIcon(
+        '<circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline>',
+      ),
+    },
+    'slip submitted': {
+      label: 'แนบสลิปแล้ว รอตรวจสอบ',
+      color: '#3b82f6',
+      icon: getIcon(
+        '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>',
+      ),
+    },
+    paid: {
+      label: 'จ่ายเงินสำเร็จ รอแอดมินเรียกเก็บค่าจัดส่งในLINE',
+      color: '#10b981',
+      icon: getIcon(
+        '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>',
+      ),
+    },
+    'wait for import fee': {
+      label: 'รอแจ้งค่านำเข้า',
+      color: '#6366f1',
+      icon: getIcon(
+        '<line x1="16.5" y1="9.4" x2="7.5" y2="4.21"></line><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line>',
+      ),
+    },
+    'pending import fee': {
+      label: 'รอชำระค่านำเข้า',
+      color: '#f59e0b',
+      icon: getIcon(
+        '<rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line>',
+      ),
+    },
+    'import slip submitted': {
+      label: 'แนบสลิปค่านำเข้าแล้ว รอตรวจสอบ',
+      color: '#3b82f6',
+      icon: getIcon(
+        '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>',
+      ),
+    },
+    'invalid slip': {
+      label: 'สลิปไม่ถูกต้อง',
+      color: '#ef4444',
+      icon: getIcon(
+        '<circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>',
+      ),
+    },
+    'invalid import slip': {
+      label: 'สลิปค่านำเข้าไม่ถูกต้อง',
+      color: '#ef4444',
+      icon: getIcon(
+        '<circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>',
+      ),
+    },
+    'ready to ship': {
+      label: 'เตรียมพร้อมส่ง',
+      color: '#10b981',
+      icon: getIcon(
+        '<rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle>',
+      ),
+    },
+    cancelled: {
+      label: 'ยกเลิกแล้ว',
+      color: '#6b7280',
+      icon: getIcon(
+        '<circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>',
+      ),
+    },
   }
-  return map[s] || { label: order.value?.status || '-', color: '#6b7280', icon: getIcon('<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>') }
+  return (
+    map[s] || {
+      label: order.value?.status || '-',
+      color: '#6b7280',
+      icon: getIcon(
+        '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>',
+      ),
+    }
+  )
 })
 
 // ── สถานะสลิปไม่ถูกต้อง (แอดมินปฏิเสธ) ──
 const isInvalidSlip = computed(() => {
-  const s = String(order.value?.status || "").trim().toLowerCase().replace(/[_\s]+/g, " ")
-  return s === "invalid slip"
+  const s = String(order.value?.status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, ' ')
+  return s === 'invalid slip'
 })
 
 // สลิปค่านำเข้าถูกปฏิเสธ
 const isInvalidImportSlip = computed(() => {
-  const s = String(order.value?.status || "").trim().toLowerCase().replace(/[_\s]+/g, " ")
-  return s === "invalid import slip"
+  const s = String(order.value?.status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, ' ')
+  return s === 'invalid import slip'
 })
 
 // ── Payment & Shipping ──
 const selectedPaymentMethod = ref('bank_transfer')
 
 const defaultPaymentMethods = [
-  { id: 'bank_transfer', name: 'โอนเงินผ่านธนาคาร', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px; vertical-align: middle;"><rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect><path d="M9 22v-4h6v4"></path><path d="M8 6h.01"></path><path d="M16 6h.01"></path><path d="M12 6h.01"></path><path d="M12 10h.01"></path><path d="M12 14h.01"></path><path d="M16 10h.01"></path><path d="M16 14h.01"></path><path d="M8 10h.01"></path><path d="M8 14h.01"></path></svg>' },
-  { id: 'promptpay', name: 'พร้อมเพย์', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px; vertical-align: middle;"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>' },
+  {
+    id: 'bank_transfer',
+    name: 'โอนเงินผ่านธนาคาร',
+    icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px; vertical-align: middle;"><rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect><path d="M9 22v-4h6v4"></path><path d="M8 6h.01"></path><path d="M16 6h.01"></path><path d="M12 6h.01"></path><path d="M12 10h.01"></path><path d="M12 14h.01"></path><path d="M16 10h.01"></path><path d="M16 14h.01"></path><path d="M8 10h.01"></path><path d="M8 14h.01"></path></svg>',
+  },
+  {
+    id: 'promptpay',
+    name: 'พร้อมเพย์',
+    icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px; vertical-align: middle;"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>',
+  },
 ]
 
 const paymentMethods = ref([])
@@ -245,7 +366,7 @@ const loadPaymentMethods = async () => {
     } else {
       paymentMethods.value = defaultPaymentMethods
     }
-  } catch (err) {
+  } catch {
     paymentMethods.value = defaultPaymentMethods
   } finally {
     resolveSelectedPaymentMethod()
@@ -318,7 +439,7 @@ const isCancelled = computed(
 
 const onFileChange = async (e) => {
   // ✅ บล็อกถ้าสถานะเป็น ReadOnly หรือชำระเงินเรียบร้อยแล้ว (Paid)
-  if (isReadOnlyStage.value || isFullyPaid.value) return 
+  if (isReadOnlyStage.value || isFullyPaid.value) return
   const file = e.target.files[0]
   if (!file) return
   if (file.size > 5 * 1024 * 1024) {
@@ -329,9 +450,12 @@ const onFileChange = async (e) => {
   slipPreview.value = URL.createObjectURL(file)
 
   // ลบส่วนที่เคยยิง API fetch PATCH status ออกไปทั้งหมด
-  // ปล่อยให้หน้าที่การบันทึกสลิปและเปลี่ยนสถานะเป็นของฝั่ง Backend ตอนที่กด confirmPayment 
+  // ปล่อยให้หน้าที่การบันทึกสลิปและเปลี่ยนสถานะเป็นของฝั่ง Backend ตอนที่กด confirmPayment
   // ถ้าสถานะเป็น Invalid import slip → อัปเดตเป็น Import_slip_submitted ทันทีที่แนบสลิปใหม่
-  const currentStatus = String(order.value?.status || '').trim().toLowerCase().replace(/_/g, ' ')
+  const currentStatus = String(order.value?.status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, ' ')
   if (currentStatus === 'invalid import slip' && order.value?.order_id) {
     try {
       const res = await fetch(`${API_BASE_URL}/orders/${order.value.order_id}/status`, {
@@ -350,7 +474,7 @@ const onFileChange = async (e) => {
 
 const editSlipImage = () => {
   // ✅ บล็อกการคลิกแก้รูปสลิป ถ้าสถานะเป็น ReadOnly หรือชำระเงินเรียบร้อยแล้ว (Paid)
-  if (isReadOnlyStage.value || isFullyPaid.value) return 
+  if (isReadOnlyStage.value || isFullyPaid.value) return
   if (slipFileInput.value) slipFileInput.value.click()
 }
 
@@ -405,14 +529,23 @@ const fetchOrder = async () => {
       shippingInfo.value.phone = data.saved_shipping.phone || ''
       shippingInfo.value.address = data.saved_shipping.address || ''
       shippingInfo.value.notes = data.saved_shipping.notes || ''
-      shippingInfo.value.carrier = data.saved_shipping.carrier || data.saved_shipping.Shipping_Carrier || ''
+      shippingInfo.value.carrier =
+        data.saved_shipping.carrier || data.saved_shipping.Shipping_Carrier || ''
       resolveSelectedPaymentMethod(data.saved_shipping.payment_method || 'bank_transfer')
 
       // โหลด slip ให้ตรงกับ type:
       // - หน้าค่านำเข้า (Wait/Pending_import_fee/Invalid import slip) → ใช้ import_fee_slip_url
       // - หน้าอื่น → ใช้ slip_url (Order_fee)
-      const orderStatus = String(data.status || '').trim().toLowerCase().replace(/_/g, ' ')
-      const isImportFeeRound = ['wait for import fee', 'pending import fee', 'import slip submitted', 'invalid import slip'].includes(orderStatus)
+      const orderStatus = String(data.status || '')
+        .trim()
+        .toLowerCase()
+        .replace(/_/g, ' ')
+      const isImportFeeRound = [
+        'wait for import fee',
+        'pending import fee',
+        'import slip submitted',
+        'invalid import slip',
+      ].includes(orderStatus)
       const slipToLoad = isImportFeeRound
         ? data.saved_shipping.import_fee_slip_url
         : data.saved_shipping.slip_url
@@ -439,15 +572,31 @@ const confirmPayment = async () => {
   if (loading.value || isReadOnlyStage.value) return
 
   // แปลงสถานะเพื่อเช็กเงื่อนไขให้ง่ายขึ้น
-  const currentStatus = String(order.value?.status || '').trim().toLowerCase()
+  const currentStatus = String(order.value?.status || '')
+    .trim()
+    .toLowerCase()
   const normalizedStatus = currentStatus.replace(/_/g, ' ')
-  
+
   // หากเป็นกรณีสเตจพรีออเดอร์ทั่วไป ให้ตรวจสอบค่าความถูกต้องของอินพุตจัดส่งก่อนส่งฟอร์มเสมอ
-  const isInputActiveStage = ['wait for import fee', 'pending import fee', 'import slip submitted', 'invalid import slip', 'paid'].includes(normalizedStatus)
+  const isInputActiveStage = [
+    'wait for import fee',
+    'pending import fee',
+    'import slip submitted',
+    'invalid import slip',
+    'paid',
+  ].includes(normalizedStatus)
 
   if (isInputActiveStage) {
-    if (!shippingInfo.value.name || !shippingInfo.value.phone || !shippingInfo.value.address || !shippingInfo.value.carrier) {
-      showNotice('กรุณากรอกข้อมูลจัดส่ง ชื่อ เบอร์โทร บริษัทขนส่ง และที่อยู่ให้ครบถ้วนก่อนส่งประวัติข้อมูล', 'error')
+    if (
+      !shippingInfo.value.name ||
+      !shippingInfo.value.phone ||
+      !shippingInfo.value.address ||
+      !shippingInfo.value.carrier
+    ) {
+      showNotice(
+        'กรุณากรอกข้อมูลจัดส่ง ชื่อ เบอร์โทร บริษัทขนส่ง และที่อยู่ให้ครบถ้วนก่อนส่งประวัติข้อมูล',
+        'error',
+      )
       return
     }
   }
@@ -518,7 +667,9 @@ const confirmPayment = async () => {
       })
       if (!res.ok) {
         const errorBody = await res.json().catch(() => null)
-        throw new Error(errorBody?.error || errorBody?.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลจัดส่ง')
+        throw new Error(
+          errorBody?.error || errorBody?.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลจัดส่ง',
+        )
       }
       showNotice('อัปเดตข้อมูลการจัดส่งเรียบร้อยแล้ว!', 'success')
       setTimeout(() => router.push('/order-list'), 2500)
@@ -535,7 +686,11 @@ const confirmPayment = async () => {
     formData.append('shipping_carrier', shippingInfo.value.carrier)
     formData.append('notes', shippingInfo.value.notes || '')
 
-    if (['wait for import fee', 'pending import fee', 'invalid import slip'].includes(normalizedStatus)) {
+    if (
+      ['wait for import fee', 'pending import fee', 'invalid import slip'].includes(
+        normalizedStatus,
+      )
+    ) {
       formData.append('type', 'Import_Fee')
     }
 
@@ -635,7 +790,21 @@ onMounted(async () => {
         <span class="back-btn__text">กลับรายการออเดอร์</span>
       </button>
       <div class="navbar__logo">
-        <span class="logo-mark"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5c.67 0 1.35.09 2 .26 1.78-2 5.03-2.84 6.42-2.26 1.4.58-.42 7-.42 7 .57 1.07 1 2.24 1 3.5 0 3.5-3.58 4-8.9 4-5.33 0-9-1.5-9-5 0-1.26.43-2.43 1-3.5 0 0-1.82-6.42-.42-7 1.39-.58 4.64.26 6.42 2.26.65-.17 1.33-.26 2-.26z"></path></svg></span>
+        <span class="logo-mark"
+          ><svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path
+              d="M12 5c.67 0 1.35.09 2 .26 1.78-2 5.03-2.84 6.42-2.26 1.4.58-.42 7-.42 7 .57 1.07 1 2.24 1 3.5 0 3.5-3.58 4-8.9 4-5.33 0-9-1.5-9-5 0-1.26.43-2.43 1-3.5 0 0-1.82-6.42-.42-7 1.39-.58 4.64.26 6.42 2.26.65-.17 1.33-.26 2-.26z"
+            ></path></svg
+        ></span>
         <span class="logo-text">Meowverse</span>
       </div>
     </nav>
@@ -694,9 +863,17 @@ onMounted(async () => {
                   <span class="hero-meta-label">สถานะ</span>
                   <strong
                     class="hero-meta-status"
-                    :style="{ color: orderStatusDisplay.color + ' !important', display: 'flex', alignItems: 'center', gap: '5px' }"
+                    :style="{
+                      color: orderStatusDisplay.color + ' !important',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                    }"
                   >
-                    <span style="display: flex; align-items: center;" v-html="orderStatusDisplay.icon"></span>
+                    <span
+                      style="display: flex; align-items: center"
+                      v-html="orderStatusDisplay.icon"
+                    ></span>
                     {{ orderStatusDisplay.label }}
                   </strong>
                 </div>
@@ -706,7 +883,24 @@ onMounted(async () => {
 
           <div class="section-card">
             <div class="section-header">
-              <h2 class="section-title" style="display: flex; align-items: center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg> รายการสินค้าพรีออเดอร์</h2>
+              <h2 class="section-title" style="display: flex; align-items: center">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="margin-right: 8px"
+                >
+                  <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
+                  <line x1="3" y1="6" x2="21" y2="6"></line>
+                  <path d="M16 10a4 4 0 0 1-8 0"></path>
+                </svg>
+                รายการสินค้าพรีออเดอร์
+              </h2>
               <span class="section-pill">{{ order.items?.length || 0 }} รายการ</span>
             </div>
 
@@ -716,23 +910,76 @@ onMounted(async () => {
               style="margin-bottom: 1.5rem"
             >
               <h3
-                style="font-size: 0.9rem; font-weight: 800; color: #10b981; margin-bottom: 0.6rem; display: flex; align-items: center;"
+                style="
+                  font-size: 0.9rem;
+                  font-weight: 800;
+                  color: #10b981;
+                  margin-bottom: 0.6rem;
+                  display: flex;
+                  align-items: center;
+                "
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="margin-right: 6px;"><circle cx="12" cy="12" r="10"></circle></svg> พร้อมส่ง
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  stroke="none"
+                  style="margin-right: 6px"
+                >
+                  <circle cx="12" cy="12" r="10"></circle>
+                </svg>
+                พร้อมส่ง
               </h3>
               <div class="item-list">
                 <div v-for="it in readyItems" :key="it.detail_id" class="order-item">
                   <div class="item-img">
                     <img v-if="resolveItemImage(it)" :src="resolveItemImage(it)" :alt="it.name" />
                     <div v-else class="item-img-placeholder">
-                      <svg viewBox="0 0 40 40" fill="none" width="28" height="28"><rect width="40" height="40" rx="8" fill="#f0e6ff"/><rect x="8" y="10" width="24" height="20" rx="4" stroke="#c9a8f0" stroke-width="2" fill="none"/><circle cx="14" cy="18" r="3" stroke="#c9a8f0" stroke-width="1.5" fill="none"/><path d="M8 26l8-7 6 6 4-4 6 5" stroke="#c9a8f0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                      <svg viewBox="0 0 40 40" fill="none" width="28" height="28">
+                        <rect width="40" height="40" rx="8" fill="#f0e6ff" />
+                        <rect
+                          x="8"
+                          y="10"
+                          width="24"
+                          height="20"
+                          rx="4"
+                          stroke="#c9a8f0"
+                          stroke-width="2"
+                          fill="none"
+                        />
+                        <circle
+                          cx="14"
+                          cy="18"
+                          r="3"
+                          stroke="#c9a8f0"
+                          stroke-width="1.5"
+                          fill="none"
+                        />
+                        <path
+                          d="M8 26l8-7 6 6 4-4 6 5"
+                          stroke="#c9a8f0"
+                          stroke-width="1.5"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        />
+                      </svg>
                     </div>
                   </div>
                   <div class="item-info">
                     <p class="item-name">
                       {{ it.name || it.prod_name }}
-                      <span v-if="it.flavor || it.Flavor" style="display: block; color: #8b5cf6; font-size: 0.85em; font-weight: 600; margin-top: 2px;">
-                       ({{ it.flavor || it.Flavor }})
+                      <span
+                        v-if="it.flavor || it.Flavor"
+                        style="
+                          display: block;
+                          color: #8b5cf6;
+                          font-size: 0.85em;
+                          font-weight: 600;
+                          margin-top: 2px;
+                        "
+                      >
+                        ({{ it.flavor || it.Flavor }})
                       </span>
                     </p>
                     <p class="item-price-small">
@@ -755,23 +1002,80 @@ onMounted(async () => {
               style="margin-bottom: 1.5rem"
             >
               <h3
-                style="font-size: 0.9rem; font-weight: 800; color: #7c3aed; margin-bottom: 0.6rem; display: flex; align-items: center;"
+                style="
+                  font-size: 0.9rem;
+                  font-weight: 800;
+                  color: #7c3aed;
+                  margin-bottom: 0.6rem;
+                  display: flex;
+                  align-items: center;
+                "
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> พรีออเดอร์
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="margin-right: 6px"
+                >
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+                พรีออเดอร์
               </h3>
               <div class="item-list">
                 <div v-for="it in preorderItems" :key="it.detail_id" class="order-item">
                   <div class="item-img">
                     <img v-if="resolveItemImage(it)" :src="resolveItemImage(it)" :alt="it.name" />
                     <div v-else class="item-img-placeholder">
-                      <svg viewBox="0 0 40 40" fill="none" width="28" height="28"><rect width="40" height="40" rx="8" fill="#f0e6ff"/><rect x="8" y="10" width="24" height="20" rx="4" stroke="#c9a8f0" stroke-width="2" fill="none"/><circle cx="14" cy="18" r="3" stroke="#c9a8f0" stroke-width="1.5" fill="none"/><path d="M8 26l8-7 6 6 4-4 6 5" stroke="#c9a8f0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                      <svg viewBox="0 0 40 40" fill="none" width="28" height="28">
+                        <rect width="40" height="40" rx="8" fill="#f0e6ff" />
+                        <rect
+                          x="8"
+                          y="10"
+                          width="24"
+                          height="20"
+                          rx="4"
+                          stroke="#c9a8f0"
+                          stroke-width="2"
+                          fill="none"
+                        />
+                        <circle
+                          cx="14"
+                          cy="18"
+                          r="3"
+                          stroke="#c9a8f0"
+                          stroke-width="1.5"
+                          fill="none"
+                        />
+                        <path
+                          d="M8 26l8-7 6 6 4-4 6 5"
+                          stroke="#c9a8f0"
+                          stroke-width="1.5"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        />
+                      </svg>
                     </div>
                   </div>
                   <div class="item-info">
                     <p class="item-name">
                       {{ it.name || it.prod_name }}
-                      <span v-if="it.flavor || it.Flavor" style="display: block; color: #8b5cf6; font-size: 0.85em; font-weight: 600; margin-top: 2px;">
-                       ({{ it.flavor || it.Flavor }})
+                      <span
+                        v-if="it.flavor || it.Flavor"
+                        style="
+                          display: block;
+                          color: #8b5cf6;
+                          font-size: 0.85em;
+                          font-weight: 600;
+                          margin-top: 2px;
+                        "
+                      >
+                        ({{ it.flavor || it.Flavor }})
                       </span>
                     </p>
                     <p
@@ -800,23 +1104,79 @@ onMounted(async () => {
               style="margin-bottom: 1.5rem"
             >
               <h3
-                style="font-size: 0.9rem; font-weight: 800; color: #6b7280; margin-bottom: 0.6rem; display: flex; align-items: center;"
+                style="
+                  font-size: 0.9rem;
+                  font-weight: 800;
+                  color: #6b7280;
+                  margin-bottom: 0.6rem;
+                  display: flex;
+                  align-items: center;
+                "
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg> รายการอื่น ๆ
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="margin-right: 6px"
+                >
+                  <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+                </svg>
+                รายการอื่น ๆ
               </h3>
               <div class="item-list">
                 <div v-for="it in unspecifiedItems" :key="it.detail_id" class="order-item">
                   <div class="item-img">
                     <img v-if="resolveItemImage(it)" :src="resolveItemImage(it)" :alt="it.name" />
                     <div v-else class="item-img-placeholder">
-                      <svg viewBox="0 0 40 40" fill="none" width="28" height="28"><rect width="40" height="40" rx="8" fill="#f0e6ff"/><rect x="8" y="10" width="24" height="20" rx="4" stroke="#c9a8f0" stroke-width="2" fill="none"/><circle cx="14" cy="18" r="3" stroke="#c9a8f0" stroke-width="1.5" fill="none"/><path d="M8 26l8-7 6 6 4-4 6 5" stroke="#c9a8f0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                      <svg viewBox="0 0 40 40" fill="none" width="28" height="28">
+                        <rect width="40" height="40" rx="8" fill="#f0e6ff" />
+                        <rect
+                          x="8"
+                          y="10"
+                          width="24"
+                          height="20"
+                          rx="4"
+                          stroke="#c9a8f0"
+                          stroke-width="2"
+                          fill="none"
+                        />
+                        <circle
+                          cx="14"
+                          cy="18"
+                          r="3"
+                          stroke="#c9a8f0"
+                          stroke-width="1.5"
+                          fill="none"
+                        />
+                        <path
+                          d="M8 26l8-7 6 6 4-4 6 5"
+                          stroke="#c9a8f0"
+                          stroke-width="1.5"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        />
+                      </svg>
                     </div>
                   </div>
                   <div class="item-info">
                     <p class="item-name">
                       {{ it.name || it.prod_name }}
-                      <span v-if="it.flavor || it.Flavor" style="display: block; color: #8b5cf6; font-size: 0.85em; font-weight: 600; margin-top: 2px;">
-                       ({{ it.flavor || it.Flavor }})
+                      <span
+                        v-if="it.flavor || it.Flavor"
+                        style="
+                          display: block;
+                          color: #8b5cf6;
+                          font-size: 0.85em;
+                          font-weight: 600;
+                          margin-top: 2px;
+                        "
+                      >
+                        ({{ it.flavor || it.Flavor }})
                       </span>
                     </p>
                     <p class="item-price-small">
@@ -836,9 +1196,30 @@ onMounted(async () => {
 
           <div v-if="isImportFeeStage && !isWaitingForImportFee" class="section-card form-panel">
             <div class="section-header section-header--stacked">
-              <h3 class="section-title" style="display: flex; align-items: center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg> ข้อมูลจัดส่ง
+              <h3 class="section-title" style="display: flex; align-items: center">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="margin-right: 8px"
+                >
+                  <path
+                    d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"
+                  ></path>
+                  <polyline points="22,6 12,13 2,6"></polyline>
+                </svg>
+                ข้อมูลจัดส่ง
               </h3>
-              <span class="section-caption">{{ isReadOnlyStage ? 'ข้อมูลการจัดส่งสินค้าพรีออเดอร์ (ล็อกเนื่องจากเตรียมจัดส่งแล้ว)' : 'สามารถแก้ไขข้อมูลจัดส่งได้จนกว่าสินค้าจะเตรียมจัดส่ง' }}</span>
+              <span class="section-caption">{{
+                isReadOnlyStage
+                  ? 'ข้อมูลการจัดส่งสินค้าพรีออเดอร์ (ล็อกเนื่องจากเตรียมจัดส่งแล้ว)'
+                  : 'สามารถแก้ไขข้อมูลจัดส่งได้จนกว่าสินค้าจะเตรียมจัดส่ง'
+              }}</span>
             </div>
             <div class="order-info">
               <div class="field-group">
@@ -850,7 +1231,7 @@ onMounted(async () => {
                   :disabled="isReadOnlyStage"
                 />
               </div>
-              
+
               <div class="field-group field-group--two-cols">
                 <div>
                   <label for="recipient-phone">เบอร์โทรศัพท์</label>
@@ -863,7 +1244,11 @@ onMounted(async () => {
                 </div>
                 <div>
                   <label for="shipping-carrier">บริษัทขนส่ง</label>
-                  <select id="shipping-carrier" v-model="shippingInfo.carrier" :disabled="isReadOnlyStage">
+                  <select
+                    id="shipping-carrier"
+                    v-model="shippingInfo.carrier"
+                    :disabled="isReadOnlyStage"
+                  >
                     <option value="">-- เลือกบริษัทขนส่ง --</option>
                     <option value="Kerry">Kerry</option>
                     <option value="Flash">Flash</option>
@@ -902,14 +1287,45 @@ onMounted(async () => {
             <div v-if="!isFullyPaid" class="section-card postpone-card postpone-card--prominent">
               <div v-if="!isWaitingForImportFee" class="postpone-header">
                 <div>
-                  <p class="postpone-title" style="display: flex; align-items: center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg> ข้อมูลกำหนดชำระ</p>
+                  <p class="postpone-title" style="display: flex; align-items: center">
+                    <svg
+                      width="18"
+                      height="18"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      style="margin-right: 6px"
+                    >
+                      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                      <line x1="16" y1="2" x2="16" y2="6"></line>
+                      <line x1="8" y1="2" x2="8" y2="6"></line>
+                      <line x1="3" y1="10" x2="21" y2="10"></line>
+                    </svg>
+                    ข้อมูลกำหนดชำระ
+                  </p>
                   <p class="postpone-subtitle">กำหนดชำระล่าสุด</p>
                 </div>
                 <strong>{{ orderDeadlineDisplay }}</strong>
               </div>
 
               <div v-if="isWaitingForImportFee" class="wait-import-notice">
-                <span class="wait-import-notice__icon" style="display: flex; align-items: center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></span>
+                <span class="wait-import-notice__icon" style="display: flex; align-items: center"
+                  ><svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polyline points="12 6 12 12 16 14"></polyline></svg
+                ></span>
                 <div class="wait-import-notice__text">
                   <strong>รอแอดมินแจ้งค่านำเข้า</strong>
                   <span>กรุณารอแอดมินคำนวณและแจ้งค่านำเข้าก่อน จึงจะสามารถชำระเงินรอบ 2 ได้</span>
@@ -939,29 +1355,96 @@ onMounted(async () => {
                   }}</span>
                 </div>
                 <div class="postpone-latest-banner__detail">
-                  <span style="display: flex; align-items: center; gap: 4px;">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
-                    วันที่ขอเลื่อน: <strong>{{
+                  <span style="display: flex; align-items: center; gap: 4px">
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                      <line x1="16" y1="2" x2="16" y2="6"></line>
+                      <line x1="8" y1="2" x2="8" y2="6"></line>
+                      <line x1="3" y1="10" x2="21" y2="10"></line>
+                    </svg>
+                    วันที่ขอเลื่อน:
+                    <strong>{{
                       formatThaiDateTime(
                         latestPostpone.new_deadline || latestPostpone.Post_date,
                         'ยังไม่ระบุ',
                       )
                     }}</strong>
                   </span>
-                  <span v-if="latestPostpone.request_reason" style="display: flex; align-items: flex-start; gap: 4px; margin-top: 2px;">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-top: 2px; flex-shrink: 0;"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
+                  <span
+                    v-if="latestPostpone.request_reason"
+                    style="display: flex; align-items: flex-start; gap: 4px; margin-top: 2px"
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      style="margin-top: 2px; flex-shrink: 0"
+                    >
+                      <path
+                        d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"
+                      ></path>
+                    </svg>
                     <span style="flex: 1">เหตุผล: {{ latestPostpone.request_reason }}</span>
                   </span>
-                  <span v-if="latestPostpone.contact_phone" style="display: flex; align-items: center; gap: 4px; margin-top: 2px;">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                  <span
+                    v-if="latestPostpone.contact_phone"
+                    style="display: flex; align-items: center; gap: 4px; margin-top: 2px"
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path
+                        d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"
+                      ></path>
+                    </svg>
                     เบอร์ติดต่อ: {{ latestPostpone.contact_phone }}
                   </span>
                 </div>
               </div>
 
               <div v-if="showPostponeForm" class="postpone-form">
-                <p v-if="latestPostpone" class="postpone-prefill-note" style="display: flex; align-items: center;">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px; flex-shrink: 0;"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>
+                <p
+                  v-if="latestPostpone"
+                  class="postpone-prefill-note"
+                  style="display: flex; align-items: center"
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    style="margin-right: 6px; flex-shrink: 0"
+                  >
+                    <path
+                      d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
+                    ></path>
+                    <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+                  </svg>
                   ข้อมูลด้านล่างดึงมาจากคำขอครั้งล่าสุด แก้ไขได้ตามต้องการ
                 </p>
                 <div class="field-group">
@@ -1011,31 +1494,70 @@ onMounted(async () => {
             </div>
 
             <div v-if="isCancelled" class="cancelled-banner">
-              <div class="cancelled-banner__icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg></div>
+              <div class="cancelled-banner__icon">
+                <svg
+                  width="22"
+                  height="22"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+                </svg>
+              </div>
               <div class="cancelled-banner__text">
                 <strong>ออเดอร์นี้ถูกยกเลิกแล้ว</strong>
                 <span>หากต้องการชำระเงินต่อ กรุณาขอเลื่อนกำหนดชำระก่อน แล้วรอแอดมินอนุมัติ</span>
               </div>
             </div>
 
-            <div v-if="!isCancelled && !isWaitingForImportFee" class="section-card glass-card payment-panel">
-              <h3 class="section-title" style="display: flex; align-items: center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line></svg> วิธีการชำระเงิน</h3>
-              <div 
-                class="payment-methods" 
+            <div
+              v-if="!isCancelled && !isWaitingForImportFee"
+              class="section-card glass-card payment-panel"
+            >
+              <h3 class="section-title" style="display: flex; align-items: center">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="margin-right: 8px"
+                >
+                  <rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect>
+                  <line x1="1" y1="10" x2="23" y2="10"></line>
+                </svg>
+                วิธีการชำระเงิน
+              </h3>
+              <div
+                class="payment-methods"
                 :style="isFullyPaid ? { pointerEvents: 'none', opacity: 0.75 } : {}"
               >
                 <div
                   v-for="method in paymentMethods"
                   :key="method.qr_id || method.id"
                   class="payment-method"
-                  :class="{ 'payment-method--selected': selectedPaymentMethod === (method.qr_id || method.id) }"
+                  :class="{
+                    'payment-method--selected':
+                      selectedPaymentMethod === (method.qr_id || method.id),
+                  }"
                   @click="selectedPaymentMethod = method.qr_id || method.id"
                 >
                   <div class="payment-method-summary">
                     <span class="method-name">{{ method.payment_method || method.name }}</span>
                   </div>
 
-                  <div v-if="selectedPaymentMethod === (method.qr_id || method.id)" class="payment-method-qr">
+                  <div
+                    v-if="selectedPaymentMethod === (method.qr_id || method.id)"
+                    class="payment-method-qr"
+                  >
                     <img
                       v-if="method.qr_image"
                       :src="getQrImageUrl(method.qr_image)"
@@ -1050,25 +1572,88 @@ onMounted(async () => {
 
               <div class="section-divider"></div>
 
-              <h3 class="section-title" style="display: flex; align-items: center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg> หลักฐานการโอน</h3>
+              <h3 class="section-title" style="display: flex; align-items: center">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="margin-right: 8px"
+                >
+                  <path
+                    d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"
+                  ></path>
+                  <circle cx="12" cy="13" r="4"></circle>
+                </svg>
+                หลักฐานการโอน
+              </h3>
 
               <div v-if="isInvalidSlip" class="invalid-slip-banner">
-                <div class="invalid-slip-banner__icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></div>
+                <div class="invalid-slip-banner__icon">
+                  <svg
+                    width="22"
+                    height="22"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path
+                      d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+                    ></path>
+                    <line x1="12" y1="9" x2="12" y2="13"></line>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                  </svg>
+                </div>
                 <div class="invalid-slip-banner__text">
                   <strong>สลิปไม่ถูกต้อง กรุณาแนบสลิปใหม่</strong>
-                  <span>แอดมินตรวจสอบแล้วพบว่าสลิปที่แนบมาไม่ถูกต้อง กรุณาอัปโหลดสลิปใหม่อีกครั้ง</span>
+                  <span
+                    >แอดมินตรวจสอบแล้วพบว่าสลิปที่แนบมาไม่ถูกต้อง กรุณาอัปโหลดสลิปใหม่อีกครั้ง</span
+                  >
                 </div>
               </div>
 
-              <div v-if="isInvalidImportSlip" class="invalid-slip-banner invalid-slip-banner--import">
-                <div class="invalid-slip-banner__icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></div>
+              <div
+                v-if="isInvalidImportSlip"
+                class="invalid-slip-banner invalid-slip-banner--import"
+              >
+                <div class="invalid-slip-banner__icon">
+                  <svg
+                    width="22"
+                    height="22"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path
+                      d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+                    ></path>
+                    <line x1="12" y1="9" x2="12" y2="13"></line>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                  </svg>
+                </div>
                 <div class="invalid-slip-banner__text">
                   <strong>สลิปค่านำเข้าไม่ถูกต้อง กรุณาแนบสลิปใหม่</strong>
-                  <span>แอดมินตรวจสอบแล้วพบว่าสลิปค่านำเข้าที่แนบมาไม่ถูกต้อง กรุณาอัปโหลดสลิปค่านำเข้าใหม่อีกครั้ง</span>
+                  <span
+                    >แอดมินตรวจสอบแล้วพบว่าสลิปค่านำเข้าที่แนบมาไม่ถูกต้อง
+                    กรุณาอัปโหลดสลิปค่านำเข้าใหม่อีกครั้ง</span
+                  >
                 </div>
               </div>
 
-              <div class="upload-area" :class="{ 'upload-area--invalid': isInvalidSlip || isInvalidImportSlip }">
+              <div
+                class="upload-area"
+                :class="{ 'upload-area--invalid': isInvalidSlip || isInvalidImportSlip }"
+              >
                 <input
                   ref="slipFileInput"
                   type="file"
@@ -1080,7 +1665,21 @@ onMounted(async () => {
                 />
                 <div v-if="!slipImageUrl" class="upload-label" @click="editSlipImage">
                   <div class="upload-prompt">
-                    <span class="upload-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg></span>
+                    <span class="upload-icon"
+                      ><svg
+                        width="22"
+                        height="22"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2.5"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line></svg
+                    ></span>
                     <span>คลิกเพื่ออัปโหลดสลิป</span>
                     <small>รองรับ JPG, PNG, WEBP ไม่เกิน 5MB</small>
                   </div>
@@ -1092,7 +1691,13 @@ onMounted(async () => {
                     @click="viewSlipImage"
                     title="คลิกเพื่อดูรูปภาพขนาดเต็ม"
                   />
-                  <div v-if="!(isReadOnlyStage || isFullyPaid)" class="edit-overlay" @click.stop="editSlipImage">แตะเพื่อเปลี่ยนรูปภาพ</div>
+                  <div
+                    v-if="!(isReadOnlyStage || isFullyPaid)"
+                    class="edit-overlay"
+                    @click.stop="editSlipImage"
+                  >
+                    แตะเพื่อเปลี่ยนรูปภาพ
+                  </div>
                 </div>
               </div>
             </div>
@@ -1138,12 +1743,36 @@ onMounted(async () => {
                       align-items: center;
                       gap: 4px;
                     "
+                  >
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
                     >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <polyline points="12 6 12 12 16 14"></polyline>
+                    </svg>
                     รอแจ้งจากแอดมิน</span
                   >
-                  <span v-else style="color: #10b981; display: flex; align-items: center; gap: 4px;">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                  <span v-else style="color: #10b981; display: flex; align-items: center; gap: 4px">
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                      <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                    </svg>
                     แจ้งแล้ว
                   </span>
                 </div>
@@ -1157,10 +1786,16 @@ onMounted(async () => {
                 <span class="summary-label">ยอดรวม</span>
                 <strong class="summary-amount"> ฿{{ amountDue.toLocaleString() }} </strong>
               </div>
-              <div class="summary-note">สามารถกดบันทึกเพื่ออัปเดตข้อมูลจัดส่งใหม่เข้าสู่ฐานข้อมูลได้</div>
+              <div class="summary-note">
+                สามารถกดบันทึกเพื่ออัปเดตข้อมูลจัดส่งใหม่เข้าสู่ฐานข้อมูลได้
+              </div>
               <hr class="divider" />
-              
-              <button class="btn-checkout" @click="confirmPayment" :disabled="loading || isReadOnlyStage">
+
+              <button
+                class="btn-checkout"
+                @click="confirmPayment"
+                :disabled="loading || isReadOnlyStage"
+              >
                 {{
                   loading
                     ? 'กำลังประมวลผล...'
@@ -1569,7 +2204,7 @@ onMounted(async () => {
   font-weight: 800;
 }
 .invalid-slip-banner__text span {
-  font-size: 0.80rem;
+  font-size: 0.8rem;
   font-weight: 500;
   line-height: 1.5;
   opacity: 0.9;
@@ -1646,7 +2281,8 @@ onMounted(async () => {
   grid-template-columns: 1fr 1fr;
   gap: 0.8rem;
 }
-.field-group label, .form-label {
+.field-group label,
+.form-label {
   font-size: 0.84rem;
   font-weight: 700;
   color: #5a487c;
@@ -2045,11 +2681,13 @@ onMounted(async () => {
   font-size: 2rem;
   cursor: pointer;
 }
-.fade-enter-active, .fade-leave-active { 
-  transition: opacity 0.3s; 
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.3s;
 }
-.fade-enter-from, .fade-leave-to { 
-  opacity: 0; 
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 
 @keyframes spin {

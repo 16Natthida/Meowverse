@@ -827,7 +827,7 @@ router.get('/:order_id', async (req, res) => {
       notes: order.shipping_notes || null,
       carrier: order.Shipping_Carrier || null,
       // slip แยกตาม type ให้ frontend ใช้ตัดสินใจเอง
-      slip_url: orderFeePayment?.slip_img || null,           // สลิปรอบแรก (Order_fee)
+      slip_url: orderFeePayment?.slip_img || null, // สลิปรอบแรก (Order_fee)
       import_fee_slip_url: importFeePayment?.slip_img || null, // สลิปรอบค่านำเข้า
       payment_method: latestPayment?.payment_method || null,
       payment_status: latestPayment?.status || null,
@@ -863,11 +863,32 @@ COALESCE(
       [order_id],
     )
 
+    const missingAmount = detailRows.reduce((sum, item) => {
+      const orderedQty = Number(item.qty || 0)
+      const receivedQty = item.received_qty != null ? Number(item.received_qty) : orderedQty
+      return sum + Math.max(orderedQty - receivedQty, 0) * Number(item.unit_price || 0)
+    }, 0)
+
+    const missingItems = detailRows.reduce((sum, item) => {
+      const orderedQty = Number(item.qty || 0)
+      const receivedQty = item.received_qty != null ? Number(item.received_qty) : orderedQty
+      return sum + (orderedQty > receivedQty ? 1 : 0)
+    }, 0)
+
+    const receivedAmount = detailRows.reduce((sum, item) => {
+      const receivedQty =
+        item.received_qty != null ? Number(item.received_qty) : Number(item.qty || 0)
+      return sum + receivedQty * Number(item.unit_price || 0)
+    }, 0)
+
     // Use import_fee_total from orders table (already set by admin)
     res.json({
       ...order,
       items: detailRows,
       import_fee_total: order.import_fee_total !== undefined ? Number(order.import_fee_total) : 0,
+      missing_amount: missingAmount,
+      missing_items: missingItems,
+      received_amount: receivedAmount,
       saved_shipping: savedShipping,
     })
   } catch (err) {
@@ -978,7 +999,13 @@ router.patch('/:order_id/status', async (req, res) => {
 
     // เฉพาะ Preorder เท่านั้นที่อนุญาต Wait_for_Import_Fee, Paid (2 รอบ)
     if (
-      (['Wait_for_Import_Fee', 'Pending_import_fee', 'Import_slip_submitted', 'Slip_submitted', 'Paid'].includes(status)) &&
+      [
+        'Wait_for_Import_Fee',
+        'Pending_import_fee',
+        'Import_slip_submitted',
+        'Slip_submitted',
+        'Paid',
+      ].includes(status) &&
       orderType !== 'preorder'
     ) {
       return res
@@ -989,10 +1016,17 @@ router.patch('/:order_id/status', async (req, res) => {
     // อื่นๆ (Ready, ฯลฯ) อนุญาตเฉพาะ Pending, Ready_to_Ship, Cancelled, Invalid slip
     if (
       orderType !== 'preorder' &&
-      (['Wait_for_Import_Fee', 'Pending_import_fee', 'Import_slip_submitted', 'Slip_submitted', 'Paid'].includes(status))
+      [
+        'Wait_for_Import_Fee',
+        'Pending_import_fee',
+        'Import_slip_submitted',
+        'Slip_submitted',
+        'Paid',
+      ].includes(status)
     ) {
       return res.status(400).json({
-        error: 'เฉพาะ Preorder เท่านั้นที่เปลี่ยนสถานะเป็น Wait_for_Import_Fee, Pending_import_fee, Slip_submitted, Import_slip_submitted หรือ Paid ได้',
+        error:
+          'เฉพาะ Preorder เท่านั้นที่เปลี่ยนสถานะเป็น Wait_for_Import_Fee, Pending_import_fee, Slip_submitted, Import_slip_submitted หรือ Paid ได้',
       })
     }
 
@@ -1025,10 +1059,9 @@ router.patch('/:order_id/reject-slip', async (req, res) => {
 
   try {
     const db = getDB(req)
-    const [rows] = await db.query(
-      'SELECT status FROM orders WHERE order_id = ? LIMIT 1',
-      [order_id],
-    )
+    const [rows] = await db.query('SELECT status FROM orders WHERE order_id = ? LIMIT 1', [
+      order_id,
+    ])
 
     if (rows.length === 0) {
       return res.status(404).json({ error: 'ไม่พบออเดอร์ที่ระบุ' })
