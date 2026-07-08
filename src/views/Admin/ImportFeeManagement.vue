@@ -65,7 +65,7 @@
         <span class="table-title"
           >รายการสินค้าในรอบ <b>{{ selectedRound.round_name }}</b></span
         >
-        <span class="table-count">{{ selectedRound.products.length }} รายการ</span>
+        <span class="table-count">{{ groupedProducts.length }} รายการ</span>
       </div>
 
       <div class="table-wrap">
@@ -83,7 +83,7 @@
           <tbody>
             <tr
               v-for="item in groupedProducts"
-              :key="item.prod_id"
+              :key="item.groupKey || item.prod_id"
               :class="{
                 'row--filled': feeInputs[item.prod_id] > 0,
                 'row--locked': !item.hasReceivedQty,
@@ -247,6 +247,7 @@ const groupedProducts = computed(() => {
     if (!groups[item.prod_id]) {
       groups[item.prod_id] = {
         ...item,
+        groupKey: `prod:${item.prod_id}`,
         flavors: new Set(),
         total_sold_qty: 0,
         total_received_qty: 0,
@@ -254,8 +255,9 @@ const groupedProducts = computed(() => {
     }
 
     // เก็บชื่อรสชาติ (ไม่ให้ซ้ำกัน)
-    if (item.flavor) {
-      groups[item.prod_id].flavors.add(item.flavor)
+    const flavorValue = item.flavor || item.flavorDisplay
+    if (flavorValue) {
+      groups[item.prod_id].flavors.add(flavorValue)
     }
 
     // รวมยอดขายและยอดรับจริงของทุกรสชาติเข้าด้วยกัน

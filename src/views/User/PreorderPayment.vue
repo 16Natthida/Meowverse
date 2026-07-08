@@ -2,7 +2,7 @@
 // Helper to display the correct price (import fee or original price)
 function displayPrice(item) {
   // Use import_fee as the effective price when in import fee stage and fee is set
-  if (order.value?.is_import_fee_stage && Number(item.import_fee) > 0) {
+  if (isImportFeeStage.value && Number(item.import_fee) > 0) {
     return Number(item.import_fee)
   }
   return Number(item.price || item.Price || item.unit_price || 0)
@@ -70,69 +70,61 @@ const error = ref(null)
 const notice = ref({ msg: '', type: '' })
 
 // ── สรุปยอดและประเภทสินค้าของ Preorder ──
-const importFeeTotal = computed(() => Number(order.value?.import_fee_total || 0))
+const importFeeTotal = computed(() => {
+  const orderTotal = Number(order.value?.import_fee_total || 0)
+  const itemTotal = Number(
+    order.value?.items?.reduce(
+      (sum, item) =>
+        sum +
+        Number(item.import_fee || item.Import_fee || 0) * Number(item.qty || 0),
+      0,
+    ) || 0,
+  )
 
-// แสดงกล่องข้อมูลจัดส่งเมื่อเข้าสู่สเตจค่านำเข้า รวมถึงสถานะหลังจากนั้นทั้งหมดด้วย
-const isImportFeeStage = computed(() => {
-  const status = String(order.value?.status || '')
+  return itemTotal > 0 ? itemTotal : orderTotal
+})
+
+const normalizedOrderStatus = computed(() =>
+  String(order.value?.status || '')
     .trim()
     .toLowerCase()
-    .replace(/_/g, ' ')
-  return [
+    .replace(/_/g, ' '),
+)
+
+const isImportFeeRound = computed(() =>
+  [
     'wait for import fee',
     'pending import fee',
     'import slip submitted',
     'invalid import slip',
-    'paid',
-    'ready to ship',
-  ].includes(status)
-})
+  ].includes(normalizedOrderStatus.value),
+)
+
+// แสดงกล่องข้อมูลจัดส่งเมื่อเข้าสู่สเตจค่านำเข้า รวมถึงสถานะหลังจากนั้นทั้งหมดด้วย
+const isImportFeeStage = computed(() =>
+  isImportFeeRound.value || ['paid', 'ready to ship'].includes(normalizedOrderStatus.value),
+)
 
 // รอแอดมินแจ้งค่านำเข้า: ล็อกทุกอย่างยกเว้นขอเลื่อนเวลา
-const isWaitingForImportFee = computed(() => {
-  const status = String(order.value?.status || '')
-    .trim()
-    .toLowerCase()
-  return status === 'wait_for_import_fee'
-})
+const isWaitingForImportFee = computed(() => normalizedOrderStatus.value === 'wait for import fee')
 
 // ล็อกฟอร์มเมื่อสถานะเป็น Ready_to_Ship หรือ Cancelled
 // ยังให้แก้ไขได้ในช่วงรอค่านำเข้าและตอนสลิปค่านำเข้าไม่ถูกต้อง
-const isReadOnlyStage = computed(() => {
-  const status = String(order.value?.status || '')
-    .trim()
-    .toLowerCase()
-  return ['ready_to_ship', 'cancelled'].includes(status)
-})
+const isReadOnlyStage = computed(() =>
+  ['ready to ship', 'cancelled'].includes(normalizedOrderStatus.value),
+)
 
 // ✅ ซ่อนปุ่มขอเลื่อนกำหนดชำระเงิน และสกัดการเลือกช่องทางการโอนเมื่อออเดอร์จ่ายเสร็จสมบูรณ์/จัดส่งแล้ว
-const isFullyPaid = computed(() => {
-  const status = String(order.value?.status || '')
-    .trim()
-    .toLowerCase()
-  return ['ready_to_ship', 'slip_submitted'].includes(status)
-})
+const isFullyPaid = computed(() =>
+  ['ready to ship', 'slip submitted'].includes(normalizedOrderStatus.value),
+)
 
 // ✅ ปรับเงื่อนไข Amount Due ถ้ายืนยันชำระครบ (Paid หรือ Ready to Ship) ให้แสดงยอดรวม 2 รอบ
 const amountDue = computed(() => {
-  const status = String(order.value?.status || '')
-    .trim()
-    .toLowerCase()
-    .replace(/_/g, ' ')
-
-  if (['paid', 'ready to ship'].includes(status)) {
-    return Number(order.value?.total_amount || 0) + Number(order.value?.import_fee_total || 0)
+  if (importFeeTotal.value > 0 && isImportFeeStage.value) {
+    return importFeeTotal.value
   }
-
-  const isFeeDue = [
-    'wait for import fee',
-    'pending import fee',
-    'import slip submitted',
-    'invalid import slip',
-  ].includes(status)
-  return isFeeDue
-    ? Number(order.value?.import_fee_total || 0)
-    : Number(order.value?.total_amount || 0)
+  return Number(order.value?.total_amount || 0)
 })
 
 const readyItems = computed(
@@ -155,6 +147,50 @@ const shippingInfo = ref({
   notes: '',
   carrier: '',
 })
+
+const totalItemQuantity = computed(() =>
+  Number(
+    order.value?.items?.reduce((sum, item) => sum + Number(item.qty || 0), 0) || 0,
+  ),
+)
+
+function groupOrderItems(items) {
+  if (!items || !items.length) return []
+
+  const grouped = {}
+  for (const item of items) {
+    const prodId = String(item.prod_id || item.product_id || item.id || '').trim()
+    if (!prodId) continue
+
+    const flavor = String(item.flavor || item.Flavor || '').trim()
+    const key = prodId
+
+    if (!grouped[key]) {
+      grouped[key] = {
+        ...item,
+        groupKey: `prod:${prodId}`,
+        qty: 0,
+        prod_id: prodId,
+        flavorSet: new Set(),
+        flavor: flavor || null,
+      }
+    }
+
+    grouped[key].qty += Number(item.qty || 0)
+    grouped[key].import_fee = Number(item.import_fee || item.Import_fee || grouped[key].import_fee || 0)
+    grouped[key].price = Number(item.price || item.Price || item.unit_price || grouped[key].price || 0)
+    if (flavor) grouped[key].flavorSet.add(flavor)
+  }
+
+  return Object.values(grouped).map((item) => ({
+    ...item,
+    flavor: item.flavorSet && item.flavorSet.size > 0 ? Array.from(item.flavorSet).join(', ') : item.flavor,
+  }))
+}
+
+const groupedReadyItems = computed(() => groupOrderItems(readyItems.value))
+const groupedPreorderItems = computed(() => groupOrderItems(preorderItems.value))
+const groupedUnspecifiedItems = computed(() => groupOrderItems(unspecifiedItems.value))
 
 // ── Slip ──
 const slipFile = ref(null)
@@ -687,7 +723,7 @@ const confirmPayment = async () => {
     formData.append('notes', shippingInfo.value.notes || '')
 
     if (
-      ['wait for import fee', 'pending import fee', 'invalid import slip'].includes(
+      ['wait for import fee', 'pending import fee', 'import slip submitted', 'invalid import slip'].includes(
         normalizedStatus,
       )
     ) {
@@ -833,7 +869,7 @@ onMounted(async () => {
               </div>
               <h1>
                 {{
-                  importFeeTotal > 0
+                  isImportFeeRound
                     ? 'ชำระเงินค่านำเข้า (รอบ 2)'
                     : 'ชำระเงินสำหรับคำสั่งพรีออเดอร์'
                 }}
@@ -851,11 +887,13 @@ onMounted(async () => {
               <div class="hero-meta">
                 <div class="hero-meta-item">
                   <span class="hero-meta-label">รายการ</span>
-                  <strong>{{ order.items?.length || 0 }}</strong>
+                  <strong>{{ totalItemQuantity }}</strong>
                 </div>
                 <div class="hero-meta-divider"></div>
                 <div class="hero-meta-item">
-                  <span class="hero-meta-label">ยอดรวม</span>
+                  <span class="hero-meta-label">
+                    {{ isImportFeeRound ? 'ค่านำเข้าแจ้งแล้ว' : 'ยอดรวม' }}
+                  </span>
                   <strong>฿{{ amountDue.toLocaleString() }}</strong>
                 </div>
                 <div class="hero-meta-divider"></div>
@@ -901,7 +939,7 @@ onMounted(async () => {
                 </svg>
                 รายการสินค้าพรีออเดอร์
               </h2>
-              <span class="section-pill">{{ order.items?.length || 0 }} รายการ</span>
+              <span class="section-pill">{{ totalItemQuantity }} รายการ</span>
             </div>
 
             <div
@@ -932,7 +970,7 @@ onMounted(async () => {
                 พร้อมส่ง
               </h3>
               <div class="item-list">
-                <div v-for="it in readyItems" :key="it.detail_id" class="order-item">
+                <div v-for="it in groupedReadyItems" :key="it.detail_id" class="order-item">
                   <div class="item-img">
                     <img v-if="resolveItemImage(it)" :src="resolveItemImage(it)" :alt="it.name" />
                     <div v-else class="item-img-placeholder">
@@ -1028,7 +1066,7 @@ onMounted(async () => {
                 พรีออเดอร์
               </h3>
               <div class="item-list">
-                <div v-for="it in preorderItems" :key="it.detail_id" class="order-item">
+                <div v-for="it in groupedPreorderItems" :key="it.detail_id" class="order-item">
                   <div class="item-img">
                     <img v-if="resolveItemImage(it)" :src="resolveItemImage(it)" :alt="it.name" />
                     <div v-else class="item-img-placeholder">
@@ -1079,11 +1117,11 @@ onMounted(async () => {
                       </span>
                     </p>
                     <p
-                      v-if="order.is_import_fee_stage && it.import_fee > 0"
+                      v-if="isImportFeeStage && it.import_fee > 0"
                       class="item-price-small"
                       style="color: #f59e42; font-weight: 600"
                     >
-                      ราคานำเข้า: ฿{{ Number(it.import_fee).toLocaleString() }} / ชิ้น
+                      ราคานำเข้า: ฿{{ displayPrice(it).toLocaleString() }} / ชิ้น
                     </p>
                     <p v-else class="item-price-small">
                       ราคา ฿{{ displayPrice(it).toLocaleString() }} / ชิ้น
@@ -1099,7 +1137,7 @@ onMounted(async () => {
               </div>
             </div>
             <div
-              v-if="unspecifiedItems.length > 0"
+              v-if="groupedUnspecifiedItems.length > 0"
               class="order-category-block"
               style="margin-bottom: 1.5rem"
             >
@@ -1129,7 +1167,7 @@ onMounted(async () => {
                 รายการอื่น ๆ
               </h3>
               <div class="item-list">
-                <div v-for="it in unspecifiedItems" :key="it.detail_id" class="order-item">
+                <div v-for="it in groupedUnspecifiedItems" :key="it.detail_id" class="order-item">
                   <div class="item-img">
                     <img v-if="resolveItemImage(it)" :src="resolveItemImage(it)" :alt="it.name" />
                     <div v-else class="item-img-placeholder">
@@ -1718,12 +1756,18 @@ onMounted(async () => {
                 "
               >
                 <div style="display: flex; justify-content: space-between">
-                  <span>ยอดรวมสินค้า</span>
-                  <span>฿{{ Number(order.total_amount).toLocaleString() }}</span>
+                  <span>{{ isImportFeeRound ? 'ค่านำเข้าแจ้งแล้ว' : 'ยอดรวมสินค้า' }}</span>
+                  <span>
+                    ฿{{
+                      isImportFeeRound
+                        ? importFeeTotal.toLocaleString()
+                        : Number(order.total_amount).toLocaleString()
+                    }}
+                  </span>
                 </div>
                 <div
                   style="display: flex; justify-content: space-between"
-                  v-if="importFeeTotal > 0"
+                  v-if="!isImportFeeRound && importFeeTotal > 0"
                 >
                   <span>ค่านำเข้าแจ้งแล้ว</span>
                   <span>฿{{ importFeeTotal.toLocaleString() }}</span>

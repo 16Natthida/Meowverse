@@ -2562,7 +2562,7 @@ app.get(
       ORDER BY pr.round_id DESC, od.prod_id ASC, od.flavor ASC
     `)
 
-      // Group by round
+      // Group by round and merge duplicate products into a single row per product type
       const roundMap = new Map()
       for (const row of rows) {
         if (!roundMap.has(row.round_id)) {
@@ -2575,16 +2575,35 @@ app.get(
             products: [],
           })
         }
-        roundMap.get(row.round_id).products.push({
+
+        const round = roundMap.get(row.round_id)
+        const existingProduct = round.products.find((product) => product.prod_id === row.prod_id)
+
+        if (existingProduct) {
+          existingProduct.total_sold_qty += Number(row.total_sold_qty) || 0
+          existingProduct.total_received_qty += Number(row.total_received_qty) || 0
+          if (row.flavor && !existingProduct.flavors.includes(row.flavor)) {
+            existingProduct.flavors.push(row.flavor)
+          }
+          existingProduct.flavorDisplay = existingProduct.flavors.length > 0 ? existingProduct.flavors.join(', ') : null
+          existingProduct.hasReceivedQty = Number(existingProduct.total_received_qty || 0) > 0
+          continue
+        }
+
+        round.products.push({
           prod_id: row.prod_id,
           product_name: row.product_name,
           flavor: row.flavor,
+          flavors: row.flavor ? [row.flavor] : [],
           total_sold_qty: Number(row.total_sold_qty) || 0,
           total_received_qty: Number(row.total_received_qty) || 0,
           unit_price: Number(row.unit_price) || 0,
           current_import_fee: Number(row.import_fee) || 0,
+          flavorDisplay: row.flavor ? row.flavor : null,
+          hasReceivedQty: Number(row.total_received_qty || 0) > 0,
         })
       }
+
       res.json(Array.from(roundMap.values()))
     } catch (error) {
       res.status(500).json({ message: error.message })
@@ -2736,8 +2755,17 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     const orderData = orderRows[0]
 
     // 2. Determine payment type and amount based on order status
+    // Allow client to force a payment type via form field `type` (e.g. Import_Fee)
     let paymentType, paymentAmount
-    if (orderData.Order_type === 'Ready') {
+    // Allow forcing payment type via multipart form field or URL query string
+    const forcedType = (
+      req.body.type || req.body.Type || req.query.type || req.query.Type || ''
+    ).toString()
+
+    if (forcedType && forcedType.toLowerCase() === 'import_fee') {
+      paymentType = 'Import_Fee'
+      paymentAmount = Number(orderData.import_fee_total) || 0
+    } else if (orderData.Order_type === 'Ready') {
       paymentType = 'Ready pay'
       paymentAmount = orderData.total_amount
     } else if (
@@ -2795,6 +2823,7 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     // Round 1: reset to Pending so admin can see it for approval
     // Round 2: keep import-fee status — do NOT overwrite; admin needs to see it
     if (
+      paymentType !== 'Import_Fee' &&
       ![
         'Wait_for_Import_Fee',
         'Pending_import_fee',
@@ -3563,20 +3592,28 @@ app.post(
       for (const row of statusRows) {
         const fullReceived = Number(row.completed_items) === Number(row.total_items)
         const allMissing = Number(row.missing_items) === Number(row.total_items)
-        const newStatus = fullReceived
-          ? 'Ready_to_Ship'
-          : allMissing
-            ? 'Missing'
-            : 'Partially_Received'
+        const newStatus = fullReceived ? 'Ready_to_Ship' : allMissing ? 'Missing' : 'Partially_Received'
 
-        await connection.query(
-          'UPDATE orders SET total_amount = ?, status = ? WHERE order_id = ?',
-          [
-            Math.max(Number(row.ordered_amount) - Number(row.refund_amount) + 0, 0),
-            newStatus,
-            row.order_id,
-          ],
+        const totalAmount = Math.max(Number(row.ordered_amount) - Number(row.refund_amount) + 0, 0)
+
+        // Don't overwrite import-fee related statuses for Preorder orders.
+        // If admin already set order into an import-fee workflow (e.g. Wait_for_Import_Fee, Pending_import_fee, Import_slip_submitted, Invalid import slip)
+        // we should update the total_amount but keep the import-related status so customer/admin flow isn't disrupted.
+        const [orderInfoRows] = await connection.query(
+          'SELECT Order_type, status FROM orders WHERE order_id = ? LIMIT 1',
+          [row.order_id],
         )
+        const orderInfo = orderInfoRows[0] || {}
+        const orderType = String(orderInfo.Order_type || '').toLowerCase()
+        const currentStatus = String(orderInfo.status || '')
+
+        const importStatuses = ['Wait_for_Import_Fee', 'Pending_import_fee', 'Import_slip_submitted', 'Invalid import slip']
+
+        if (orderType === 'preorder' && importStatuses.includes(currentStatus)) {
+          await connection.query('UPDATE orders SET total_amount = ? WHERE order_id = ?', [totalAmount, row.order_id])
+        } else {
+          await connection.query('UPDATE orders SET total_amount = ?, status = ? WHERE order_id = ?', [totalAmount, newStatus, row.order_id])
+        }
       }
 
       for (const [orderId, summary] of orderSummaryMap.entries()) {
@@ -3808,12 +3845,26 @@ app.post(
           : 'Partially_Received'
       const newTotalAmount = Math.max(Number(order.total_amount) - refundAmount, 0)
 
-      await connection.query(
-        `UPDATE orders
-         SET total_amount = ?, status = ?
-         WHERE order_id = ?`,
-        [newTotalAmount, newStatus, orderId],
-      )
+      // Preserve import-fee workflow statuses for Preorder orders: only update total_amount
+      const importStatusesSingle = [
+        'Wait_for_Import_Fee',
+        'Pending_import_fee',
+        'Import_slip_submitted',
+        'Invalid import slip',
+      ]
+      if (String(order.Order_type || '').toLowerCase() === 'preorder' && importStatusesSingle.includes(String(order.status || ''))) {
+        await connection.query(`UPDATE orders SET total_amount = ? WHERE order_id = ?`, [
+          newTotalAmount,
+          orderId,
+        ])
+      } else {
+        await connection.query(
+          `UPDATE orders
+           SET total_amount = ?, status = ?
+           WHERE order_id = ?`,
+          [newTotalAmount, newStatus, orderId],
+        )
+      }
 
       const [sessionResult] = await connection.query(
         `INSERT INTO inventory_intake_sessions
@@ -3962,11 +4013,27 @@ app.patch(
           ? 'Missing'
           : 'Partially_Received'
 
-      await connection.query(`UPDATE orders SET total_amount = ?, status = ? WHERE order_id = ?`, [
-        Math.max(orderedAmount - refundAmount, 0),
-        newStatus,
-        orderId,
-      ])
+      // Preserve import-fee workflow statuses for Preorder orders: only update total_amount
+      const [orderCheckRows] = await connection.query('SELECT Order_type, status FROM orders WHERE order_id = ? LIMIT 1', [orderId])
+      const orderCheck = orderCheckRows[0] || {}
+      const importStatusesItemPatch = [
+        'Wait_for_Import_Fee',
+        'Pending_import_fee',
+        'Import_slip_submitted',
+        'Invalid import slip',
+      ]
+      if (String(orderCheck.Order_type || '').toLowerCase() === 'preorder' && importStatusesItemPatch.includes(String(orderCheck.status || ''))) {
+        await connection.query(`UPDATE orders SET total_amount = ? WHERE order_id = ?`, [
+          Math.max(orderedAmount - refundAmount, 0),
+          orderId,
+        ])
+      } else {
+        await connection.query(`UPDATE orders SET total_amount = ?, status = ? WHERE order_id = ?`, [
+          Math.max(orderedAmount - refundAmount, 0),
+          newStatus,
+          orderId,
+        ])
+      }
 
       await connection.query(
         `UPDATE inventory_intake_session_items
