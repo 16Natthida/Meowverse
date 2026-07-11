@@ -74,7 +74,7 @@
             <tr>
               <th>สินค้า</th>
               <th>รสชาติ / ขนาด</th>
-              <th class="num">รับจริง</th>
+              <th class="num">สั่ง / รับจริง</th>
               <th class="num">ราคา/ชิ้น</th>
               <th class="num">ค่านำเข้า (฿)</th>
             </tr>
@@ -83,19 +83,28 @@
           <tbody>
             <tr
               v-for="item in groupedProducts"
-              :key="item.prod_id"
+              :key="item.key"
               :class="{
-                'row--filled': feeInputs[item.prod_id] > 0,
-                'row--locked': !item.hasReceivedQty,
+                'row--filled': feeInputs[item.key] > 0,
+                'row--locked': !item.canEnterImportFee,
               }"
             >
               <td class="cell-product">{{ item.product_name }}</td>
               <td class="cell-flavor">
                 <span v-if="item.flavorDisplay" class="flavor-tag">{{ item.flavorDisplay }}</span>
                 <span v-else class="cell-muted">—</span>
+                <div class="status-text">
+                  <small v-if="item.total_received_qty === 0">ขาดสินค้า</small>
+                  <small v-else-if="item.total_received_qty < item.ordered_qty">รับไม่ครบ</small>
+                  <small v-else>รับครบ</small>
+                </div>
               </td>
               <td class="num">
-                <span class="qty-badge">{{ item.total_received_qty }} ชิ้น</span>
+                <div>
+                  <span class="qty-badge"
+                    >{{ item.ordered_qty }} / {{ item.total_received_qty }} ชิ้น</span
+                  >
+                </div>
               </td>
               <td class="num cell-price">{{ formatMoney(item.unit_price) }}</td>
               <td class="num">
@@ -106,8 +115,8 @@
                     type="text"
                     inputmode="numeric"
                     class="fee-input"
-                    v-model="feeInputs[item.prod_id]"
-                    :disabled="saving || !item.hasReceivedQty"
+                    v-model.number="feeInputs[item.key]"
+                    :disabled="saving || !item.canEnterImportFee"
                     placeholder="0"
                   />
                 </div>
@@ -238,37 +247,31 @@ const selectedRound = computed(
   () => rounds.value.find((r) => r.round_id === selectedRoundId.value) || null,
 )
 
-// จัดกลุ่มสินค้าตาม prod_id รวมยอดขาย และนำรสชาติมาต่อกันด้วยลูกน้ำ
+// แสดงรายการแยกตาม variant / line (ไม่รวมกันตาม prod_id)
 const groupedProducts = computed(() => {
   if (!selectedRound.value || !selectedRound.value.products) return []
 
-  const groups = {}
-  for (const item of selectedRound.value.products) {
-    if (!groups[item.prod_id]) {
-      groups[item.prod_id] = {
-        ...item,
-        flavors: new Set(),
-        total_sold_qty: 0,
-        total_received_qty: 0,
-      }
+  // จัดเป็นรายการแยกโดยใช้ prod_id + flavor เป็นคีย์ (variant-level)
+  return selectedRound.value.products.map((item) => {
+    const key = `${item.prod_id}|${String(item.flavor || '').trim()}`
+    const receivedQty = Number(item.total_received_qty || 0)
+    const orderedQty = Number(item.total_sold_qty || 0)
+    const canEnter = receivedQty > 0 && receivedQty === orderedQty
+
+    return {
+      key,
+      prod_id: item.prod_id,
+      product_name: item.product_name,
+      flavor: item.flavor,
+      flavorDisplay: item.flavor || null,
+      ordered_qty: orderedQty,
+      total_received_qty: receivedQty,
+      unit_price: Number(item.unit_price) || 0,
+      current_import_fee: Number(item.current_import_fee) || 0,
+      hasReceivedQty: receivedQty > 0,
+      canEnterImportFee: canEnter,
     }
-
-    // เก็บชื่อรสชาติ (ไม่ให้ซ้ำกัน)
-    if (item.flavor) {
-      groups[item.prod_id].flavors.add(item.flavor)
-    }
-
-    // รวมยอดขายและยอดรับจริงของทุกรสชาติเข้าด้วยกัน
-    groups[item.prod_id].total_sold_qty += Number(item.total_sold_qty || 0)
-    groups[item.prod_id].total_received_qty += Number(item.total_received_qty || 0)
-  }
-
-  // แปลง Set ให้เป็น String เพื่อนำไปแสดงผล
-  return Object.values(groups).map((g) => ({
-    ...g,
-    flavorDisplay: g.flavors.size > 0 ? Array.from(g.flavors).join(', ') : null,
-    hasReceivedQty: Number(g.total_received_qty || 0) > 0,
-  }))
+  })
 })
 
 function authHeaders() {
@@ -328,7 +331,7 @@ watch(selectedRoundId, () => {
   if (selectedRound.value) {
     for (const item of groupedProducts.value) {
       const fee = Number(item.current_import_fee) || 0
-      feeInputs.value[item.prod_id] = item.hasReceivedQty && fee > 0 ? fee : 0
+      feeInputs.value[item.key] = item.canEnterImportFee && fee > 0 ? fee : 0
     }
   }
   successMessage.value = ''
@@ -357,12 +360,18 @@ async function saveImportFees() {
 
   const fees = []
   for (const item of groupedProducts.value) {
-    const val = item.hasReceivedQty ? feeInputs.value[item.prod_id] : 0
+    const val = item.canEnterImportFee ? feeInputs.value[item.key] : 0
     if (val === '' || val == null || isNaN(val) || Number(val) < 0) {
-      errorMessage.value = 'กรุณากรอกค่านำเข้าทุกแถว (ต้องไม่ติดลบ)'
+      errorMessage.value = 'กรุณากรอกค่านำเข้าทุกแถวที่สามารถกรอกได้ (ต้องไม่ติดลบ)'
       return
     }
-    fees.push({ prod_id: item.prod_id, import_fee: item.hasReceivedQty ? Number(val) : 0 })
+    // ส่ง key (prod_id|flavor) เป็นตัวระบุรายการเพื่อให้ backend จัดการเป็น variant-level
+    fees.push({
+      key: item.key,
+      prod_id: item.prod_id,
+      flavor: item.flavor || null,
+      import_fee: item.canEnterImportFee ? Number(val) : 0,
+    })
   }
 
   saving.value = true

@@ -2608,16 +2608,25 @@ app.put(
     try {
       await connection.beginTransaction()
 
-      // Update import fee values per product in this round
-      const feeByProduct = new Map()
+      // Update import fee values per variant/key (expected input: { key: "prodId|flavor", prod_id, flavor, import_fee })
+      const feeByKey = new Map()
+      const feeTotalByProd = new Map()
       for (const item of fees) {
+        const key = String(item.key || `${item.prod_id}|${String(item.flavor || '').trim()}`)
+        const feeValue = Number(item.import_fee) || 0
+        feeByKey.set(key, Number.isNaN(feeValue) ? 0 : feeValue)
+
         const prodId = Number(item.prod_id)
-        if (!Number.isFinite(prodId)) continue
-        const feeValue = Number(item.import_fee)
-        feeByProduct.set(prodId, Number.isNaN(feeValue) ? 0 : feeValue)
+        if (Number.isFinite(prodId)) {
+          feeTotalByProd.set(
+            prodId,
+            (feeTotalByProd.get(prodId) || 0) + (Number.isNaN(feeValue) ? 0 : feeValue),
+          )
+        }
       }
 
-      for (const [prodId, feeValue] of feeByProduct.entries()) {
+      // Update preorder_round_products.import_fee_per_products to be the sum of provided fees per product (backwards-compat)
+      for (const [prodId, feeValue] of feeTotalByProd.entries()) {
         await connection.query(
           `UPDATE preorder_round_products
            SET import_fee_per_products = ?
@@ -2626,37 +2635,40 @@ app.put(
         )
       }
 
-      // ดึง order_details ที่เป็น preorder ของรอบนี้ พร้อม import_fee_per_products ล่าสุด
+      // ดึง order_details ที่เป็น preorder ของรอบนี้
       const [detailRows] = await connection.query(
-        `SELECT od.detail_id, od.order_id, od.prod_id, od.qty,
-          COALESCE(od.received_qty, 0) AS received_qty,
-                COALESCE(prp.import_fee_per_products, 0) AS import_fee_per_products,
-                COALESCE(prp.quantity_sold, 1) AS quantity_sold
+        `SELECT od.detail_id, od.order_id, od.prod_id, od.flavor, od.qty,
+          COALESCE(od.received_qty, 0) AS received_qty
          FROM order_details od
-         JOIN preorder_round_products prp
-           ON prp.round_id = ?
-          AND prp.prod_id = od.prod_id
          WHERE od.preorder_round_id = ?
            AND od.item_type = 'preorder'`,
-        [roundId, roundId],
+        [roundId],
       )
 
-      // คำนวณ qty ที่รับจริงรวมต่อ prod_id ก่อน เพื่อไม่ให้นับของที่ขาดในค่านำเข้า
-      const totalReceivedQtyByProd = {}
+      // คำนวณ qty ที่รับจริงรวมต่อ variant key (prod_id|flavor)
+      const totalReceivedQtyByKey = {}
       for (const row of detailRows) {
-        const pid = row.prod_id
+        const key = `${row.prod_id}|${String(row.flavor || '').trim()}`
         const receivedQty = Math.max(Number(row.received_qty) || 0, 0)
-        totalReceivedQtyByProd[pid] = (totalReceivedQtyByProd[pid] || 0) + receivedQty
+        totalReceivedQtyByKey[key] = (totalReceivedQtyByKey[key] || 0) + receivedQty
       }
 
       const orderTotals = {}
       for (const row of detailRows) {
+        const key = `${row.prod_id}|${String(row.flavor || '').trim()}`
         const receivedQty = Math.max(Number(row.received_qty) || 0, 0)
-        const totalReceivedQty = totalReceivedQtyByProd[row.prod_id] || 0
-        const importFeeTotal = Number(row.import_fee_per_products)
-        // ค่านำเข้าของ line นี้ = ค่านำเข้ารวม × (qty ที่รับจริงของแถวนี้ / qty ที่รับจริงรวมทั้งหมด)
-        const detailImportFee =
-          totalReceivedQty > 0 ? importFeeTotal * (receivedQty / totalReceivedQty) : 0
+        const orderedQty = Number(row.qty) || 0
+        const totalReceivedQty = totalReceivedQtyByKey[key] || 0
+        const importFeeTotalForKey = feeByKey.get(key) || 0
+
+        // Backend validation: only allow import fee when received_qty > 0 and received_qty === ordered_qty
+        let detailImportFee = 0
+        if (receivedQty > 0 && receivedQty === orderedQty && totalReceivedQty > 0) {
+          detailImportFee = importFeeTotalForKey * (receivedQty / totalReceivedQty)
+        } else {
+          // force zero when missing or partially received
+          detailImportFee = 0
+        }
 
         await connection.query('UPDATE order_details SET Import_fee = ? WHERE detail_id = ?', [
           Math.round(detailImportFee * 100) / 100,
@@ -3490,6 +3502,13 @@ app.post(
             [finalReceivedQty, arrivalStatus, detail.detail_id],
           )
 
+          // If the item is not fully received, ensure any previously-set import fee is cleared.
+          if (finalReceivedQty < orderedQty) {
+            await connection.query(`UPDATE order_details SET Import_fee = 0 WHERE detail_id = ?`, [
+              detail.detail_id,
+            ])
+          }
+
           if (!orderSummaryMap.has(Number(detail.order_id))) {
             orderSummaryMap.set(Number(detail.order_id), {
               order_id: Number(detail.order_id),
@@ -3766,6 +3785,13 @@ app.post(
              WHERE detail_id = ?`,
           [appliedToOrder, arrivalStatus, detail.detail_id],
         )
+
+        // If the item is not fully received, ensure any previously-set import fee is cleared.
+        if (appliedToOrder < orderedQty) {
+          await connection.query(`UPDATE order_details SET Import_fee = 0 WHERE detail_id = ?`, [
+            detail.detail_id,
+          ])
+        }
 
         // Handle inventory movements:
         // - Preorder orders: no pool decrement (preorder is fulfilled after payment/round close)
