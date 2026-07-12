@@ -157,6 +157,7 @@ function goToOrder(order) {
   }
 }
 
+// eslint-disable-next-line no-unused-vars
 function goBack() {
   router.push('/')
 }
@@ -226,9 +227,9 @@ const filteredOrders = computed(() => {
 
 // ── UI-ONLY: PROGRESS STEP TRACKER (derived purely from existing status data) ──
 const progressIcons = [
-  { key: 'ordered', label: 'สั่งซื้อ' },
-  { key: 'import', label: 'นำเข้า' },
-  { key: 'customs', label: 'ตรวจสอบ' },
+  { key: 'ordered', label: 'ชำระค่าของ' },
+  { key: 'import', label: 'รอนำเข้า' },
+  { key: 'customs', label: 'ชำระค่านำเข้า' },
   { key: 'process', label: 'เตรียมส่ง' },
   { key: 'done', label: 'จัดส่งสำเร็จ' },
 ]
@@ -239,8 +240,13 @@ function getProgressStep(status) {
   if (cancelledStates.includes(normalized)) return 0
   if (normalized === 'completed') return 5
   if (['shipped', 'ready_to_ship'].includes(normalized)) return 4
-  if (['wait_for_import_fee', 'pending_import_fee', 'import_slip_submitted'].includes(normalized)) return 3
-  if (normalized === 'paid') return 2
+
+  // ตัด wait_for_import_fee ออกจากบรรทัดนี้ (ให้เหลือแค่รอชำระค่านำเข้า และ ส่งสลิปค่านำเข้าแล้ว)
+  if (['pending_import_fee', 'import_slip_submitted'].includes(normalized)) return 3
+
+  // ย้าย wait_for_import_fee มาไว้รวมกับ paid ในบรรทัดนี้ เพื่อให้ทำงานถึงแค่ step 2 (รอนำเข้า)
+  if (['wait_for_import_fee', 'paid'].includes(normalized)) return 2
+
   return 1
 }
 
