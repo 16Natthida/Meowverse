@@ -11,7 +11,6 @@ const selectedSlip = ref(null)
 const selectedOrderDetail = ref(null)
 const selectedOrderLoading = ref(false)
 const selectedOrderError = ref('')
-const importFeeInput = ref('')
 const typeFilter = ref('all')
 const filterStatus = ref('all')
 const showStatusFilters = ref(false)
@@ -79,14 +78,6 @@ function formatDate(value) {
   })
 }
 
-function formatMoney(value) {
-  return new Intl.NumberFormat('th-TH', {
-    style: 'currency',
-    currency: 'THB',
-    maximumFractionDigits: 0,
-  }).format(Number(value) || 0)
-}
-
 function resolveSlipUrl(value) {
   const url = String(value || '').trim()
   if (!url) return ''
@@ -124,8 +115,7 @@ async function updatePaymentStatus(payId, status, orderId = null) {
     const targetPayment = payments.value.find((p) => p.pay_id === payId)
     const _orderId = orderId || selectedSlip.value?.order_id || targetPayment?.order_id
     let orderData = null
-    // Allow approving slips immediately even if import fee not set.
-    // If needed, admin can still save import fee separately via the modal.
+    // Allow approving slips immediately without requiring import fee input in this modal.
 
     // 2) อัปเดตสถานะ payment
     const response = await fetch(`${API_BASE_URL}/payments/${payId}/status`, {
@@ -177,7 +167,6 @@ async function updatePaymentStatus(payId, status, orderId = null) {
     await fetchPayments()
     selectedSlip.value = null
     selectedOrderDetail.value = null
-    importFeeInput.value = ''
   } catch (error) {
     slipError.value = translateError(error)
   }
@@ -194,7 +183,6 @@ async function fetchOrderDetails(orderId) {
       throw new Error(`ไม่สามารถโหลดข้อมูลออเดอร์ได้ (${response.status})`)
     }
     selectedOrderDetail.value = await response.json()
-    importFeeInput.value = selectedOrderDetail.value.import_fee_total || ''
   } catch (error) {
     selectedOrderError.value = translateError(error)
   } finally {
@@ -205,7 +193,6 @@ async function fetchOrderDetails(orderId) {
 async function openSlip(payment) {
   selectedSlip.value = payment
   selectedOrderDetail.value = null
-  importFeeInput.value = ''
   selectedOrderError.value = ''
 
   if (payment.Order_type === 'Preorder') {
@@ -217,40 +204,8 @@ function closeSlip() {
   selectedSlip.value = null
   selectedOrderDetail.value = null
   selectedOrderError.value = ''
-  importFeeInput.value = ''
 }
 
-async function saveImportFee() {
-  if (!selectedSlip.value) return
-
-  const fee = Number(importFeeInput.value)
-  if (Number.isNaN(fee) || fee < 0) {
-    selectedOrderError.value = 'กรุณากรอกค่านำเข้าที่เป็นตัวเลข 0 ขึ้นไป'
-    return
-  }
-
-  try {
-    selectedOrderError.value = ''
-    const response = await fetch(
-      `${API_BASE_URL}/orders/${selectedSlip.value.order_id}/import-fee`,
-      {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ import_fee: fee }),
-      },
-    )
-
-    if (!response.ok) {
-      const body = await response.json().catch(() => null)
-      throw new Error(body?.error || 'ไม่สามารถบันทึกค่านำเข้าได้')
-    }
-
-    await fetchPayments()
-    await fetchOrderDetails(selectedSlip.value.order_id)
-  } catch (error) {
-    selectedOrderError.value = error instanceof Error ? error.message : 'เกิดข้อผิดพลาด'
-  }
-}
 
 const countByStatus = (status) =>
   payments.value.filter((payment) => payment.status === status).length
@@ -266,7 +221,7 @@ onMounted(() => {
       <div class="hero-copy">
         <p class="eyebrow">Admin Operations</p>
         <h1>จัดการสลิปการชำระเงิน</h1>
-        <p>ตรวจสอบ อนุมัติ และบันทึกค่านำเข้าสำหรับออเดอร์พรีออเดอร์ โดยดูหลักฐานการโอนเงิน</p>
+        <p>ตรวจสอบ อนุมัติ และดูหลักฐานการโอนเงินสำหรับออเดอร์พรีออเดอร์</p>
       </div>
     </section>
 
@@ -289,7 +244,7 @@ onMounted(() => {
       <header class="panel-head panel-head--stacked">
         <div>
           <h2>จัดการสลิปการชำระเงิน</h2>
-          <p>ตรวจสอบ อนุมัติ และบันทึกค่านำเข้าสำหรับออเดอร์พรีออเดอร์</p>
+          <p>ตรวจสอบ อนุมัติ และจัดการสลิปชำระเงินสำหรับออเดอร์พรีออเดอร์</p>
         </div>
         <button class="ghost-btn" type="button" @click="fetchPayments">รีเฟรช</button>
       </header>
@@ -474,51 +429,6 @@ onMounted(() => {
           <div class="slip-modal-body">
             <img :src="resolveSlipUrl(selectedSlip.slip_img)" class="slip-img-full" alt="slip" />
 
-            <div v-if="selectedSlip.Order_type === 'Preorder'" class="import-fee-panel">
-              <h4>ค่านำเข้า</h4>
-              <p class="import-fee-note">
-                สำหรับพรีออเดอร์ ต้องอนุมัติรอบแรกก่อนถึงจะบันทึกค่านำเข้าได้<br />
-                หลังจากลูกค้าชำระรอบสองและอัปโหลดสลิป ให้แอดมินอนุมัติรอบสองเพื่อเปลี่ยนสถานะเป็น
-                "ชำระแล้ว"
-              </p>
-
-              <div v-if="selectedOrderLoading" class="state-wrap">
-                <p>กำลังโหลดข้อมูลออเดอร์...</p>
-              </div>
-
-              <div v-else>
-                <div v-if="selectedOrderError" class="error-box">{{ selectedOrderError }}</div>
-                <div v-else-if="selectedOrderDetail">
-                  <div class="import-fee-summary">
-                    <p>ยอดรวมสินค้า: {{ formatMoney(selectedOrderDetail.total_amount) }}</p>
-                    <p>
-                      ค่านำเข้าปัจจุบัน:
-                      {{ formatMoney(selectedOrderDetail.import_fee_total || 0) }}
-                    </p>
-                  </div>
-
-                  <div class="form-group">
-                    <label for="import-fee-input">ใส่ค่านำเข้า</label>
-                    <input
-                      id="import-fee-input"
-                      v-model="importFeeInput"
-                      class="form-input"
-                      min="0"
-                      placeholder="0.00"
-                      step="0.01"
-                      type="number"
-                      :disabled="selectedOrderDetail.status === 'Paid'"
-                    />
-                  </div>
-                  <div v-if="selectedOrderDetail.status === 'Paid'" class="info-box">
-                    ออเดอร์นี้ชำระครบแล้ว ไม่สามารถแก้ค่านำเข้าได้
-                  </div>
-                  <div v-else class="info-box">
-                    กรอกค่านำเข้า (ถ้ามี) แล้วจึงกดอนุมัติรอบที่เหมาะสม
-                  </div>
-                </div>
-              </div>
-            </div>
           </div>
 
           <div class="slip-modal-foot">
@@ -552,15 +462,6 @@ onMounted(() => {
                 @click="updatePaymentStatus(selectedSlip.pay_id, 'Rejected', selectedSlip.order_id)"
               >
                 ✕ ปฏิเสธ
-              </button>
-              <!-- บันทึกค่านำเข้า (เฉพาะ Wait_for_Import_Fee) -->
-              <button
-                v-if="selectedOrderDetail.status === 'Wait_for_Import_Fee'"
-                class="btn-approve"
-                type="button"
-                @click="saveImportFee"
-              >
-                💰 บันทึกค่านำเข้า
               </button>
               <span
                 v-if="selectedOrderDetail.status === 'Paid'"
@@ -1133,33 +1034,6 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 
-.import-fee-panel {
-  margin-top: 1rem;
-  padding: 1rem;
-  border-top: 1px solid #f3e8ff;
-  background: #faf5ff;
-  border-radius: 12px;
-}
-
-.import-fee-panel h4 {
-  margin: 0 0 0.5rem;
-  font-size: 1rem;
-  color: #5b21b6;
-}
-
-.import-fee-note,
-.import-fee-summary {
-  color: #6d28d9;
-}
-
-.import-fee-summary {
-  margin: 0.8rem 0;
-  line-height: 1.5;
-}
-
-.import-fee-summary p {
-  margin: 0;
-}
 
 .form-group {
   margin-top: 0.8rem;

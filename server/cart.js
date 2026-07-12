@@ -137,7 +137,10 @@ router.get('/', async (req, res) => {
                  SELECT prp.round_price
                  FROM preorder_round_products prp
                  JOIN preorder_rounds r ON prp.round_id = r.round_id
-                 WHERE prp.prod_id = p.prod_id AND r.status = 'active'
+                 WHERE prp.prod_id = p.prod_id
+                   AND LOWER(r.status) IN ('active', 'scheduled')
+                   AND r.start_date <= NOW()
+                   AND r.end_date >= NOW()
                  ORDER BY prp.link_id DESC
                  LIMIT 1
                ), p.preorder_price, p.base_price
@@ -248,7 +251,10 @@ router.post('/', async (req, res) => {
           `SELECT prp.round_id AS round_id, prp.round_price AS round_price
            FROM preorder_round_products prp
            JOIN preorder_rounds r ON prp.round_id = r.round_id
-           WHERE prp.prod_id = ? AND r.status = 'active'
+           WHERE prp.prod_id = ?
+             AND LOWER(r.status) IN ('active', 'scheduled')
+             AND r.start_date <= NOW()
+             AND r.end_date >= NOW()
            ORDER BY prp.link_id DESC LIMIT 1`, [prod_id]
         )
         if (roundRows.length > 0) {

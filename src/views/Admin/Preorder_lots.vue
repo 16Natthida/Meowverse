@@ -53,6 +53,7 @@
                     : 'เปิดรอบ'
                 }}
               </button>
+              <button class="btn-action" @click="setRoundScheduled(round)">ตามเวลา</button>
               <button class="btn-action danger" @click="deleteRound(round.id)">ลบ</button>
             </td>
           </tr>
@@ -121,6 +122,7 @@
                 <option value="active">เปิด</option>
                 <option value="closed">ปิด</option>
                 <option value="archived">เก็บถาวร</option>
+                <option value="scheduled">เปิดปิดตามเวลาที่กำหนด</option>
               </select>
             </div>
 
@@ -543,6 +545,7 @@ function getStatusLabel(status) {
     open: 'เปิด',
     closed: 'ปิด',
     archived: 'เก็บถาวร',
+    scheduled: 'ตามเวลา',
   }
   return labels[String(status || '').toLowerCase()] || status
 }
@@ -552,6 +555,7 @@ function getStatusClass(status) {
   if (normalized === 'open' || normalized === 'active') return 'open'
   if (normalized === 'closed') return 'closed'
   if (normalized === 'archived') return 'archived'
+  if (normalized === 'scheduled') return 'scheduled'
   return normalized
 }
 
@@ -891,6 +895,20 @@ async function toggleRoundStatus(round) {
   }
 }
 
+async function setRoundScheduled(round) {
+  try {
+    await preorderStore.updateRound(round.id, {
+      name: round.name,
+      description: round.description || '',
+      startDate: round.startDate,
+      endDate: round.endDate,
+      status: 'scheduled',
+    })
+  } catch (error) {
+    alert('เกิดข้อผิดพลาด: ' + error.message)
+  }
+}
+
 onMounted(async () => {
   await preorderStore.fetchRounds()
   if (typeof adminProductStore.fetchProducts === 'function') {
@@ -1006,6 +1024,11 @@ onMounted(async () => {
 .status-badge.archived {
   background-color: #e0e0e0;
   color: #666;
+}
+
+.status-badge.scheduled {
+  background-color: #fff3cd;
+  color: #8a6d3b;
 }
 
 .actions {
