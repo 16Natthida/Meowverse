@@ -98,6 +98,23 @@ function resolveIntakeStatus(orderedQty, receivedQty) {
   return 'partially_received'
 }
 
+function resolveOrderStatusAfterIntake(currentStatus, fullReceived, allMissing) {
+  const status = String(currentStatus || '').trim()
+  const importFeeStatuses = [
+    'Wait_for_Import_Fee',
+    'Pending_import_fee',
+    'Import_slip_submitted',
+    'Invalid import slip',
+  ]
+
+  // Receiving stock must not erase the payment step for preorder orders.
+  if (importFeeStatuses.includes(status)) {
+    return status
+  }
+
+  return fullReceived ? 'Ready_to_Ship' : allMissing ? 'Missing' : 'Partially_Received'
+}
+
 const PREORDER_PAYMENT_WINDOW_MS = 48 * 60 * 60 * 1000
 
 async function createPreorderOrdersForClosedRound(connection, roundId) {
@@ -937,6 +954,7 @@ async function ensureAdminSchema() {
       expected_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
       received_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
       refund_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+      excess_stock_action VARCHAR(20) NOT NULL DEFAULT 'none',
       status VARCHAR(30) NOT NULL DEFAULT 'Completed',
       note TEXT NULL,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -984,6 +1002,11 @@ async function ensureAdminSchema() {
   await pool.query(`
     ALTER TABLE inventory_intake_session_items
     ADD COLUMN IF NOT EXISTS excess_qty INT NOT NULL DEFAULT 0
+  `)
+
+  await pool.query(`
+    ALTER TABLE inventory_intake_sessions
+    ADD COLUMN IF NOT EXISTS excess_stock_action VARCHAR(20) NOT NULL DEFAULT 'none'
   `)
 
   await pool.query(`
@@ -1042,9 +1065,82 @@ async function ensureAdminSchema() {
     ADD COLUMN IF NOT EXISTS preorder_round_id INT DEFAULT NULL
   `)
 
+  // Keep intake decisions in order_details. Older databases only had Pending/Arrived,
+  // which silently converted Missing/Delayed to an empty ENUM value.
+  await pool.query(`
+    ALTER TABLE order_details
+    MODIFY COLUMN arrival_status ENUM('Pending', 'Arrived', 'Missing', 'Delayed')
+    DEFAULT 'Pending'
+  `)
+
   await pool.query(`
     ALTER TABLE orders
     ADD COLUMN IF NOT EXISTS deadline DATETIME NULL
+  `)
+
+  // Keep every order status used by the payment and intake flows in the ENUM.
+  // Without these values MySQL can silently store an invalid ENUM assignment as ''.
+  await pool.query(`
+    ALTER TABLE orders
+    ADD COLUMN IF NOT EXISTS import_fee_total DECIMAL(10,2) NOT NULL DEFAULT 0
+  `)
+
+  await pool.query(`
+    ALTER TABLE orders
+    MODIFY COLUMN status ENUM(
+      'Pending',
+      'Slip_submitted',
+      'Paid',
+      'Wait_for_Import_Fee',
+      'Pending_import',
+      'Pending_import_fee',
+      'Import_slip_submitted',
+      'Ready_to_Ship',
+      'Partially_Received',
+      'Missing',
+      'Cancelled',
+      'Invalid slip',
+      'Invalid_Slip',
+      'Invalid import slip'
+    ) DEFAULT 'Pending'
+  `)
+
+  // Repair orders created before the missing ENUM values were added.
+  await pool.query(`
+    UPDATE orders o
+    SET o.status = 'Pending_import_fee'
+    WHERE (o.status IS NULL OR o.status = '')
+      AND COALESCE(o.import_fee_total, 0) > 0
+  `)
+
+  await pool.query(`
+    UPDATE orders o
+    SET o.status = 'Import_slip_submitted'
+    WHERE (o.status IS NULL OR o.status = '')
+      AND COALESCE(o.import_fee_total, 0) > 0
+      AND EXISTS (
+        SELECT 1 FROM payment p
+        WHERE p.order_id = o.order_id
+          AND p.type IN ('Import_Fee', 'import_fee')
+          AND p.status = 'Pending'
+      )
+  `)
+
+  await pool.query(`
+    UPDATE orders o
+    SET o.status = 'Slip_submitted'
+    WHERE (o.status IS NULL OR o.status = '')
+      AND NOT EXISTS (
+        SELECT 1 FROM payment p
+        WHERE p.order_id = o.order_id
+          AND p.type IN ('Import_Fee', 'import_fee')
+      )
+      AND EXISTS (
+        SELECT 1 FROM payment p
+        WHERE p.order_id = o.order_id
+          AND p.type IN ('Order_fee', 'Ready pay')
+          AND p.status = 'Pending'
+      )
   `)
 
   await pool.query(`
@@ -2538,15 +2634,12 @@ app.get(
         od.flavor,
         SUM(od.qty) AS total_sold_qty,
         SUM(COALESCE(od.received_qty, 0)) AS total_received_qty,
-        od.Price AS unit_price,
-        COALESCE(prp.import_fee_per_products, 0) AS import_fee
+        MIN(od.Price) AS unit_price,
+        COALESCE(SUM(od.Import_fee), 0) AS import_fee
       FROM preorder_rounds pr
       JOIN order_details od ON od.preorder_round_id = pr.round_id
       JOIN orders o ON o.order_id = od.order_id
       LEFT JOIN products p ON p.prod_id = od.prod_id
-      LEFT JOIN preorder_round_products prp
-        ON prp.round_id = pr.round_id
-       AND prp.prod_id = od.prod_id
       WHERE LOWER(o.Order_type) = 'preorder'
       GROUP BY
         pr.round_id,
@@ -2556,9 +2649,7 @@ app.get(
         pr.end_date,
         od.prod_id,
         p.prod_name,
-        od.flavor,
-        od.Price,
-        prp.import_fee_per_products
+        od.flavor
       ORDER BY pr.round_id DESC, od.prod_id ASC, od.flavor ASC
     `)
 
@@ -2645,37 +2736,61 @@ app.put(
         [roundId],
       )
 
-      // คำนวณ qty ที่รับจริงรวมต่อ variant key (prod_id|flavor)
-      const totalReceivedQtyByKey = {}
+      // คำนวณจำนวนที่สั่งรวมต่อ variant key (prod_id|flavor)
+      // ค่านำเข้าที่แอดมินกรอกเป็นยอดรวมของสินค้านั้นทั้งรอบ
+      const totalOrderedQtyByKey = {}
       for (const row of detailRows) {
         const key = `${row.prod_id}|${String(row.flavor || '').trim()}`
-        const receivedQty = Math.max(Number(row.received_qty) || 0, 0)
-        totalReceivedQtyByKey[key] = (totalReceivedQtyByKey[key] || 0) + receivedQty
+        const orderedQty = Math.max(Number(row.qty) || 0, 0)
+        totalOrderedQtyByKey[key] = (totalOrderedQtyByKey[key] || 0) + orderedQty
       }
 
       const orderTotals = {}
+      const rowsByKey = new Map()
       for (const row of detailRows) {
         const key = `${row.prod_id}|${String(row.flavor || '').trim()}`
-        const receivedQty = Math.max(Number(row.received_qty) || 0, 0)
-        const orderedQty = Number(row.qty) || 0
-        const totalReceivedQty = totalReceivedQtyByKey[key] || 0
+        if (!rowsByKey.has(key)) rowsByKey.set(key, [])
+        rowsByKey.get(key).push(row)
+      }
+
+      for (const [key, rows] of rowsByKey.entries()) {
+        const totalOrderedQty = totalOrderedQtyByKey[key] || 0
         const importFeeTotalForKey = feeByKey.get(key) || 0
+        const eligibleRows = rows.filter((row) => {
+          const receivedQty = Math.max(Number(row.received_qty) || 0, 0)
+          const orderedQty = Math.max(Number(row.qty) || 0, 0)
+          return receivedQty > 0 && receivedQty === orderedQty
+        })
+        let allocatedFee = 0
 
-        // Backend validation: only allow import fee when received_qty > 0 and received_qty === ordered_qty
-        let detailImportFee = 0
-        if (receivedQty > 0 && receivedQty === orderedQty && totalReceivedQty > 0) {
-          detailImportFee = importFeeTotalForKey * (receivedQty / totalReceivedQty)
-        } else {
-          // force zero when missing or partially received
-          detailImportFee = 0
+        for (const row of rows) {
+          const receivedQty = Math.max(Number(row.received_qty) || 0, 0)
+          const orderedQty = Math.max(Number(row.qty) || 0, 0)
+          const isEligible = receivedQty > 0 && receivedQty === orderedQty
+          let detailImportFee = 0
+
+          if (isEligible && totalOrderedQty > 0) {
+            // แบ่งจากจำนวนที่สั่งทั้งหมด ไม่ใช่จำนวนที่รับจริง
+            detailImportFee = importFeeTotalForKey * (orderedQty / totalOrderedQty)
+            // ปัดเศษและเก็บเศษสตางค์ไว้ที่รายการสุดท้ายที่ได้รับครบ
+            const isLastEligible = eligibleRows[eligibleRows.length - 1] === row
+            if (!isLastEligible) {
+              detailImportFee = Math.round(detailImportFee * 100) / 100
+              allocatedFee += detailImportFee
+            }
+          }
+
+          if (isEligible && eligibleRows[eligibleRows.length - 1] === row) {
+            detailImportFee = Math.max(Math.round((importFeeTotalForKey - allocatedFee) * 100) / 100, 0)
+          }
+
+          await connection.query('UPDATE order_details SET Import_fee = ? WHERE detail_id = ?', [
+            Math.round(detailImportFee * 100) / 100,
+            row.detail_id,
+          ])
+
+          orderTotals[row.order_id] = (orderTotals[row.order_id] || 0) + detailImportFee
         }
-
-        await connection.query('UPDATE order_details SET Import_fee = ? WHERE detail_id = ?', [
-          Math.round(detailImportFee * 100) / 100,
-          row.detail_id,
-        ])
-
-        orderTotals[row.order_id] = (orderTotals[row.order_id] || 0) + detailImportFee
       }
 
       await connection.query(
@@ -2683,14 +2798,24 @@ app.put(
       )
 
       let updatedOrders = 0
-      const orderIds = []
+      const allOrderIds = [...new Set(detailRows.map((row) => Number(row.order_id)))]
+      const orderIds = Object.entries(orderTotals)
+        .filter(([, amount]) => Number(amount) > 0)
+        .map(([orderId]) => Number(orderId))
       for (const [orderId, amount] of Object.entries(orderTotals)) {
         await connection.query(`UPDATE orders SET import_fee_total = ? WHERE order_id = ?`, [
           Math.round(amount * 100) / 100,
           Number(orderId),
         ])
         orderIds.push(Number(orderId))
-        updatedOrders++
+        if (Number(amount) > 0) updatedOrders++
+      }
+
+      // รีเซ็ตออเดอร์ที่ไม่มีสินค้าที่รับครบ เพื่อไม่ให้ค่านำเข้ารอบเก่าค้างอยู่
+      for (const orderId of allOrderIds) {
+        if (!Object.prototype.hasOwnProperty.call(orderTotals, orderId)) {
+          await connection.query(`UPDATE orders SET import_fee_total = 0 WHERE order_id = ?`, [orderId])
+        }
       }
 
       if (orderIds.length > 0) {
@@ -2737,7 +2862,16 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
 
     // 1. ตรวจสอบข้อมูล Order เดิมเพื่อยอดเงินและประเภท พร้อมสถานะ
     const [orderRows] = await connection.query(
-      'SELECT total_amount, import_fee_total, Order_type, status FROM orders WHERE order_id = ?',
+      `SELECT total_amount, import_fee_total, Order_type, status,
+              EXISTS(
+                SELECT 1
+                FROM order_details od_round
+                JOIN preorder_rounds pr ON pr.round_id = od_round.preorder_round_id
+                WHERE od_round.order_id = orders.order_id
+                  AND LOWER(pr.status) IN ('active', 'open')
+              ) AS has_open_preorder_round
+       FROM orders
+       WHERE order_id = ?`,
       [order_id],
     )
 
@@ -2746,21 +2880,33 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     }
 
     const orderData = orderRows[0]
+    const importFeeStatuses = [
+      'Wait_for_Import_Fee',
+      'Pending_import_fee',
+      'Import_slip_submitted',
+      'Invalid import slip',
+    ]
+    const isPreorderImportFeeRound =
+      orderData.Order_type === 'Preorder' &&
+      (importFeeStatuses.includes(orderData.status) ||
+        (Number(orderData.import_fee_total) > 0 && !['Paid', 'Ready_to_Ship'].includes(orderData.status)))
+
+    if (
+      String(orderData.Order_type || '').toLowerCase() === 'preorder' &&
+      Number(orderData.has_open_preorder_round) === 1
+    ) {
+      await connection.rollback()
+      return res.status(400).json({
+        error: 'รอบพรีออเดอร์ยังไม่ปิด จึงยังไม่สามารถส่งหลักฐานการชำระเงินได้',
+      })
+    }
 
     // 2. Determine payment type and amount based on order status
     let paymentType, paymentAmount
     if (orderData.Order_type === 'Ready') {
       paymentType = 'Ready pay'
       paymentAmount = orderData.total_amount
-    } else if (
-      orderData.Order_type === 'Preorder' &&
-      [
-        'Wait_for_Import_Fee',
-        'Pending_import_fee',
-        'Import_slip_submitted',
-        'Invalid import slip',
-      ].includes(orderData.status)
-    ) {
+    } else if (isPreorderImportFeeRound) {
       // Round 2: user is paying the import fee
       paymentType = 'Import_Fee'
       paymentAmount = Number(orderData.import_fee_total) || 0
@@ -2792,28 +2938,21 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
 
     // 3. บันทึกที่อยู่ลงตาราง shipping
     await connection.query(
-      `INSERT INTO shipping (order_id, name, phone, address, notes, Shipping_Carrier) VALUES (?, ?, ?, ?, ?, ?)`,
-      [
-        order_id,
-        shipping_name || null,
-        shipping_phone || null,
-        shipping_address || null,
-        notes || null,
-        shipping_carrier || null,
-      ],
+        `INSERT INTO shipping (order_id, name, phone, address, notes, Shipping_Carrier) VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          order_id,
+          shipping_name || null,
+          shipping_phone || null,
+          shipping_address || null,
+          notes || null,
+          shipping_carrier || null,
+        ],
     )
 
     // 4-8. เฉพาะรอบแรกเท่านั้น (orderData.status !== 'Wait_for_Import_Fee' && orderData.status !== 'Pending_import_fee')
     // Round 1: reset to Pending so admin can see it for approval
     // Round 2: keep import-fee status — do NOT overwrite; admin needs to see it
-    if (
-      ![
-        'Wait_for_Import_Fee',
-        'Pending_import_fee',
-        'Import_slip_submitted',
-        'Invalid import slip',
-      ].includes(orderData.status)
-    ) {
+    if (!isPreorderImportFeeRound) {
       // 4. ดึงรายละเอียดออเดอร์เพื่อเคลียร์ตะกร้าและปรับสต็อกหลังชำระเงินจริง
       const [detailRows] = await connection.query(
         `SELECT od.prod_id, od.qty, od.Price AS unit_price, od.flavor
@@ -2885,9 +3024,25 @@ app.post('/api/orders/:order_id/shipping', async (req, res) => {
   try {
     await connection.beginTransaction()
 
-    const [orderRows] = await connection.query('SELECT order_id FROM orders WHERE order_id = ?', [
-      order_id,
-    ])
+    const [orderRows] = await connection.query(
+      'SELECT order_id, status, import_fee_total FROM orders WHERE order_id = ?',
+      [order_id],
+    )
+    const shippingLockedStatuses = [
+      'Slip_submitted',
+      'Import_slip_submitted',
+      'Paid',
+      'Ready_to_Ship',
+      'Cancelled',
+    ]
+    const shippingOrder = orderRows[0]
+    const shippingStatus = String(shippingOrder?.status || '').trim()
+    if (shippingOrder && shippingLockedStatuses.includes(shippingStatus)) {
+      await connection.rollback()
+      return res.status(403).json({
+        error: 'แอดมินอนุมัติสลิปแล้ว ไม่สามารถแก้ไขข้อมูลจัดส่งได้',
+      })
+    }
     if (orderRows.length === 0) {
       throw new Error('ไม่พบข้อมูลออเดอร์')
     }
@@ -3458,6 +3613,9 @@ app.post(
         return res.status(400).json({ error: 'ไม่มีรายการสินค้าในรอบนี้' })
       }
 
+      // The UI sends the aggregate quantity shown for each product/flavor.
+      // Treat it as an absolute target, not as an additional quantity. This
+      // makes saving the same form twice idempotent.
       const requestMap = new Map(
         receivedItems.map((item) => [
           String(item.detail_id || item.line_key || '').trim(),
@@ -3477,23 +3635,63 @@ app.post(
 
       const detailResults = []
       const orderSummaryMap = new Map()
+      let hasIntakeChange = false
+      let totalExcessQty = 0
 
       for (const [lineKey, lineDetails] of lineGroups.entries()) {
         const requestedReceived = requestMap.get(lineKey) || 0
-        let remaining = requestedReceived
+        const totalOrderedForLine = lineDetails.reduce(
+          (sum, detail) => sum + Math.max(0, Number(detail.ordered_qty) || 0),
+          0,
+        )
+        const totalCurrentForLine = lineDetails.reduce(
+          (sum, detail) => sum + Math.max(0, Number(detail.received_qty) || 0),
+          0,
+        )
+        const targetReceived = Math.min(requestedReceived, totalOrderedForLine)
+        const finalReceivedByDetail = new Map()
+        let remainingExisting = Math.min(targetReceived, totalCurrentForLine)
+
+        // Preserve the existing allocation first, so editing an aggregate
+        // quantity does not move stock from one customer's order to another.
+        for (const detail of lineDetails) {
+          const orderedQty = Math.max(0, Number(detail.ordered_qty) || 0)
+          const currentReceived = Math.min(
+            Math.max(0, Number(detail.received_qty) || 0),
+            orderedQty,
+          )
+          const retainedQty = Math.min(currentReceived, remainingExisting)
+          finalReceivedByDetail.set(detail.detail_id, retainedQty)
+          remainingExisting -= retainedQty
+        }
+
+        // If the target is higher than the existing total, apply the new
+        // quantity only to the remaining capacity in a stable order.
+        let remainingNew = targetReceived - [...finalReceivedByDetail.values()].reduce(
+          (sum, value) => sum + value,
+          0,
+        )
 
         for (const detail of lineDetails) {
           const orderedQty = Math.max(0, Number(detail.ordered_qty) || 0)
           const currentReceived = Math.max(0, Number(detail.received_qty) || 0)
-          const availableToApply = Math.max(orderedQty - currentReceived, 0)
-          const appliedToOrder = Math.min(remaining, availableToApply)
-          const finalReceivedQty = currentReceived + appliedToOrder
-          const excessQty = Math.max(remaining - appliedToOrder, 0)
+          const retainedQty = finalReceivedByDetail.get(detail.detail_id) || 0
+          const extraCapacity = Math.max(orderedQty - retainedQty, 0)
+          const extraQty = Math.min(remainingNew, extraCapacity)
+          const appliedToOrder = retainedQty + extraQty
+          const finalReceivedQty = appliedToOrder
+          // Excess belongs to the aggregated line and is moved to stock once
+          // below, not once for every order detail in the group.
+          const excessQty = 0
           const missingQty = Math.max(orderedQty - finalReceivedQty, 0)
           const unitPrice = Number(detail.unit_price) || 0
           const arrivalStatus = resolveIntakeStatus(orderedQty, finalReceivedQty)
 
-          remaining -= appliedToOrder
+          remainingNew -= extraQty
+
+          if (finalReceivedQty !== currentReceived || excessQty > 0) {
+            hasIntakeChange = true
+          }
 
           await connection.query(
             `UPDATE order_details
@@ -3557,15 +3755,39 @@ app.post(
           })
         }
 
-        if (remaining > 0 && moveExcessToStock) {
+        const excessQtyForLine = Math.max(requestedReceived - targetReceived, 0)
+        if (excessQtyForLine > 0) {
+          hasIntakeChange = true
+          totalExcessQty += excessQtyForLine
+
+          // Store the excess once on the first detail of this product/flavor/price line.
+          // The line can represent multiple customer orders, so duplicating it would
+          // over-count the received excess in the intake history.
+          const firstDetailId = Number(lineDetails[0]?.detail_id)
+          const firstResult = detailResults.find((item) => item.detail_id === firstDetailId)
+          if (firstResult) firstResult.excess_qty = excessQtyForLine
+
+          const firstSummary = orderSummaryMap.get(Number(lineDetails[0]?.order_id))
+          const firstSummaryItem = firstSummary?.items?.find(
+            (item) => item.detail_id === firstDetailId,
+          )
+          if (firstSummaryItem) firstSummaryItem.excess_qty = excessQtyForLine
+        }
+        if (excessQtyForLine > 0 && moveExcessToStock) {
           const firstDetail = lineDetails[0]
-          await adjustProductStock(connection, firstDetail.prod_id, remaining, firstDetail.flavor)
+          await adjustProductStock(
+            connection,
+            firstDetail.prod_id,
+            excessQtyForLine,
+            firstDetail.flavor,
+          )
         }
       }
 
       const [statusRows] = await connection.query(
         `SELECT
            od.order_id,
+           MAX(o.status) AS current_status,
            COALESCE(SUM(od.qty * od.Price), 0) AS ordered_amount,
            COALESCE(SUM(COALESCE(od.received_qty, 0) * od.Price), 0) AS received_amount,
            COALESCE(SUM((od.qty - COALESCE(od.received_qty, 0)) * od.Price), 0) AS refund_amount,
@@ -3574,6 +3796,7 @@ app.post(
            SUM(CASE WHEN COALESCE(od.received_qty, 0) >= od.qty THEN 1 ELSE 0 END) AS completed_items,
            COUNT(*) AS total_items
          FROM order_details od
+         JOIN orders o ON o.order_id = od.order_id
          WHERE od.preorder_round_id = ?
          GROUP BY od.order_id`,
         [roundId],
@@ -3582,11 +3805,11 @@ app.post(
       for (const row of statusRows) {
         const fullReceived = Number(row.completed_items) === Number(row.total_items)
         const allMissing = Number(row.missing_items) === Number(row.total_items)
-        const newStatus = fullReceived
-          ? 'Ready_to_Ship'
-          : allMissing
-            ? 'Missing'
-            : 'Partially_Received'
+        const newStatus = resolveOrderStatusAfterIntake(
+          row.current_status,
+          fullReceived,
+          allMissing,
+        )
 
         await connection.query(
           'UPDATE orders SET total_amount = ?, status = ? WHERE order_id = ?',
@@ -3606,16 +3829,25 @@ app.post(
               ? 'Missing'
               : 'Partially_Received'
 
+        if (!hasIntakeChange) {
+          continue
+        }
+
         const [sessionResult] = await connection.query(
           `INSERT INTO inventory_intake_sessions
-           (order_id, admin_user_id, expected_amount, received_amount, refund_amount, status, note)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+           (order_id, admin_user_id, expected_amount, received_amount, refund_amount, excess_stock_action, status, note)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             orderId,
             req.user?.id || null,
             summary.ordered_amount,
             summary.received_amount,
             summary.refund_amount,
+            summary.items.some((item) => Number(item.excess_qty) > 0)
+              ? moveExcessToStock
+                ? 'moved_to_stock'
+                : 'not_moved'
+              : 'none',
             newStatus,
             note ? `ROUND #${roundId}${note ? ` · ${note}` : ''}` : `ROUND #${roundId}`,
           ],
@@ -3661,6 +3893,9 @@ app.post(
         ordered_amount: orderedAmount,
         received_amount: receivedAmount,
         refund_amount: refundAmount,
+        excess_qty: totalExcessQty,
+        excess_stock_action:
+          totalExcessQty > 0 ? (moveExcessToStock ? 'moved_to_stock' : 'not_moved') : 'none',
         items: detailResults,
       })
     } catch (error) {
@@ -3827,11 +4062,7 @@ app.post(
         })
       }
 
-      const newStatus = allReceived
-        ? 'Ready_to_Ship'
-        : allMissing
-          ? 'Missing'
-          : 'Partially_Received'
+      const newStatus = resolveOrderStatusAfterIntake(order.status, allReceived, allMissing)
       const newTotalAmount = Math.max(Number(order.total_amount) - refundAmount, 0)
 
       await connection.query(
@@ -3927,8 +4158,10 @@ app.patch(
 
       const [detailRows] = await connection.query(
         `SELECT od.detail_id, od.order_id, od.qty AS ordered_qty, COALESCE(od.received_qty, 0) AS received_qty,
-                od.Price AS unit_price, COALESCE(od.arrival_status, 'Pending') AS arrival_status
+                od.Price AS unit_price, COALESCE(od.arrival_status, 'Pending') AS arrival_status,
+                o.status AS order_status
          FROM order_details od
+         JOIN orders o ON o.order_id = od.order_id
          WHERE od.detail_id = ?
          LIMIT 1`,
         [detailId],
@@ -3942,6 +4175,29 @@ app.patch(
       const detail = detailRows[0]
       const orderId = Number(detail.order_id)
       const targetStatus = action === 'refund' ? 'Missing' : 'Delayed'
+
+      const missingQty = Math.max(
+        (Number(detail.ordered_qty) || 0) - (Number(detail.received_qty) || 0),
+        0,
+      )
+      if (missingQty <= 0) {
+        await connection.rollback()
+        return res.status(400).json({ error: 'รายการนี้ไม่มีสินค้าขาด จึงไม่สามารถคืนเงินได้' })
+      }
+
+      // กดซ้ำได้โดยไม่ทำให้ข้อมูลเสียหาย
+      if (String(detail.arrival_status || '').toLowerCase() === targetStatus.toLowerCase()) {
+        await connection.rollback()
+        return res.json({
+          success: true,
+          detail_id: detailId,
+          order_id: orderId,
+          action: targetStatus,
+          refund_amount: missingQty * (Number(detail.unit_price) || 0),
+          order_status: detail.order_status,
+          already_applied: true,
+        })
+      }
 
       await connection.query(`UPDATE order_details SET arrival_status = ? WHERE detail_id = ?`, [
         targetStatus,
@@ -3982,11 +4238,11 @@ app.patch(
           (Number(item.received_qty) || 0) === 0 &&
           String(item.arrival_status || 'Pending').toLowerCase() === 'missing',
       )
-      const newStatus = allReceived
-        ? 'Ready_to_Ship'
-        : allMissing
-          ? 'Missing'
-          : 'Partially_Received'
+      const newStatus = resolveOrderStatusAfterIntake(
+        detail.order_status,
+        allReceived,
+        allMissing,
+      )
 
       await connection.query(`UPDATE orders SET total_amount = ?, status = ? WHERE order_id = ?`, [
         Math.max(orderedAmount - refundAmount, 0),

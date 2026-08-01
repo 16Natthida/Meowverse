@@ -56,7 +56,7 @@ const orderItems = computed(() => {
     const rawReceived = item.received_qty != null ? Number(item.received_qty) : qty
     const receivedQty = hasInventoryTracking.value ? rawReceived : qty
     const missingQty = Math.max(qty - receivedQty, 0)
-    const unitPrice = Number(item.Price || 0)
+    const unitPrice = Number(item.Price ?? item.unit_price ?? 0)
     const arrivalStatus = String(item.arrival_status || '').toLowerCase()
     const refundAmount = arrivalStatus === 'missing' ? missingQty * unitPrice : 0
 
@@ -65,6 +65,7 @@ const orderItems = computed(() => {
       qty,
       receivedQty,
       missingQty,
+      unitPrice,
       arrivalStatus,
       itemTotal: qty * unitPrice,
       receivedTotal: receivedQty * unitPrice,
@@ -101,6 +102,7 @@ function getStatusMessage() {
     pending_import_fee: 'รอค่านำเข้า - กรุณารอสักครู่',
     ready_to_ship: 'พร้อมจัดส่ง - ใกล้ถึงมือคุณแล้ว',
     cancelled: 'ยกเลิกแล้ว',
+    missing: 'สินค้าขาดบางรายการ',
   }
 
   return statusMap[status] || status
@@ -117,6 +119,7 @@ function getStatusLabel() {
     pending_import_fee: 'รอค่านำเข้า',
     ready_to_ship: 'พร้อมจัดส่ง',
     cancelled: 'ยกเลิกแล้ว',
+    missing: 'สินค้าขาดบางรายการ',
   }
 
   return statusLabelMap[status] || status
@@ -225,7 +228,7 @@ onMounted(() => {
                 </div>
               </div>
               <div class="cell col-price">
-                <span class="price-value">฿{{ Number(item.Price).toLocaleString() }}</span>
+                <span class="price-value">฿{{ item.unitPrice.toLocaleString() }}</span>
               </div>
               <div class="cell col-qty">
                 <span class="qty-badge">{{ item.receivedQty }} / {{ item.qty }}</span>

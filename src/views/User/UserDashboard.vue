@@ -1519,7 +1519,6 @@ onMounted(async () => {
 .user-menu__item:hover {
   background: #f5efff;
 }
-
 .logout-btn {
   display: flex;
   align-items: center;

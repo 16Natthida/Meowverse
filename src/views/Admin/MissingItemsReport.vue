@@ -243,6 +243,8 @@ async function executeItemAction(item, action) {
     item.arrival_status = updatedStatus
     item.refund_amount = action === 'refund' ? item.missing_qty * Number(item.unit_price || 0) : 0
     item.order_status = data.order_status || item.order_status
+    // โหลดจากฐานข้อมูลอีกครั้ง เพื่อยืนยันว่าการตัดสินใจถูกบันทึกจริง
+    await fetchData()
   } catch (error) {
     console.error(error)
     alert(error.message || 'เกิดข้อผิดพลาดในการบันทึก')

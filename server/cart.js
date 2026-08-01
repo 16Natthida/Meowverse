@@ -129,6 +129,10 @@ router.get('/', async (req, res) => {
          END) AS item_type,
          p.prod_name AS name,
          c.round_id AS round_id,
+         (SELECT LOWER(r.status)
+          FROM preorder_rounds r
+          WHERE r.round_id = c.preorder_round_id
+          LIMIT 1) AS preorder_round_status,
          COALESCE(c.round_price,
          CASE
            WHEN COALESCE(c.item_type, CASE WHEN p.ready_to_ship_enabled = 1 THEN 'ready-to-ship' WHEN p.preorder_enabled = 1 THEN 'preorder' ELSE NULL END) = 'preorder'

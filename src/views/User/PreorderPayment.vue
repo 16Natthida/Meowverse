@@ -2,8 +2,8 @@
 // Helper to display the correct price (import fee or original price)
 function displayPrice(item) {
   // Use import_fee as the effective price when in import fee stage and fee is set
-  if (order.value?.is_import_fee_stage && Number(item.import_fee) > 0) {
-    return Number(item.import_fee)
+  if (isImportFeePaymentStage.value) {
+    return Number(item.import_fee ?? item.Import_fee ?? 0)
   }
   return Number(item.price || item.Price || item.unit_price || 0)
 }
@@ -72,20 +72,30 @@ const notice = ref({ msg: '', type: '' })
 // ── สรุปยอดและประเภทสินค้าของ Preorder ──
 const importFeeTotal = computed(() => Number(order.value?.import_fee_total || 0))
 
-// แสดงกล่องข้อมูลจัดส่งเมื่อเข้าสู่สเตจค่านำเข้า รวมถึงสถานะหลังจากนั้นทั้งหมดด้วย
-const isImportFeeStage = computed(() => {
-  const status = String(order.value?.status || '')
+const IMPORT_FEE_PAYMENT_STATUSES = [
+  'wait for import fee',
+  'pending import fee',
+  'import slip submitted',
+  'invalid import slip',
+]
+
+const normalizedOrderStatus = computed(() =>
+  String(order.value?.status || '')
     .trim()
     .toLowerCase()
-    .replace(/_/g, ' ')
-  return [
-    'wait for import fee',
-    'pending import fee',
-    'import slip submitted',
-    'invalid import slip',
-    'paid',
-    'ready to ship',
-  ].includes(status)
+    .replace(/_/g, ' '),
+)
+
+// รอบ 2 ต้องยึดทั้งสถานะและยอดค่านำเข้า เพื่อรองรับออเดอร์เก่าที่สถานะเคยถูกบันทึกเป็นค่าว่าง
+const isImportFeePaymentStage = computed(() => {
+  const status = normalizedOrderStatus.value
+  if (IMPORT_FEE_PAYMENT_STATUSES.includes(status)) return true
+  return importFeeTotal.value > 0 && !['paid', 'ready to ship'].includes(status)
+})
+
+// แสดงกล่องข้อมูลจัดส่งเมื่อเข้าสู่สเตจค่านำเข้า รวมถึงสถานะหลังจากนั้นทั้งหมดด้วย
+const isImportFeeStage = computed(() => {
+  return isImportFeePaymentStage.value || ['paid', 'ready to ship'].includes(normalizedOrderStatus.value)
 })
 
 // รอแอดมินแจ้งค่านำเข้า: ล็อกทุกอย่างยกเว้นขอเลื่อนเวลา
@@ -96,14 +106,31 @@ const isWaitingForImportFee = computed(() => {
   return status === 'wait_for_import_fee'
 })
 
-// ล็อกฟอร์มเมื่อสถานะเป็น Ready_to_Ship หรือ Cancelled
-// ยังให้แก้ไขได้ในช่วงรอค่านำเข้าและตอนสลิปค่านำเข้าไม่ถูกต้อง
-const isReadOnlyStage = computed(() => {
-  const status = String(order.value?.status || '')
+const isRoundOpen = computed(() => {
+  const roundStatus = String(order.value?.preorder_round_status || '')
     .trim()
     .toLowerCase()
-  return ['ready_to_ship', 'cancelled'].includes(status)
+  return ['active', 'open'].includes(roundStatus)
 })
+
+// ล็อกฟอร์มเมื่อสถานะเป็น Ready_to_Ship หรือ Cancelled
+// ยังให้แก้ไขได้ในช่วงรอค่านำเข้าและตอนสลิปค่านำเข้าไม่ถูกต้อง
+const isShippingLocked = computed(() => {
+  const status = normalizedOrderStatus.value
+  // รอบ 2 ใช้กรอกที่อยู่พร้อมชำระค่านำเข้า และล็อกเมื่อส่งสลิปรอบ 2 แล้ว
+  return [
+    'slip submitted',
+    'import slip submitted',
+    'paid',
+    'ready to ship',
+    'cancelled',
+  ].includes(status)
+})
+
+// ล็อกทั้งหน้าเฉพาะเมื่อออเดอร์จบหรือยกเลิกแล้ว รอบค่านำเข้ายังต้องแนบสลิปได้
+const isReadOnlyStage = computed(() =>
+  ['paid', 'ready to ship', 'cancelled'].includes(normalizedOrderStatus.value),
+)
 
 // ✅ ซ่อนปุ่มขอเลื่อนกำหนดชำระเงิน และสกัดการเลือกช่องทางการโอนเมื่อออเดอร์จ่ายเสร็จสมบูรณ์/จัดส่งแล้ว
 const isFullyPaid = computed(() => {
@@ -115,22 +142,13 @@ const isFullyPaid = computed(() => {
 
 // ✅ ปรับเงื่อนไข Amount Due ถ้ายืนยันชำระครบ (Paid หรือ Ready to Ship) ให้แสดงยอดรวม 2 รอบ
 const amountDue = computed(() => {
-  const status = String(order.value?.status || '')
-    .trim()
-    .toLowerCase()
-    .replace(/_/g, ' ')
+  const status = normalizedOrderStatus.value
 
   if (['paid', 'ready to ship'].includes(status)) {
     return Number(order.value?.total_amount || 0) + Number(order.value?.import_fee_total || 0)
   }
 
-  const isFeeDue = [
-    'wait for import fee',
-    'pending import fee',
-    'import slip submitted',
-    'invalid import slip',
-  ].includes(status)
-  return isFeeDue
+  return isImportFeePaymentStage.value
     ? Number(order.value?.import_fee_total || 0)
     : Number(order.value?.total_amount || 0)
 })
@@ -439,7 +457,7 @@ const isCancelled = computed(
 
 const onFileChange = async (e) => {
   // ✅ บล็อกถ้าสถานะเป็น ReadOnly หรือชำระเงินเรียบร้อยแล้ว (Paid)
-  if (isReadOnlyStage.value || isFullyPaid.value) return
+  if (isReadOnlyStage.value || isFullyPaid.value || isRoundOpen.value) return
   const file = e.target.files[0]
   if (!file) return
   if (file.size > 5 * 1024 * 1024) {
@@ -474,7 +492,7 @@ const onFileChange = async (e) => {
 
 const editSlipImage = () => {
   // ✅ บล็อกการคลิกแก้รูปสลิป ถ้าสถานะเป็น ReadOnly หรือชำระเงินเรียบร้อยแล้ว (Paid)
-  if (isReadOnlyStage.value || isFullyPaid.value) return
+  if (isReadOnlyStage.value || isFullyPaid.value || isRoundOpen.value) return
   if (slipFileInput.value) slipFileInput.value.click()
 }
 
@@ -494,6 +512,8 @@ const fetchOrder = async () => {
         total_amount: pendingData.total_amount,
         Order_type: 'Preorder',
         user_id: pendingData.user_id,
+        preorder_round_status:
+          (pendingData.items || []).find((item) => item.preorder_round_status)?.preorder_round_status || null,
       }
       const pendingProdIds = (pendingData.items || []).map((i) => i.prod_id)
       await fetchProductImages(pendingProdIds)
@@ -569,7 +589,12 @@ const fetchOrder = async () => {
 }
 
 const confirmPayment = async () => {
-  if (loading.value || isReadOnlyStage.value) return
+  if (loading.value || isReadOnlyStage.value || isRoundOpen.value) {
+    if (isRoundOpen.value) {
+      showNotice('รอบพรีออเดอร์ยังไม่ปิด จึงยังไม่สามารถชำระเงินได้', 'warning')
+    }
+    return
+  }
 
   // แปลงสถานะเพื่อเช็กเงื่อนไขให้ง่ายขึ้น
   const currentStatus = String(order.value?.status || '')
@@ -881,6 +906,11 @@ onMounted(async () => {
             </div>
           </section>
 
+          <div v-if="isRoundOpen" class="round-open-notice">
+            <strong>รอบพรีออเดอร์ยังไม่ปิด</strong>
+            <span>คุณสามารถดูรายละเอียดออเดอร์ได้ แต่จะยังชำระเงินหรือส่งสลิปไม่ได้จนกว่าแอดมินจะปิดรอบ</span>
+          </div>
+
           <div class="section-card">
             <div class="section-header">
               <h2 class="section-title" style="display: flex; align-items: center">
@@ -1079,7 +1109,7 @@ onMounted(async () => {
                       </span>
                     </p>
                     <p
-                      v-if="order.is_import_fee_stage && it.import_fee > 0"
+                      v-if="isImportFeeStage"
                       class="item-price-small"
                       style="color: #f59e42; font-weight: 600"
                     >
@@ -1216,7 +1246,7 @@ onMounted(async () => {
                 ข้อมูลจัดส่ง
               </h3>
               <span class="section-caption">{{
-                isReadOnlyStage
+                isShippingLocked
                   ? 'ข้อมูลการจัดส่งสินค้าพรีออเดอร์ (ล็อกเนื่องจากเตรียมจัดส่งแล้ว)'
                   : 'สามารถแก้ไขข้อมูลจัดส่งได้จนกว่าสินค้าจะเตรียมจัดส่ง'
               }}</span>
@@ -1228,7 +1258,7 @@ onMounted(async () => {
                   id="recipient-name"
                   v-model="shippingInfo.name"
                   placeholder="ชื่อผู้รับ"
-                  :disabled="isReadOnlyStage"
+                  :disabled="isShippingLocked"
                 />
               </div>
 
@@ -1239,7 +1269,7 @@ onMounted(async () => {
                     id="recipient-phone"
                     v-model="shippingInfo.phone"
                     placeholder="0812345678"
-                    :disabled="isReadOnlyStage"
+                    :disabled="isShippingLocked"
                   />
                 </div>
                 <div>
@@ -1247,7 +1277,7 @@ onMounted(async () => {
                   <select
                     id="shipping-carrier"
                     v-model="shippingInfo.carrier"
-                    :disabled="isReadOnlyStage"
+                    :disabled="isShippingLocked"
                   >
                     <option value="">-- เลือกบริษัทขนส่ง --</option>
                     <option value="Kerry">Kerry</option>
@@ -1264,7 +1294,7 @@ onMounted(async () => {
                   id="shipping-notes"
                   v-model="shippingInfo.notes"
                   placeholder="หมายเหตุเพิ่มเติม (ไม่บังคับ)"
-                  :disabled="isReadOnlyStage"
+                  :disabled="isShippingLocked"
                 />
               </div>
 
@@ -1275,7 +1305,7 @@ onMounted(async () => {
                   v-model="shippingInfo.address"
                   rows="4"
                   placeholder="ที่อยู่สำหรับจัดส่งสินค้า"
-                  :disabled="isReadOnlyStage"
+                  :disabled="isShippingLocked"
                 ></textarea>
               </div>
             </div>
@@ -1661,7 +1691,7 @@ onMounted(async () => {
                   accept="image/*"
                   @change="onFileChange"
                   class="hidden-input"
-                  :disabled="isReadOnlyStage || isFullyPaid"
+                  :disabled="isReadOnlyStage || isFullyPaid || isRoundOpen"
                 />
                 <div v-if="!slipImageUrl" class="upload-label" @click="editSlipImage">
                   <div class="upload-prompt">
@@ -1717,7 +1747,7 @@ onMounted(async () => {
                   padding-inline: 4px;
                 "
               >
-                <div style="display: flex; justify-content: space-between">
+                <div v-if="!isImportFeePaymentStage" style="display: flex; justify-content: space-between">
                   <span>ยอดรวมสินค้า</span>
                   <span>฿{{ Number(order.total_amount).toLocaleString() }}</span>
                 </div>
@@ -1794,12 +1824,14 @@ onMounted(async () => {
               <button
                 class="btn-checkout"
                 @click="confirmPayment"
-                :disabled="loading || isReadOnlyStage"
+                :disabled="loading || isReadOnlyStage || isRoundOpen"
               >
                 {{
                   loading
                     ? 'กำลังประมวลผล...'
-                    : isReadOnlyStage
+                    : isRoundOpen
+                      ? 'รอแอดมินปิดรอบก่อนจึงจะชำระเงินได้'
+                      : isReadOnlyStage
                       ? 'ออเดอร์ถูกเตรียมจัดส่งแล้ว'
                       : order.status && ['paid'].includes(String(order.status).toLowerCase())
                         ? 'บันทึกอัปเดตข้อมูลจัดส่ง'
@@ -1835,6 +1867,7 @@ onMounted(async () => {
     linear-gradient(180deg, #fcfbff 0%, #f4efff 100%);
   color: #35235b;
 }
+
 .navbar {
   height: 60px;
   display: flex;
@@ -2375,6 +2408,21 @@ onMounted(async () => {
     transform 0.2s ease,
     box-shadow 0.2s ease,
     opacity 0.2s ease;
+}
+.round-open-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 1rem 0;
+  padding: 1rem 1.1rem;
+  border: 1px solid #f3c96b;
+  border-radius: 14px;
+  background: #fff8e7;
+  color: #8a5a00;
+  line-height: 1.5;
+}
+.round-open-notice strong {
+  color: #704700;
 }
 .btn-checkout:hover:not(:disabled) {
   transform: translateY(-1px);
