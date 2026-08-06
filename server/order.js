@@ -313,7 +313,7 @@ router.post('/confirm-payment', async (req, res) => {
   if (typeof requestItems === 'string') {
     try {
       selectedItems = JSON.parse(requestItems)
-    } catch (e) {
+    } catch {
       selectedItems = []
     }
   }
@@ -804,7 +804,8 @@ router.get('/:order_id', async (req, res) => {
                WHERE od_round.order_id = o.order_id
                ORDER BY pr.round_id DESC
                LIMIT 1) AS preorder_round_status,
-              s.name AS shipping_name, s.phone AS shipping_phone, s.address AS shipping_address, s.notes AS shipping_notes, s.Shipping_Carrier
+              s.name AS shipping_name, s.phone AS shipping_phone, s.address AS shipping_address, s.notes AS shipping_notes, s.Shipping_Carrier,
+              o.split_parent_order_id
        FROM orders o
        LEFT JOIN accounts a ON o.user_id = a.user_id
        LEFT JOIN shipping s ON o.order_id = s.order_id
@@ -877,6 +878,7 @@ COALESCE(
        LEFT JOIN products p ON od.prod_id = p.prod_id
        LEFT JOIN categories c ON p.cat_id = c.cat_id
        WHERE od.order_id = ?
+         AND od.qty > 0
        ORDER BY od.item_type ASC, od.detail_id`,
       [order_id],
     )

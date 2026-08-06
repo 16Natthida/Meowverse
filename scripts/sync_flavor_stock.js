@@ -19,7 +19,7 @@ function parseFlavorStock(value) {
   if (!value) return {}
   try {
     return typeof value === 'string' ? JSON.parse(value) : value
-  } catch (e) {
+  } catch {
     return {}
   }
 }
@@ -48,7 +48,9 @@ async function main() {
     console.error('Error during sync:', err.message || err)
     try {
       await conn.rollback()
-    } catch (_) {}
+    } catch {
+      // Rollback may fail if the transaction was not started.
+    }
     process.exitCode = 2
   } finally {
     conn.release()

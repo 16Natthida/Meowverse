@@ -11,12 +11,19 @@ export default defineConfig([
     files: ['**/*.{vue,js,mjs,jsx}'],
   },
 
-  globalIgnores(['**/dist/**', '**/dist-ssr/**', '**/coverage/**']),
+  globalIgnores([
+    '**/dist/**',
+    '**/dist-ssr/**',
+    '**/coverage/**',
+    '**/.tmp_*.vue',
+    'Meowverse/**',
+  ]),
 
   {
     languageOptions: {
       globals: {
         ...globals.browser,
+        ...globals.node,
       },
     },
   },

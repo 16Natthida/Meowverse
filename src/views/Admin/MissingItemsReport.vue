@@ -160,7 +160,6 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useAuth } from '../../composables/useAuth'
-import translateError from '../../utils/translateError'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 const { getUser } = useAuth()
@@ -178,14 +177,6 @@ function authHeaders() {
     'x-user-role': String(user.role || '').toLowerCase() || 'admin',
     'x-user-id': String(user.user_id || user.id || ''),
   }
-}
-
-function formatMoney(value) {
-  return new Intl.NumberFormat('th-TH', {
-    style: 'currency',
-    currency: 'THB',
-    maximumFractionDigits: 0,
-  }).format(Number(value) || 0)
 }
 
 function formatOrderStatus(status) {

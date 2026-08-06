@@ -214,17 +214,28 @@ onMounted(() => {
           </div>
 
           <div class="items-grid">
-            <div v-for="item in orderItems" :key="item.detail_id" class="grid-row">
+            <div
+              v-for="item in orderItems"
+              :key="item.detail_id"
+              class="grid-row"
+              :class="{ 'grid-row--delayed': ['delayed', 'missing'].includes(item.arrivalStatus) }"
+            >
               <div class="cell col-product">
                 <div class="product-cell">
                   <div class="product-image">
                     <img v-if="item.image" :src="item.image" :alt="item.name" />
                     <span v-else class="no-image">🐾</span>
                   </div>
-                  <div class="product-info">
-                    <p class="product-name">{{ item.name }}</p>
-                    <p v-if="item.flavor" class="product-flavor">{{ item.flavor }}</p>
+                <div class="product-info">
+                  <p class="product-name">{{ item.name }}</p>
+                  <p v-if="item.flavor" class="product-flavor">{{ item.flavor }}</p>
+                  <div
+                    v-if="['delayed', 'missing'].includes(item.arrivalStatus)"
+                    class="arrival-warning"
+                  >
+                    ของยังไม่ถึง
                   </div>
+                </div>
                 </div>
               </div>
               <div class="cell col-price">
@@ -671,6 +682,20 @@ onMounted(() => {
   align-items: center;
   transition: all 0.3s;
   animation: fadeInRow 0.4s ease backwards;
+}
+.grid-row--delayed {
+  background: #fff4f3;
+  border-left: 4px solid #ef4444;
+}
+.arrival-warning {
+  display: inline-block;
+  margin-top: 0.35rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 0.35rem;
+  background: #ef4444;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 800;
 }
 
 @keyframes fadeInRow {

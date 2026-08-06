@@ -69,14 +69,6 @@ const filteredOrders = computed(() => {
   })
 })
 
-const kpiStats = computed(() => {
-  return {
-    total: orders.value.length,
-    ready: orders.value.filter(o => o.Order_type === 'Ready').length,
-    preorder: orders.value.filter(o => o.Order_type === 'Preorder').length
-  }
-})
-
 onMounted(fetchShippingOrders)
 </script>
 
