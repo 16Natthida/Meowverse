@@ -146,7 +146,7 @@ async function validatePreorderRound(connection, roundId) {
     .toLowerCase()
   const roundName = rows[0].round_name || `รอบ #${roundId}`
 
-  if (status === 'active') {
+  if (['active', 'open'].includes(status)) {
     return {
       ok: false,
       error: `รอบพรีออเดอร์ "${roundName}" ยังเปิดรับออเดอร์อยู่ ไม่สามารถยืนยันออเดอร์ได้จนกว่ารอบจะปิด`,
@@ -313,7 +313,7 @@ router.post('/confirm-payment', async (req, res) => {
   if (typeof requestItems === 'string') {
     try {
       selectedItems = JSON.parse(requestItems)
-    } catch (e) {
+    } catch {
       selectedItems = []
     }
   }
@@ -763,7 +763,19 @@ router.get('/', async (req, res) => {
   try {
     const db = getDB(req)
     const [rows] = await db.query(
-      `SELECT order_id, user_id, total_amount, status, deadline, Order_type, Order_date
+      `SELECT order_id, user_id, total_amount, import_fee_total, status, deadline, Order_type, Order_date,
+              COALESCE((
+                SELECT SUM(GREATEST(od_refund.qty - COALESCE(od_refund.received_qty, 0), 0) * od_refund.Price)
+                FROM order_details od_refund
+                WHERE od_refund.order_id = orders.order_id
+                  AND LOWER(COALESCE(od_refund.arrival_status, '')) = 'missing'
+              ), 0) AS refund_amount,
+              COALESCE((
+                SELECT COUNT(*)
+                FROM order_details od_refund_count
+                WHERE od_refund_count.order_id = orders.order_id
+                  AND LOWER(COALESCE(od_refund_count.arrival_status, '')) = 'missing'
+              ), 0) AS refund_item_count
        FROM orders
        WHERE user_id = ?
        ORDER BY Order_date DESC`,
@@ -786,7 +798,14 @@ router.get('/:order_id', async (req, res) => {
 
     const [orderRows] = await db.query(
       `SELECT o.order_id, o.user_id, o.total_amount, o.status, o.deadline, o.Order_type, o.Order_date, o.import_fee_total, a.username,
-              s.name AS shipping_name, s.phone AS shipping_phone, s.address AS shipping_address, s.notes AS shipping_notes, s.Shipping_Carrier
+              (SELECT LOWER(pr.status)
+               FROM preorder_rounds pr
+               JOIN order_details od_round ON od_round.preorder_round_id = pr.round_id
+               WHERE od_round.order_id = o.order_id
+               ORDER BY pr.round_id DESC
+               LIMIT 1) AS preorder_round_status,
+              s.name AS shipping_name, s.phone AS shipping_phone, s.address AS shipping_address, s.notes AS shipping_notes, s.Shipping_Carrier,
+              o.split_parent_order_id
        FROM orders o
        LEFT JOIN accounts a ON o.user_id = a.user_id
        LEFT JOIN shipping s ON o.order_id = s.order_id
@@ -834,7 +853,7 @@ router.get('/:order_id', async (req, res) => {
     }
 
     const [detailRows] = await db.query(
-      `SELECT od.detail_id, od.prod_id, od.flavor, od.Price AS unit_price, od.qty, od.received_qty, od.arrival_status, od.Import_fee, od.item_type, od.preorder_round_id, p.prod_name AS name, c.cat_name AS category_name,
+      `SELECT od.detail_id, od.prod_id, od.flavor, od.Price AS unit_price, od.qty, od.received_qty, od.arrival_status, od.Import_fee AS import_fee, od.item_type, od.preorder_round_id, p.prod_name AS name, c.cat_name AS category_name,
 COALESCE(
          (
            SELECT pi.image_url
@@ -859,6 +878,7 @@ COALESCE(
        LEFT JOIN products p ON od.prod_id = p.prod_id
        LEFT JOIN categories c ON p.cat_id = c.cat_id
        WHERE od.order_id = ?
+         AND od.qty > 0
        ORDER BY od.item_type ASC, od.detail_id`,
       [order_id],
     )
@@ -921,7 +941,7 @@ router.patch('/:order_id/import-fee', async (req, res) => {
 
     // Get all preorder items in this order
     const [detailRows] = await connection.query(
-      `SELECT detail_id FROM order_details
+      `SELECT detail_id, qty FROM order_details
        WHERE order_id = ? AND item_type = 'preorder'
        ORDER BY detail_id ASC`,
       [order_id],
@@ -931,9 +951,15 @@ router.patch('/:order_id/import-fee', async (req, res) => {
       return res.status(404).json({ error: 'ไม่พบรายการพรีออเดอร์ในออเดอร์นี้' })
     }
 
-    // Distribute import fee evenly across all preorder items (rounded to 2 decimal places)
-    const perItemFee = Math.round((importFee / detailRows.length) * 100) / 100
-    for (const row of detailRows) {
+    // Distribute the total fee by ordered quantity, not by line count.
+    const totalOrderedQty = detailRows.reduce((sum, row) => sum + Math.max(Number(row.qty) || 0, 0), 0)
+    let allocatedFee = 0
+    for (const [index, row] of detailRows.entries()) {
+      const isLast = index === detailRows.length - 1
+      const perItemFee = isLast
+        ? Math.max(Math.round((importFee - allocatedFee) * 100) / 100, 0)
+        : Math.round((importFee * (Math.max(Number(row.qty) || 0, 0) / (totalOrderedQty || 1))) * 100) / 100
+      allocatedFee += isLast ? 0 : perItemFee
       await connection.query('UPDATE order_details SET Import_fee = ? WHERE detail_id = ?', [
         perItemFee,
         row.detail_id,

@@ -76,6 +76,19 @@ const router = createRouter({
       component: () => import('../views/Admin/OrderManagement.vue'),
       meta: { requiresAuth: true, roles: ['admin'] },
     },
+    // ── เส้นทางแยกสำหรับรายการยอดขาย "พร้อมส่ง" และ "พรีออเดอร์" ให้แอดมินเลือกดูแยกกันได้ชัดเจน ──
+    {
+      path: '/admin/sales/ready-to-ship',
+      name: 'admin-sales-ready-to-ship',
+      component: () => import('../views/Admin/OrderManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'], orderType: 'ready' },
+    },
+    {
+      path: '/admin/sales/preorder',
+      name: 'admin-sales-preorder',
+      component: () => import('../views/Admin/OrderManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'], orderType: 'preorder' },
+    },
     {
       path: '/admin/inventory-intake',
       component: () => import('../views/Admin/InventoryIntakeManagement.vue'),
@@ -99,6 +112,19 @@ const router = createRouter({
       component: UserDashboard,
       meta: { requiresAuth: true, roles: ['user', 'admin'] },
     },
+    // ── เส้นทางแยกสำหรับหมวดสินค้า "พร้อมส่ง" และ "พรีออเดอร์" ให้ user เห็นชัดเจนใน URL ──
+    {
+      path: '/products/ready-to-ship',
+      name: 'products-ready-to-ship',
+      component: UserDashboard,
+      meta: { requiresAuth: true, roles: ['user', 'admin'], browseTab: 'พร้อมส่ง' },
+    },
+    {
+      path: '/products/preorder',
+      name: 'products-preorder',
+      component: UserDashboard,
+      meta: { requiresAuth: true, roles: ['user', 'admin'], browseTab: 'พรีออเดอร์' },
+    },
     { path: '/cart', component: () => import('../views/User/CartPage.vue') },
     {
       path: '/order/:orderId',
@@ -107,8 +133,22 @@ const router = createRouter({
     },
     {
       path: '/order-list',
+      name: 'order-list',
       component: () => import('../views/User/Orderlist.vue'),
       meta: { requiresAuth: true, roles: ['user'] },
+    },
+    // ── เส้นทางแยกสำหรับรายการออเดอร์ "พร้อมส่ง" และ "พรีออเดอร์" ให้เลือกดูแยกกันได้ชัดเจน ──
+    {
+      path: '/order-list/ready-to-ship',
+      name: 'order-list-ready-to-ship',
+      component: () => import('../views/User/Orderlist.vue'),
+      meta: { requiresAuth: true, roles: ['user'], orderType: 'ready' },
+    },
+    {
+      path: '/order-list/preorder',
+      name: 'order-list-preorder',
+      component: () => import('../views/User/Orderlist.vue'),
+      meta: { requiresAuth: true, roles: ['user'], orderType: 'preorder' },
     },
     {
       path: '/profile',

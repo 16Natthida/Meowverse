@@ -1,15 +1,34 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
 
 const router = useRouter()
+const route = useRoute()
 const { logout, getUser } = useAuth()
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 
 const currentUser = computed(() => getUser())
 const showUserMenu = ref(false)
 const userMenuRef = ref(null)
+
+// ── MOBILE NAV (hamburger menu + search toggle) ──
+const mobileMenuOpen = ref(false)
+const mobileMenuRef = ref(null)
+const mobileSearchOpen = ref(false)
+
+function toggleMobileMenu() {
+  mobileMenuOpen.value = !mobileMenuOpen.value
+  if (mobileMenuOpen.value) mobileSearchOpen.value = false
+}
+
+function closeMobileMenu() {
+  mobileMenuOpen.value = false
+}
+
+function toggleMobileSearch() {
+  mobileSearchOpen.value = !mobileSearchOpen.value
+}
 
 function toggleUserMenu() {
   showUserMenu.value = !showUserMenu.value
@@ -21,17 +40,26 @@ function closeUserMenu() {
 
 function goToUserProfile() {
   closeUserMenu()
+  closeMobileMenu()
   router.push('/profile')
 }
 
 function goToMyOrders() {
   closeUserMenu()
+  closeMobileMenu()
   router.push('/order-list')
 }
 
 function handleOutsideClick(event) {
   if (userMenuRef.value && !userMenuRef.value.contains(event.target)) {
     closeUserMenu()
+  }
+  if (
+    mobileMenuRef.value &&
+    !mobileMenuRef.value.contains(event.target) &&
+    !event.target.closest('.navbar__hamburger')
+  ) {
+    closeMobileMenu()
   }
 }
 
@@ -70,6 +98,23 @@ const logoImage = ref(defaultLogoImageUrl)
 const activePreorderRounds = ref([])
 
 const tabs = ['หน้าหลัก', 'พร้อมส่ง', 'พรีออเดอร์','รายการออเดอร์']
+
+// ── ผูก activeTab กับ path ปัจจุบัน เพื่อให้ "พร้อมส่ง" และ "พรีออเดอร์" มี path แยกกันชัดเจน ──
+// /products/ready-to-ship -> พร้อมส่ง, /products/preorder -> พรีออเดอร์, /dashboard -> หน้าหลัก
+function syncTabFromRoute() {
+  const browseTab = route.meta?.browseTab
+  if (browseTab) {
+    activeTab.value = browseTab
+  } else if (route.name === 'userDashboard') {
+    activeTab.value = 'หน้าหลัก'
+  }
+}
+
+watch(
+  () => route.fullPath,
+  () => syncTabFromRoute(),
+  { immediate: true },
+)
 
 const iconMap = [
   { keyword: 'ขนม', icon: '🍬' },
@@ -615,13 +660,38 @@ function goToPage(page) {
 }
 
 function handleTabClick(tab) {
+  closeMobileMenu()
   if (tab === 'รายการออเดอร์') {
     goToOrders()
     return
   }
-  activeTab.value = tab
   currentPage.value = 1
-  if (tab === 'หน้าหลัก') activeCategory.value = null
+  if (tab === 'หน้าหลัก') {
+    activeCategory.value = null
+    if (route.name !== 'userDashboard') {
+      router.push('/dashboard')
+      return
+    }
+    activeTab.value = tab
+    return
+  }
+  if (tab === 'พร้อมส่ง') {
+    if (route.name !== 'products-ready-to-ship') {
+      router.push('/products/ready-to-ship')
+      return
+    }
+    activeTab.value = tab
+    return
+  }
+  if (tab === 'พรีออเดอร์') {
+    if (route.name !== 'products-preorder') {
+      router.push('/products/preorder')
+      return
+    }
+    activeTab.value = tab
+    return
+  }
+  activeTab.value = tab
 }
 
 function handleCategoryClick(id) {
@@ -722,6 +792,16 @@ onMounted(async () => {
 <template>
   <div class="shop">
     <nav class="navbar">
+      <button
+        type="button"
+        class="navbar__hamburger"
+        :class="{ 'navbar__hamburger--open': mobileMenuOpen }"
+        aria-label="เปิดเมนู"
+        @click.stop="toggleMobileMenu"
+      >
+        <span></span><span></span><span></span>
+      </button>
+
       <div class="navbar__logo">
         <img v-if="logoImage" :src="logoImage" alt="Meowverse logo" class="logo-icon-img" />
         <span v-else class="logo-icon">🐱</span>
@@ -751,7 +831,7 @@ onMounted(async () => {
       </ul>
 
       <div class="navbar__right">
-        <div class="search-box">
+        <div class="search-box" :class="{ 'search-box--mobile-open': mobileSearchOpen }">
           <svg class="search-icon" viewBox="0 0 20 20" fill="none">
             <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.7" />
             <path
@@ -763,6 +843,18 @@ onMounted(async () => {
           </svg>
           <input v-model="searchQuery" type="text" placeholder="ค้นหาสินค้า" class="search-input" />
         </div>
+
+        <button
+          type="button"
+          class="mobile-search-btn"
+          aria-label="ค้นหาสินค้า"
+          @click.stop="toggleMobileSearch"
+        >
+          <svg viewBox="0 0 20 20" fill="none">
+            <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.7" />
+            <path d="M13 13l3.5 3.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+          </svg>
+        </button>
 
         <button class="cart-icon-btn" @click="goToCart" title="ตะกร้าสินค้า">
           <svg
@@ -809,6 +901,49 @@ onMounted(async () => {
               clip-rule="evenodd"
             />
           </svg>
+          <span class="logout-btn__text">ออกจากระบบ</span>
+        </button>
+      </div>
+
+      <!-- ── MOBILE SEARCH BAR ── -->
+      <div v-if="mobileSearchOpen" class="mobile-search-bar">
+        <svg viewBox="0 0 20 20" fill="none">
+          <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.7" />
+          <path d="M13 13l3.5 3.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+        </svg>
+        <input
+          v-model="searchQuery"
+          type="text"
+          placeholder="ค้นหาสินค้า"
+          class="mobile-search-bar__input"
+          autofocus
+        />
+      </div>
+
+      <!-- ── MOBILE MENU (hamburger dropdown) ── -->
+      <div v-if="mobileMenuOpen" class="mobile-menu" ref="mobileMenuRef">
+        <button
+          v-for="tab in tabs"
+          :key="tab"
+          type="button"
+          class="mobile-menu__item"
+          :class="{ 'mobile-menu__item--active': activeTab === tab }"
+          @click="handleTabClick(tab)"
+        >
+          {{ tab }}
+          <span
+            v-if="tab === 'รายการออเดอร์' && orderNotifDot === 'red'"
+            class="order-notif-dot order-notif-dot--red"
+          ></span>
+          <span
+            v-else-if="tab === 'รายการออเดอร์' && orderNotifDot === 'green'"
+            class="order-notif-dot order-notif-dot--green"
+          ></span>
+        </button>
+        <div class="mobile-menu__divider"></div>
+        <button type="button" class="mobile-menu__item" @click="goToUserProfile">บัญชีของฉัน</button>
+        <button type="button" class="mobile-menu__item" @click="goToMyOrders">การซื้อของฉัน</button>
+        <button type="button" class="mobile-menu__item mobile-menu__item--danger" @click="handleLogout">
           ออกจากระบบ
         </button>
       </div>
@@ -1307,6 +1442,123 @@ onMounted(async () => {
   backdrop-filter: blur(8px);
 }
 
+/* ── MOBILE NAV: HAMBURGER BUTTON (hidden on desktop, shown <=768px) ── */
+.navbar__hamburger {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  width: 38px;
+  height: 38px;
+  border: none;
+  background: transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+.navbar__hamburger:hover {
+  background: #f4eaff;
+}
+.navbar__hamburger span {
+  display: block;
+  width: 20px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--primary);
+  transition: transform 0.22s ease, opacity 0.18s ease;
+}
+.navbar__hamburger--open span:nth-child(1) {
+  transform: translateY(6px) rotate(45deg);
+}
+.navbar__hamburger--open span:nth-child(2) {
+  opacity: 0;
+}
+.navbar__hamburger--open span:nth-child(3) {
+  transform: translateY(-6px) rotate(-45deg);
+}
+
+/* ── MOBILE SEARCH TOGGLE + BAR ── */
+.mobile-search-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 50%;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+.mobile-search-btn svg {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+.mobile-search-bar {
+  display: none;
+}
+
+/* ── MOBILE DROPDOWN MENU (hamburger contents) ── */
+.mobile-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: #fff;
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 14px 26px rgba(89, 61, 125, 0.14);
+  padding: 0.5rem;
+  display: grid;
+  gap: 0.15rem;
+  z-index: 999;
+  animation: mobile-menu-in 0.18s ease;
+}
+@keyframes mobile-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.mobile-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0.8rem 0.9rem;
+  border-radius: 10px;
+  font-size: 0.94rem;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+}
+.mobile-menu__item:active {
+  background: #f4eaff;
+}
+.mobile-menu__item--active {
+  color: var(--primary);
+  background: #f6eeff;
+}
+.mobile-menu__item--danger {
+  color: #e0455b;
+}
+.mobile-menu__divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0.4rem 0.2rem;
+}
+
 .navbar__logo {
   display: flex;
   align-items: center;
@@ -1519,7 +1771,6 @@ onMounted(async () => {
 .user-menu__item:hover {
   background: #f5efff;
 }
-
 .logout-btn {
   display: flex;
   align-items: center;
@@ -2456,7 +2707,51 @@ onMounted(async () => {
 /* ── RESPONSIVE ── */
 @media (max-width: 768px) {
   .navbar {
-    padding: 0 1rem;
+    padding: 0 0.85rem;
+    position: relative;
+    gap: 0.6rem;
+  }
+  .navbar__hamburger {
+    display: flex;
+  }
+  .mobile-search-btn {
+    display: flex;
+  }
+  .mobile-search-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.65rem 1rem;
+    border-top: 1px solid var(--border);
+    background: #fff;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 998;
+    box-shadow: 0 10px 20px rgba(89, 61, 125, 0.1);
+  }
+  .mobile-search-bar svg {
+    width: 16px;
+    height: 16px;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  .mobile-search-bar__input {
+    flex: 1;
+    border: none;
+    outline: none;
+    font-size: 0.92rem;
+    font-family: inherit;
+    background: transparent;
+    min-width: 0;
+  }
+  .search-box {
+    display: none;
+  }
+  .user-pill,
+  .logout-btn {
+    display: none;
   }
   .navbar__tabs {
     display: none;
@@ -2488,9 +2783,6 @@ onMounted(async () => {
   }
   .product-grid {
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  }
-  .search-input {
-    width: 100px;
   }
 }
 @media (max-width: 480px) {

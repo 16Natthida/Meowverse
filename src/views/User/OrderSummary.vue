@@ -56,7 +56,7 @@ const orderItems = computed(() => {
     const rawReceived = item.received_qty != null ? Number(item.received_qty) : qty
     const receivedQty = hasInventoryTracking.value ? rawReceived : qty
     const missingQty = Math.max(qty - receivedQty, 0)
-    const unitPrice = Number(item.Price || 0)
+    const unitPrice = Number(item.Price ?? item.unit_price ?? 0)
     const arrivalStatus = String(item.arrival_status || '').toLowerCase()
     const refundAmount = arrivalStatus === 'missing' ? missingQty * unitPrice : 0
 
@@ -65,6 +65,7 @@ const orderItems = computed(() => {
       qty,
       receivedQty,
       missingQty,
+      unitPrice,
       arrivalStatus,
       itemTotal: qty * unitPrice,
       receivedTotal: receivedQty * unitPrice,
@@ -101,6 +102,7 @@ function getStatusMessage() {
     pending_import_fee: 'รอค่านำเข้า - กรุณารอสักครู่',
     ready_to_ship: 'พร้อมจัดส่ง - ใกล้ถึงมือคุณแล้ว',
     cancelled: 'ยกเลิกแล้ว',
+    missing: 'สินค้าขาดบางรายการ',
   }
 
   return statusMap[status] || status
@@ -117,6 +119,7 @@ function getStatusLabel() {
     pending_import_fee: 'รอค่านำเข้า',
     ready_to_ship: 'พร้อมจัดส่ง',
     cancelled: 'ยกเลิกแล้ว',
+    missing: 'สินค้าขาดบางรายการ',
   }
 
   return statusLabelMap[status] || status
@@ -211,21 +214,32 @@ onMounted(() => {
           </div>
 
           <div class="items-grid">
-            <div v-for="item in orderItems" :key="item.detail_id" class="grid-row">
+            <div
+              v-for="item in orderItems"
+              :key="item.detail_id"
+              class="grid-row"
+              :class="{ 'grid-row--delayed': ['delayed', 'missing'].includes(item.arrivalStatus) }"
+            >
               <div class="cell col-product">
                 <div class="product-cell">
                   <div class="product-image">
                     <img v-if="item.image" :src="item.image" :alt="item.name" />
                     <span v-else class="no-image">🐾</span>
                   </div>
-                  <div class="product-info">
-                    <p class="product-name">{{ item.name }}</p>
-                    <p v-if="item.flavor" class="product-flavor">{{ item.flavor }}</p>
+                <div class="product-info">
+                  <p class="product-name">{{ item.name }}</p>
+                  <p v-if="item.flavor" class="product-flavor">{{ item.flavor }}</p>
+                  <div
+                    v-if="['delayed', 'missing'].includes(item.arrivalStatus)"
+                    class="arrival-warning"
+                  >
+                    ของยังไม่ถึง
                   </div>
+                </div>
                 </div>
               </div>
               <div class="cell col-price">
-                <span class="price-value">฿{{ Number(item.Price).toLocaleString() }}</span>
+                <span class="price-value">฿{{ item.unitPrice.toLocaleString() }}</span>
               </div>
               <div class="cell col-qty">
                 <span class="qty-badge">{{ item.receivedQty }} / {{ item.qty }}</span>
@@ -668,6 +682,20 @@ onMounted(() => {
   align-items: center;
   transition: all 0.3s;
   animation: fadeInRow 0.4s ease backwards;
+}
+.grid-row--delayed {
+  background: #fff4f3;
+  border-left: 4px solid #ef4444;
+}
+.arrival-warning {
+  display: inline-block;
+  margin-top: 0.35rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 0.35rem;
+  background: #ef4444;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 800;
 }
 
 @keyframes fadeInRow {

@@ -14,8 +14,3 @@ for (let i = 0; i < s.length; i++) {
 }
 console.log('braces', braces, 'parens', parens, 'brackets', brackets)
 console.log('length', s.split('\n').length)
-const lines = s.split('\n')
-for (let i = 0; i < lines.length; i++) {
-  if (lines[i].includes('TODO:') || lines[i].includes('Unexpected')) {
-  }
-}

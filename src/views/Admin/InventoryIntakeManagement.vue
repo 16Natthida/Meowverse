@@ -100,13 +100,9 @@ function clearSelectedIntakeOrder() {
 
 function updateDraft(detailId, rawValue) {
   const value = Number(rawValue)
-  const selectedItem = selectedIntakeOrder.value?.items?.find(
-    (item) => String(item.detail_id) === String(detailId),
-  )
-  const maxQty = Math.max(Number(selectedItem?.ordered_qty) || 0, 0)
   receivedDraft.value = {
     ...receivedDraft.value,
-    [detailId]: Number.isFinite(value) && value >= 0 ? Math.min(Math.floor(value), maxQty) : 0,
+    [detailId]: Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0,
   }
 }
 
@@ -118,6 +114,21 @@ const itemsNeedingAttention = computed(() => {
     return received < ordered
   })
 })
+
+const excessReceivedItems = computed(() => {
+  if (!selectedIntakeOrder.value) return []
+  return selectedIntakeOrder.value.items
+    .map((item) => {
+      const received = Number(receivedDraft.value[item.detail_id] ?? 0)
+      const ordered = Number(item.ordered_qty) || 0
+      return { ...item, excess_qty: Math.max(received - ordered, 0) }
+    })
+    .filter((item) => item.excess_qty > 0)
+})
+
+const totalExcessReceived = computed(() =>
+  excessReceivedItems.value.reduce((sum, item) => sum + item.excess_qty, 0),
+)
 
 async function fetchIntakeOrders() {
   intakeLoading.value = true
@@ -150,6 +161,15 @@ async function fetchIntakeOrders() {
 async function processIntake() {
   if (!selectedIntakeOrder.value) return
 
+  if (totalExcessReceived.value > 0) {
+    const excessSummary = excessReceivedItems.value
+      .map((item) => `${item.product_name}${item.flavor ? ` (${item.flavor})` : ''}: ${item.excess_qty} ชิ้น`)
+      .join('\n')
+    moveExcessToStock.value = window.confirm(
+      `พบสินค้ารับเกินยอดสั่งซื้อรวม ${totalExcessReceived.value} ชิ้น\n\n${excessSummary}\n\nกด ตกลง เพื่อนำส่วนเกินเข้าสต็อกพร้อมส่ง\nกด ยกเลิก เพื่อรับเข้าตามยอดออเดอร์เท่านั้นและไม่เพิ่มส่วนเกินเข้าสต็อก`,
+    )
+  }
+
   savingIntake.value = true
   intakeMessage.value = ''
 
@@ -180,6 +200,11 @@ async function processIntake() {
     }
 
     intakeMessage.value = `บันทึกสำเร็จ ยอดคืน: ${formatMoney(data.refund_amount || 0)}`
+    if (Number(data.excess_qty) > 0) {
+      intakeMessage.value += data.excess_stock_action === 'moved_to_stock'
+        ? ` นำส่วนเกิน ${data.excess_qty} ชิ้นเข้าสต็อกพร้อมส่งแล้ว`
+        : ` บันทึกส่วนเกิน ${data.excess_qty} ชิ้นไว้ในประวัติแล้ว แต่ไม่ได้เข้าสต็อกพร้อมส่ง`
+    }
     await fetchIntakeOrders()
     window.dispatchEvent(new Event('meowverse:inventory-intake-updated'))
 
@@ -337,7 +362,6 @@ onMounted(() => {
                 <div>
                   <input
                     :value="receivedDraft[item.detail_id] ?? 0"
-                    :max="item.ordered_qty"
                     class="qty-input"
                     min="0"
                     type="number"

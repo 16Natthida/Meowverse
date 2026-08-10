@@ -1,5 +1,5 @@
 export default function translateError(err) {
-  let msg = ''
+  let msg
   if (!err) return 'เกิดข้อผิดพลาด'
 
   if (typeof err === 'string') msg = err

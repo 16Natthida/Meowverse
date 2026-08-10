@@ -1,9 +1,10 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
 import translateError from '../../utils/translateError'
 
+const route = useRoute()
 const router = useRouter()
 const { getUser } = useAuth()
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
@@ -38,8 +39,8 @@ function normalizeStatus(value) {
 const statusConfig = {
   Pending: { label: 'รอดำเนินการ', color: '#f59e0b', bg: '#fffbeb' },
   Paid: { label: 'ชำระแล้ว', color: '#10b981', bg: '#ecfdf5' },
-  Wait_for_Import_Fee: { label: 'รอค่านำเข้า', color: '#6366f1', bg: '#eef2ff' },
-  Pending_import_fee: { label: 'รอค่านำเข้า', color: '#6366f1', bg: '#eef2ff' },
+  Wait_for_Import_Fee: { label: 'รอนำเข้า', color: '#6366f1', bg: '#eef2ff' },
+  Pending_import_fee: { label: 'รอชำระค่านำเข้า', color: '#7c3aed', bg: '#f3e8ff' },
   Ready_to_Ship: { label: 'พร้อมจัดส่ง', color: '#0ea5e9', bg: '#f0f9ff' },
   Cancelled: { label: 'ยกเลิกแล้ว', color: '#ef4444', bg: '#fef2f2' },
 }
@@ -78,6 +79,48 @@ function getStatus(status) {
 
 function getOrderTypeLabel(orderType) {
   return String(orderType || '').toLowerCase() === 'preorder' ? '🕐 พรีออเดอร์' : '✅ พร้อมส่ง'
+}
+
+// ── ผูก path กับตัวกรองประเภทออเดอร์ ──
+// /admin/sales -> ทั้งหมด, /admin/sales/ready-to-ship -> พร้อมส่ง, /admin/sales/preorder -> พรีออเดอร์
+function syncFilterFromRoute() {
+  const orderType = route.meta?.orderType
+  if (orderType) {
+    salesView.value = 'orders'
+    typeFilter.value = orderType
+  } else {
+    typeFilter.value = 'all'
+  }
+}
+
+watch(() => route.fullPath, syncFilterFromRoute, { immediate: true })
+
+const salesPageMeta = computed(() => {
+  if (route.meta?.orderType === 'ready') {
+    return {
+      eyebrow: 'Admin Sales · พร้อมส่ง',
+      title: 'รายการยอดขายพร้อมส่ง',
+      subtitle: 'ดูและจัดการออเดอร์สินค้าพร้อมส่งทุกสถานะ พร้อมเปิดรายละเอียดได้ทันที',
+    }
+  }
+  if (route.meta?.orderType === 'preorder') {
+    return {
+      eyebrow: 'Admin Sales · พรีออเดอร์',
+      title: 'รายการยอดขายพรีออเดอร์',
+      subtitle: 'ดูและจัดการออเดอร์สินค้าพรีออเดอร์ทุกสถานะ พร้อมเปิดรายละเอียดได้ทันที',
+    }
+  }
+  return {
+    eyebrow: 'Admin Sales',
+    title: 'รายการยอดขาย',
+    subtitle: 'ดูยอดขายพร้อมส่งและพรีออเดอร์ทุกสถานะในที่เดียว พร้อมเปิดรายละเอียดได้ทันที',
+  }
+})
+
+function goToSalesView(type) {
+  if (type === 'ready') router.push('/admin/sales/ready-to-ship')
+  else if (type === 'preorder') router.push('/admin/sales/preorder')
+  else router.push('/admin/sales')
 }
 
 const filteredOrders = computed(() => {
@@ -409,15 +452,49 @@ onMounted(() => {
   <div class="admin-order-page">
     <section class="hero-panel">
       <div class="hero-copy">
-        <p class="eyebrow">Admin Sales</p>
-        <h1>รายการยอดขาย</h1>
-        <p>ดูยอดขายพร้อมส่งและพรีออเดอร์ทุกสถานะในที่เดียว พร้อมเปิดรายละเอียดได้ทันที</p>
+        <p class="eyebrow">{{ salesPageMeta.eyebrow }}</p>
+        <h1>{{ salesPageMeta.title }}</h1>
+        <p>{{ salesPageMeta.subtitle }}</p>
       </div>
       <div class="hero-actions">
         <button class="ghost-btn" type="button" @click="goBack">กลับ Dashboard</button>
         <button class="primary-btn" type="button" @click="viewSlipList">ไปหน้าสลิป</button>
       </div>
     </section>
+
+    <!-- ── QUICK SWITCH: ทั้งหมด / พร้อมส่ง / พรีออเดอร์ ── -->
+    <div class="sales-type-switch">
+      <button
+        type="button"
+        class="sales-type-pill"
+        :class="{ 'sales-type-pill--active': !route.meta?.orderType }"
+        @click="goToSalesView('all')"
+      >
+        <span class="sales-type-pill__dot sales-type-pill__dot--all"></span>
+        ทั้งหมด
+        <span class="sales-type-pill__count">{{ orderStats.all }}</span>
+      </button>
+      <button
+        type="button"
+        class="sales-type-pill"
+        :class="{ 'sales-type-pill--active': route.meta?.orderType === 'ready' }"
+        @click="goToSalesView('ready')"
+      >
+        <span class="sales-type-pill__dot sales-type-pill__dot--ready"></span>
+        พร้อมส่ง
+        <span class="sales-type-pill__count">{{ orderStats.ready }}</span>
+      </button>
+      <button
+        type="button"
+        class="sales-type-pill"
+        :class="{ 'sales-type-pill--active': route.meta?.orderType === 'preorder' }"
+        @click="goToSalesView('preorder')"
+      >
+        <span class="sales-type-pill__dot sales-type-pill__dot--pre"></span>
+        พรีออเดอร์
+        <span class="sales-type-pill__count">{{ orderStats.preorder }}</span>
+      </button>
+    </div>
 
     <section class="kpi-grid">
       <article class="kpi-card">
@@ -629,8 +706,8 @@ onMounted(() => {
             <option value="all">ทั้งหมด</option>
             <option value="pending">รอดำเนินการ</option>
             <option value="paid">ชำระแล้ว</option>
-            <option value="wait_for_import_fee">รอค่านำเข้า</option>
-            <option value="pending_import_fee">รอค่านำเข้า</option>
+            <option value="wait_for_import_fee">รอนำเข้า</option>
+            <option value="pending_import_fee">รอชำระค่านำเข้า</option>
             <option value="ready_to_ship">พร้อมจัดส่ง</option>
           </select>
         </div>
@@ -882,6 +959,88 @@ onMounted(() => {
   display: flex;
   gap: 0.75rem;
   flex-wrap: wrap;
+}
+
+/* ── SALES TYPE QUICK SWITCH ── */
+.sales-type-switch {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+  padding: 0.3rem;
+  background: rgba(182, 115, 238, 0.08);
+  border-radius: 999px;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.sales-type-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: none;
+  background: transparent;
+  padding: 0.55rem 1rem;
+  border-radius: 999px;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: #6b5a84;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+
+.sales-type-pill:hover {
+  color: #432f61;
+}
+
+.sales-type-pill--active {
+  background: linear-gradient(135deg, var(--theme-primary, #b673ee), var(--theme-accent, #ff93b8));
+  color: #fff;
+  box-shadow: 0 6px 16px rgba(182, 115, 238, 0.35);
+}
+
+.sales-type-pill__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.sales-type-pill__dot--all {
+  background: #8a7c9c;
+}
+
+.sales-type-pill__dot--ready {
+  background: #15803d;
+}
+
+.sales-type-pill--active .sales-type-pill__dot--ready {
+  background: #d7ffe9;
+}
+
+.sales-type-pill__dot--pre {
+  background: #b45309;
+}
+
+.sales-type-pill--active .sales-type-pill__dot--pre {
+  background: #ffe8c7;
+}
+
+.sales-type-pill--active .sales-type-pill__dot--all {
+  background: #f1e9fb;
+}
+
+.sales-type-pill__count {
+  font-size: 0.74rem;
+  font-weight: 800;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.sales-type-pill--active .sales-type-pill__count {
+  background: rgba(255, 255, 255, 0.28);
 }
 
 .kpi-grid {
@@ -1340,6 +1499,44 @@ onMounted(() => {
 
   .item-row {
     grid-template-columns: 1fr;
+  }
+
+  .order-filter-search {
+    flex: 1 1 100%;
+  }
+
+  .order-filter-search-btn {
+    flex: 1 1 100%;
+  }
+
+  .order-filter-section {
+    flex: 1 1 100%;
+    margin-left: 0 !important;
+  }
+
+  .sales-type-switch {
+    width: 100%;
+  }
+
+  .sales-type-pill {
+    flex: 1;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 600px) {
+  .kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .order-filter-section {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .order-filter-select {
+    min-width: 0;
+    width: 100%;
   }
 }
 </style>

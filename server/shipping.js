@@ -13,13 +13,15 @@ router.get('/shipping-orders', async (req, res) => {
       SELECT 
         o.order_id, o.Order_type, o.Order_date, o.total_amount, o.status,
         s.name, s.phone, s.notes, s.address, s.Shipping_Carrier,
-        od.detail_id, od.flavor, od.qty,
+        od.detail_id, od.flavor, od.qty, od.received_qty, od.arrival_status,
         p.prod_name
       FROM orders o
       JOIN shipping s ON o.order_id = s.order_id
       JOIN order_details od ON o.order_id = od.order_id
       LEFT JOIN products p ON od.prod_id = p.prod_id
       WHERE o.status IN ('Paid', 'Ready_to_Ship')
+        AND od.qty > 0
+        AND LOWER(COALESCE(od.arrival_status, '')) NOT IN ('delayed', 'missing')
         AND s.ship_id = (
           SELECT MAX(ship_id)
           FROM shipping s2
@@ -54,6 +56,8 @@ router.get('/shipping-orders', async (req, res) => {
         prod_name: row.prod_name,
         flavor: row.flavor,
         qty: row.qty,
+        received_qty: row.received_qty,
+        arrival_status: row.arrival_status,
       })
       return acc
     }, [])

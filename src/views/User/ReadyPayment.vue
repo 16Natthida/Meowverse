@@ -84,7 +84,6 @@ const slipFile = ref(null)
 const slipPreview = ref(null)
 const slipFileInput = ref(null)
 const slipImageUrl = computed(() => slipPreview.value || order.value?.saved_shipping?.slip_url || null)
-const isSlipViewerOpen = ref(false) 
 const imageViewerUrl = ref(null)
 const isImageViewerOpen = ref(false)
 
@@ -159,7 +158,7 @@ const loadPaymentMethods = async () => {
     } else {
       paymentMethods.value = defaultPaymentMethods
     }
-  } catch (err) {
+  } catch {
     paymentMethods.value = defaultPaymentMethods
   } finally {
     resolveSelectedPaymentMethod()

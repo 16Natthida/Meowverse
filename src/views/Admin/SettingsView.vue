@@ -309,6 +309,8 @@ function applyThemeToDocument() {
   }
 }
 
+// Theme saving is reserved for the theme controls that will be enabled later.
+// eslint-disable-next-line no-unused-vars
 async function saveTheme() {
   themeSaving.value = true
   themeError.value = ''

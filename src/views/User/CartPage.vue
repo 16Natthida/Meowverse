@@ -112,6 +112,7 @@ const fetchCart = async () => {
         price: Number(item.price ?? item.basePrice ?? item.unit_price ?? 0),
         image: item.image ?? item.imageUrl ?? item.imageUrls?.[0] ?? item.images?.[0] ?? null,
         flavor: item.flavor ?? '',
+        preorder_round_status: item.preorder_round_status || null,
         isPreorder: Boolean(item.pre_item_id) || item.item_type === 'preorder',
         stock: Number(item.stock ?? 999),
         preorderRemaining:
@@ -1454,6 +1455,14 @@ onMounted(fetchCart)
   }
   .navbar__title {
     font-size: 0.88rem;
+  }
+  .qty-btn {
+    width: 34px;
+    height: 34px;
+  }
+  .delete-btn {
+    min-width: 34px;
+    min-height: 34px;
   }
 }
 </style>
