@@ -295,6 +295,7 @@ onMounted(() => {
             <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.7" />
             <path
               d="M13 13l3.5 3.5"
+              
               stroke="currentColor"
               stroke-width="1.7"
               stroke-linecap="round"
