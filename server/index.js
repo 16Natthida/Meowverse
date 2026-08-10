@@ -88,14 +88,124 @@ function resolveIntakeStatus(orderedQty, receivedQty) {
   }
 
   if (received <= 0) {
-    return 'missing'
+    return 'Missing'
   }
 
   if (received >= ordered) {
-    return 'ready_to_ship'
+    return 'Arrived'
   }
 
-  return 'partially_received'
+  return 'Pending'
+}
+
+// Move the quantity that has not arrived yet into a child order so the
+// original order only represents the stock that is already available.
+async function splitDelayedItemsFromOrder(connection, orderId, sourceDetailId = null) {
+  const [orderRows] = await connection.query(
+    `SELECT order_id, user_id, Order_type, deadline,
+            COALESCE(split_parent_order_id, 0) AS split_parent_order_id
+     FROM orders
+     WHERE order_id = ?
+     LIMIT 1`,
+    [orderId],
+  )
+
+  if (orderRows.length === 0 || Number(orderRows[0].split_parent_order_id) > 0) {
+    return null
+  }
+
+  const parent = orderRows[0]
+  const [delayedRows] = await connection.query(
+    `SELECT od.detail_id, od.prod_id, od.flavor, od.Price AS unit_price,
+            od.qty AS ordered_qty, COALESCE(od.received_qty, 0) AS received_qty,
+            od.Import_fee AS import_fee, od.item_type, od.preorder_round_id
+     FROM order_details od
+     WHERE od.order_id = ?
+       AND (od.detail_id = ? OR LOWER(COALESCE(od.arrival_status, '')) = 'delayed')
+       AND od.qty > COALESCE(od.received_qty, 0)
+     ORDER BY od.detail_id ASC`,
+    [orderId, Number(sourceDetailId) || 0],
+  )
+
+  if (delayedRows.length === 0) return null
+
+  let childOrderId
+  const [existingChildren] = await connection.query(
+    `SELECT order_id
+     FROM orders
+     WHERE split_parent_order_id = ?
+     ORDER BY order_id DESC
+     LIMIT 1`,
+    [orderId],
+  )
+
+  if (existingChildren.length > 0) {
+    childOrderId = Number(existingChildren[0].order_id)
+  } else {
+    const [childResult] = await connection.query(
+      `INSERT INTO orders
+       (user_id, total_amount, status, Order_type, deadline, split_parent_order_id)
+       VALUES (?, 0, 'Missing', ?, ?, ?)`,
+      [parent.user_id, parent.Order_type, parent.deadline || null, orderId],
+    )
+    childOrderId = Number(childResult.insertId)
+
+    const [shippingRows] = await connection.query(
+      `SELECT name, phone, address, notes, Shipping_Carrier
+       FROM shipping
+       WHERE order_id = ?
+       ORDER BY ship_id DESC
+       LIMIT 1`,
+      [orderId],
+    )
+    if (shippingRows.length > 0) {
+      const shipping = shippingRows[0]
+      await connection.query(
+        `INSERT INTO shipping (order_id, name, phone, address, notes, Shipping_Carrier)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          childOrderId,
+          shipping.name,
+          shipping.phone,
+          shipping.address,
+          shipping.notes,
+          shipping.Shipping_Carrier,
+        ],
+      )
+    }
+  }
+
+  for (const detail of delayedRows) {
+    const orderedQty = Math.max(Number(detail.ordered_qty) || 0, 0)
+    const receivedQty = Math.min(Math.max(Number(detail.received_qty) || 0, 0), orderedQty)
+    const delayedQty = Math.max(orderedQty - receivedQty, 0)
+    if (delayedQty <= 0) continue
+
+    await connection.query(
+      `UPDATE order_details
+       SET qty = ?, arrival_status = 'Arrived'
+       WHERE detail_id = ?`,
+      [receivedQty, detail.detail_id],
+    )
+
+    await connection.query(
+      `INSERT INTO order_details
+       (order_id, prod_id, flavor, Price, qty, received_qty, arrival_status, Import_fee, item_type, preorder_round_id)
+       VALUES (?, ?, ?, ?, ?, 0, 'Delayed', ?, ?, ?)`,
+      [
+        childOrderId,
+        detail.prod_id,
+        detail.flavor || null,
+        detail.unit_price,
+        delayedQty,
+        detail.import_fee || 0,
+        detail.item_type || null,
+        detail.preorder_round_id || null,
+      ],
+    )
+  }
+
+  return childOrderId
 }
 
 const PREORDER_PAYMENT_WINDOW_MS = 48 * 60 * 60 * 1000
@@ -218,7 +328,7 @@ function resolvePreorderRoundStatus(statusValue, startDate, endDate, now = new D
   }
 
   if (now > end) return 'closed'
-  
+
   return 'active'
 }
 async function autoSyncPreorderRoundStatuses() {
@@ -1090,8 +1200,19 @@ async function ensureAdminSchema() {
   `)
 
   await pool.query(`
+    ALTER TABLE order_details
+    MODIFY COLUMN arrival_status ENUM('Pending', 'Arrived', 'Missing', 'Delayed')
+    DEFAULT 'Pending'
+  `)
+
+  await pool.query(`
     ALTER TABLE orders
     ADD COLUMN IF NOT EXISTS deadline DATETIME NULL
+  `)
+
+  await pool.query(`
+    ALTER TABLE orders
+    ADD COLUMN IF NOT EXISTS split_parent_order_id INT NULL
   `)
 
   await pool.query(`
@@ -2284,7 +2405,6 @@ app.put('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
     const previousStatus = String(existingRoundRows[0]?.status || '')
       .trim()
       .toLowerCase()
-    const previousEndDate = existingRoundRows[0]?.end_date
 
     const [result] = await pool.query(
       `
@@ -2331,7 +2451,7 @@ app.put('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
     // สร้าง order แยกต่อ user จากสินค้า item_type = 'preorder' ของรอบนี้เท่านั้น
 // ✅ Auto-create orders เมื่อรอบถูกปิด
     let autoOrderSummary = { created: 0, skipped: 0, errors: [] }
-    
+
     // ลบการดักเงื่อนไข roundHasEnded ออก เพื่อให้ทำงานทันทีที่ถูกเปลี่ยนเป็น closed
     if (normalizedStatus === 'closed' && previousStatus !== 'closed') {
       const connection = await pool.getConnection()
@@ -3631,6 +3751,7 @@ app.post(
       for (const row of statusRows) {
         const fullReceived = Number(row.completed_items) === Number(row.total_items)
         const allMissing = Number(row.missing_items) === Number(row.total_items)
+        // oxlint-disable-next-line no-unused-vars
         const newStatus = fullReceived
           ? 'Ready_to_Ship'
           : allMissing
@@ -3996,6 +4117,11 @@ app.patch(
         detailId,
       ])
 
+      let delayedSplitOrderId = null
+      if (targetStatus === 'Delayed') {
+        delayedSplitOrderId = await splitDelayedItemsFromOrder(connection, orderId, detailId)
+      }
+
       const [orderDetails] = await connection.query(
         `SELECT od.qty AS ordered_qty, COALESCE(od.received_qty, 0) AS received_qty,
                 COALESCE(od.arrival_status, 'Pending') AS arrival_status, od.Price AS unit_price
@@ -4056,6 +4182,7 @@ app.patch(
         detail_id: detailId,
         order_id: orderId,
         action: targetStatus,
+        split_order_id: delayedSplitOrderId,
         refund_amount: refundAmount,
         order_status: newStatus,
         total_amount: Math.max(orderedAmount - refundAmount, 0),
