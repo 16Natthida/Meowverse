@@ -31,13 +31,13 @@ async function main() {
       const importFee = Number(r.import_fee_total || 0)
       if (importFee > 0) {
         const deadline = new Date(Date.now() + 48 * 60 * 60 * 1000)
-        const [res] = await connection.query(
+        await connection.query(
           'UPDATE orders SET status = ?, deadline = ? WHERE order_id = ?',
           ['Pending_import_fee', deadline, orderId],
         )
         console.log(`order ${orderId} -> Pending_import_fee (import_fee_total=${importFee})`)
       } else {
-        const [res] = await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [
+        await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [
           'Paid',
           orderId,
         ])
@@ -53,4 +53,3 @@ async function main() {
 }
 
 main()
-

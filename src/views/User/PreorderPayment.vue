@@ -2,13 +2,8 @@
 // Helper to display the correct price (import fee or original price)
 function displayPrice(item) {
   // Use import_fee as the effective price when in import fee stage and fee is set
-<<<<<<< HEAD
   if (isImportFeePaymentStage.value) {
     return Number(item.import_fee ?? item.Import_fee ?? 0)
-=======
-  if (isImportFeeStage.value && Number(item.import_fee) > 0) {
-    return Number(item.import_fee)
->>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
   }
   return Number(item.price || item.Price || item.unit_price || 0)
 }
@@ -86,17 +81,15 @@ const importFeeTotal = computed(() => {
     ) || 0,
   )
 
-<<<<<<< HEAD
+  return itemTotal > 0 ? itemTotal : orderTotal
+})
+
 const IMPORT_FEE_PAYMENT_STATUSES = [
   'wait for import fee',
   'pending import fee',
   'import slip submitted',
   'invalid import slip',
 ]
-=======
-  return itemTotal > 0 ? itemTotal : orderTotal
-})
->>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 
 const normalizedOrderStatus = computed(() =>
   String(order.value?.status || '')
@@ -105,7 +98,6 @@ const normalizedOrderStatus = computed(() =>
     .replace(/_/g, ' '),
 )
 
-<<<<<<< HEAD
 // รอบ 2 ต้องยึดทั้งสถานะและยอดค่านำเข้า เพื่อรองรับออเดอร์เก่าที่สถานะเคยถูกบันทึกเป็นค่าว่าง
 const isImportFeePaymentStage = computed(() => {
   const status = normalizedOrderStatus.value
@@ -117,39 +109,16 @@ const isImportFeePaymentStage = computed(() => {
 const isImportFeeStage = computed(() => {
   return isImportFeePaymentStage.value || ['paid', 'ready to ship'].includes(normalizedOrderStatus.value)
 })
-=======
-const isImportFeeRound = computed(() =>
-  [
-    'wait for import fee',
-    'pending import fee',
-    'import slip submitted',
-    'invalid import slip',
-  ].includes(normalizedOrderStatus.value),
-)
-
-// แสดงกล่องข้อมูลจัดส่งเมื่อเข้าสู่สเตจค่านำเข้า รวมถึงสถานะหลังจากนั้นทั้งหมดด้วย
-const isImportFeeStage = computed(() =>
-  isImportFeeRound.value || ['paid', 'ready to ship'].includes(normalizedOrderStatus.value),
-)
->>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 
 // รอแอดมินแจ้งค่านำเข้า: ล็อกทุกอย่างยกเว้นขอเลื่อนเวลา
 const isWaitingForImportFee = computed(() => normalizedOrderStatus.value === 'wait for import fee')
 
-<<<<<<< HEAD
 const isRoundOpen = computed(() => {
   const roundStatus = String(order.value?.preorder_round_status || '')
     .trim()
     .toLowerCase()
   return ['active', 'open'].includes(roundStatus)
 })
-=======
-// ล็อกฟอร์มเมื่อสถานะเป็น Ready_to_Ship หรือ Cancelled
-// ยังให้แก้ไขได้ในช่วงรอค่านำเข้าและตอนสลิปค่านำเข้าไม่ถูกต้อง
-const isReadOnlyStage = computed(() =>
-  ['ready to ship', 'cancelled'].includes(normalizedOrderStatus.value),
-)
->>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 
 // ล็อกฟอร์มเมื่อสถานะเป็น Ready_to_Ship หรือ Cancelled
 // ยังให้แก้ไขได้ในช่วงรอค่านำเข้าและตอนสลิปค่านำเข้าไม่ถูกต้อง
@@ -177,7 +146,6 @@ const isFullyPaid = computed(() =>
 
 // ✅ ปรับเงื่อนไข Amount Due ถ้ายืนยันชำระครบ (Paid หรือ Ready to Ship) ให้แสดงยอดรวม 2 รอบ
 const amountDue = computed(() => {
-<<<<<<< HEAD
   const status = normalizedOrderStatus.value
 
   if (['paid', 'ready to ship'].includes(status)) {
@@ -187,12 +155,6 @@ const amountDue = computed(() => {
   return isImportFeePaymentStage.value
     ? Number(order.value?.import_fee_total || 0)
     : Number(order.value?.total_amount || 0)
-=======
-  if (importFeeTotal.value > 0 && isImportFeeStage.value) {
-    return importFeeTotal.value
-  }
-  return Number(order.value?.total_amount || 0)
->>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 })
 
 const readyItems = computed(
@@ -646,13 +608,13 @@ const fetchOrder = async () => {
         .trim()
         .toLowerCase()
         .replace(/_/g, ' ')
-      const isImportFeeRound = [
+      const isImportFeePaymentStage = [
         'wait for import fee',
         'pending import fee',
         'import slip submitted',
         'invalid import slip',
       ].includes(orderStatus)
-      const slipToLoad = isImportFeeRound
+      const slipToLoad = isImportFeePaymentStage
         ? data.saved_shipping.import_fee_slip_url
         : data.saved_shipping.slip_url
       if (slipToLoad) {
@@ -944,7 +906,7 @@ onMounted(async () => {
               </div>
               <h1>
                 {{
-                  isImportFeeRound
+                  isImportFeePaymentStage
                     ? 'ชำระเงินค่านำเข้า (รอบ 2)'
                     : 'ชำระเงินสำหรับคำสั่งพรีออเดอร์'
                 }}
@@ -967,7 +929,7 @@ onMounted(async () => {
                 <div class="hero-meta-divider"></div>
                 <div class="hero-meta-item">
                   <span class="hero-meta-label">
-                    {{ isImportFeeRound ? 'ค่านำเข้าแจ้งแล้ว' : 'ยอดรวม' }}
+                    {{ isImportFeePaymentStage ? 'ค่านำเข้าแจ้งแล้ว' : 'ยอดรวม' }}
                   </span>
                   <strong>฿{{ amountDue.toLocaleString() }}</strong>
                 </div>
@@ -1197,11 +1159,7 @@ onMounted(async () => {
                       </span>
                     </p>
                     <p
-<<<<<<< HEAD
                       v-if="isImportFeeStage"
-=======
-                      v-if="isImportFeeStage && it.import_fee > 0"
->>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
                       class="item-price-small"
                       style="color: #f59e42; font-weight: 600"
                     >
@@ -1839,25 +1797,13 @@ onMounted(async () => {
                   padding-inline: 4px;
                 "
               >
-<<<<<<< HEAD
                 <div v-if="!isImportFeePaymentStage" style="display: flex; justify-content: space-between">
                   <span>ยอดรวมสินค้า</span>
                   <span>฿{{ Number(order.total_amount).toLocaleString() }}</span>
-=======
-                <div style="display: flex; justify-content: space-between">
-                  <span>{{ isImportFeeRound ? 'ค่านำเข้าแจ้งแล้ว' : 'ยอดรวมสินค้า' }}</span>
-                  <span>
-                    ฿{{
-                      isImportFeeRound
-                        ? importFeeTotal.toLocaleString()
-                        : Number(order.total_amount).toLocaleString()
-                    }}
-                  </span>
->>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
                 </div>
                 <div
                   style="display: flex; justify-content: space-between"
-                  v-if="!isImportFeeRound && importFeeTotal > 0"
+                  v-if="!isImportFeePaymentStage && importFeeTotal > 0"
                 >
                   <span>ค่านำเข้าแจ้งแล้ว</span>
                   <span>฿{{ importFeeTotal.toLocaleString() }}</span>

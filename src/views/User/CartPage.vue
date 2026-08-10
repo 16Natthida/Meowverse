@@ -1456,5 +1456,13 @@ onMounted(fetchCart)
   .navbar__title {
     font-size: 0.88rem;
   }
+  .qty-btn {
+    width: 34px;
+    height: 34px;
+  }
+  .delete-btn {
+    min-width: 34px;
+    min-height: 34px;
+  }
 }
 </style>

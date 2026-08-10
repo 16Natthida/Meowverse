@@ -25,6 +25,7 @@ const LOCAL_DEV_ORIGINS = [
   'http://127.0.0.1:5173',
   'http://localhost:5174',
   'http://127.0.0.1:5174',
+  'http://192.168.1.25:5173'
 ]
 const CATEGORY_NAME_MAX_LENGTH = 100
 const CATEGORY_DETAIL_MAX_LENGTH = 255
@@ -2492,8 +2493,6 @@ app.put('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
     const previousStatus = String(existingRoundRows[0]?.status || '')
       .trim()
       .toLowerCase()
-    const previousEndDate = existingRoundRows[0]?.end_date
-
     const [result] = await pool.query(
       `
       UPDATE preorder_rounds
@@ -3964,14 +3963,6 @@ app.post(
       )
 
       for (const row of statusRows) {
-        const fullReceived = Number(row.completed_items) === Number(row.total_items)
-        const allMissing = Number(row.missing_items) === Number(row.total_items)
-        const newStatus = resolveOrderStatusAfterIntake(
-          row.current_status,
-          fullReceived,
-          allMissing,
-        )
-
         await connection.query(
           'UPDATE orders SET total_amount = ? WHERE order_id = ?',
           [
@@ -4222,15 +4213,7 @@ app.post(
         })
       }
 
-<<<<<<< HEAD
       const newStatus = resolveOrderStatusAfterIntake(order.status, allReceived, allMissing)
-=======
-const newStatus = allReceived
-        ? 'Ready_to_Ship'
-        : allMissing
-          ? 'Missing'
-          : 'Partially_Received'
->>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
       const newTotalAmount = Math.max(Number(order.total_amount) - refundAmount, 0)
 
       await connection.query(
