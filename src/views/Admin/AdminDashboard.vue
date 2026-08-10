@@ -17,11 +17,14 @@ const totalMembers = computed(() => {
 
 const menuItems = computed(() => [
   { name: 'Dashboard', icon: '📊' },
-  { name: 'Orders', icon: '📦' },
+  { name: 'Sales', icon: '📦' },
   { name: 'Products', icon: '🛍️' },
+  { name: 'Inventory Intake', icon: '📥' },
+  { name: 'Missing Items', icon: '❌' },
   { name: 'Categories', icon: '🏷️' },
   { name: 'Users', icon: '👥', count: totalMembers.value },
   { name: 'Reports', icon: '📈' },
+  { name: 'Slips', icon: '💳' },
   { name: 'Settings', icon: '⚙️' },
 ])
 
@@ -71,11 +74,14 @@ function handleMenuClick(itemName) {
   activeMenu.value = itemName
   const routeMap = {
     Dashboard: '/admin/home',
-    Orders: '/admin/home',
+    Sales: '/admin/sales',
     Products: '/admin/products',
+    'Inventory Intake': '/admin/inventory-intake',
+    'Missing Items': '/admin/missing-items',
     Categories: '/admin/products',
     Users: '/admin/users',
     Reports: '/admin/home',
+    Slips: '/admin/slips',
     Settings: '/admin/settings',
   }
   const route = routeMap[itemName]
@@ -158,8 +164,8 @@ onMounted(() => {
         <div class="dashboard-row">
           <section class="table-container main-table">
             <div class="table-header">
-              <h2>📦 คำสั่งซื้อล่าสุด</h2>
-              <button class="view-all">ดูทั้งหมด</button>
+              <h2>📦 ยอดขายล่าสุด</h2>
+              <button class="view-all" @click="router.push('/admin/sales')">ดูรายการยอดขาย</button>
             </div>
             <table class="custom-table">
               <thead>

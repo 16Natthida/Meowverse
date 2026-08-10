@@ -21,7 +21,7 @@
             <h2>ข้อมูลบัญชี</h2>
             <p>กรอกข้อมูลหลักให้ครบ แล้วระบบจะส่งตรงไปยังฐานข้อมูล</p>
           </div>
-          <button class="button-back" @click="goBack">กลับไปแดชบอร์ด</button>
+          <button type="button" class="button-back" @click="goBack">กลับไปแดชบอร์ด</button>
         </div>
 
         <form class="adduser-form" @submit.prevent="onSubmit">
@@ -103,10 +103,21 @@
         <div class="info-card">
           <p class="info-card__eyebrow">Role Preview</p>
           <div class="role-preview">
-            <span :class="['role-chip', { 'role-chip--active': form.role === 'user' }]">User</span>
-            <span :class="['role-chip', { 'role-chip--active': form.role === 'admin' }]"
-              >Admin</span
+            <!-- ปรับสไตล์เป็นรูปแบบปุ่ม และคลิกเพื่อเลือกสิทธิ์ได้ทันที -->
+            <button 
+              type="button" 
+              :class="['role-chip', { 'role-chip--active': form.role === 'user' }]"
+              @click="form.role = 'user'"
             >
+              User
+            </button>
+            <button 
+              type="button" 
+              :class="['role-chip', { 'role-chip--active': form.role === 'admin' }]"
+              @click="form.role = 'admin'"
+            >
+              Admin
+            </button>
           </div>
         </div>
       </aside>
@@ -506,20 +517,35 @@ async function onSubmit() {
   flex-wrap: wrap;
 }
 
+/* ปรับเป็นสไตล์ปุ่มรอง (สไตล์เดียวกับปุ่มรีเซ็ต/ปุ่มย้อนกลับ) แต่คงฟอนต์เดิมของคุณไว้ */
 .role-chip {
-  padding: 0.55rem 0.8rem;
+  border: none;
   border-radius: 999px;
-  border: 1px solid #dcc8f5;
-  background: #fff;
-  color: #6f628d;
+  padding: 0.55rem 1.1rem;
   font-weight: 800;
   font-size: 0.82rem;
+  cursor: pointer;
+  font-family: inherit;
+  background: #f4efff;
+  color: #6f50a0;
+  box-shadow: inset 0 0 0 1px rgba(183, 136, 234, 0.16);
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    background 0.18s ease,
+    color 0.18s ease;
 }
 
+.role-chip:hover {
+  transform: translateY(-1px);
+}
+
+/* เมื่อถูกเลือก (Active) จะเปลี่ยนเป็นสีม่วง Gradient และขอบสีเดิมเป๊ะๆ ตามที่คุณตั้งไว้ */
 .role-chip--active {
   background: linear-gradient(180deg, #cda2fb, #bc8aed);
   color: #fff;
   border-color: #b788ea;
+  box-shadow: 0 10px 18px rgba(132, 86, 179, 0.24);
 }
 
 @media (max-width: 980px) {
@@ -564,7 +590,8 @@ async function onSubmit() {
 
   .button-back,
   .btn-secondary,
-  .btn-primary {
+  .btn-primary,
+  .role-chip {
     width: 100%;
     justify-content: center;
   }

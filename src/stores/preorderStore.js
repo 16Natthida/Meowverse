@@ -8,8 +8,8 @@ const isLoadingCurrentRound = ref(false)
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
 async function requestJson(path, options = {}) {
-  // Get auth info from localStorage
-  const userDataStr = localStorage.getItem('meowverse-user') || sessionStorage.getItem('meowverse-user')
+  const userDataStr =
+    localStorage.getItem('meowverse-user') || sessionStorage.getItem('meowverse-user')
   let userId = null
   let userRole = 'admin'
 
@@ -19,7 +19,7 @@ async function requestJson(path, options = {}) {
       userId = userData.user_id || userData.id
       userRole = userData.role || 'admin'
     } catch {
-      // Default values used
+      // Fall back to default values when the stored payload cannot be parsed.
     }
   }
 
@@ -40,6 +40,8 @@ async function requestJson(path, options = {}) {
       const errorBody = await response.json()
       if (errorBody?.message) {
         errorMessage = errorBody.message
+      } else if (errorBody?.error) {
+        errorMessage = errorBody.error
       }
     } catch {
       // Keep fallback message when response body is not JSON.
@@ -59,6 +61,12 @@ function findRoundIndex(id) {
   return preorderRounds.value.findIndex((round) => String(round.id) === String(id))
 }
 
+function syncCurrentRound(roundId, updater) {
+  if (currentRound.value && String(currentRound.value.id) === String(roundId)) {
+    updater(currentRound.value)
+  }
+}
+
 export function usePreorderStore() {
   async function fetchRounds() {
     isLoadingRounds.value = true
@@ -73,6 +81,7 @@ export function usePreorderStore() {
 
   async function fetchRoundDetail(roundId) {
     isLoadingCurrentRound.value = true
+    currentRound.value = null
 
     try {
       currentRound.value = await requestJson(`/preorder-rounds/${roundId}`)
@@ -115,9 +124,9 @@ export function usePreorderStore() {
       preorderRounds.value[index] = updatedRound
     }
 
-    if (currentRound.value && currentRound.value.id === roundId) {
-      currentRound.value = { ...currentRound.value, ...updatedRound }
-    }
+    syncCurrentRound(roundId, (round) => {
+      Object.assign(round, updatedRound)
+    })
 
     return updatedRound
   }
@@ -127,24 +136,28 @@ export function usePreorderStore() {
       method: 'DELETE',
     })
 
-    preorderRounds.value = preorderRounds.value.filter((round) => String(round.id) !== String(roundId))
+    preorderRounds.value = preorderRounds.value.filter(
+      (round) => String(round.id) !== String(roundId),
+    )
 
-    if (currentRound.value && currentRound.value.id === roundId) {
+    if (currentRound.value && String(currentRound.value.id) === String(roundId)) {
       currentRound.value = null
     }
   }
 
-  async function addProductsToRound(roundId, productIds, quantities = []) {
+  async function addProductsToRound(roundId, productIds, quantities = [], roundPrices = []) {
     await requestJson(`/preorder-rounds/${roundId}/products`, {
       method: 'POST',
       body: JSON.stringify({
-        productIds: productIds.map(id => Number(id)),
-        quantities: quantities.map(q => Number(q) || 0),
+        productIds: productIds.map((id) => Number(id)),
+        quantities: quantities.map((quantity) => Number(quantity) || 0),
+        roundPrices: roundPrices.map((price) =>
+          price === '' || price == null ? null : Number(price),
+        ),
       }),
     })
 
-    // Refresh the current round if it matches
-    if (currentRound.value && currentRound.value.id === roundId) {
+    if (currentRound.value && String(currentRound.value.id) === String(roundId)) {
       await fetchRoundDetail(roundId)
     }
   }
@@ -154,28 +167,47 @@ export function usePreorderStore() {
       method: 'DELETE',
     })
 
-    if (currentRound.value && currentRound.value.id === roundId) {
-      currentRound.value.products = currentRound.value.products.filter(
-        (p) => String(p.id) !== String(productId)
-      )
-    }
+    syncCurrentRound(roundId, (round) => {
+      round.products = round.products.filter((product) => String(product.id) !== String(productId))
+    })
   }
 
-  async function updateProductQuantityInRound(roundId, productId, quantity) {
+  async function updateProductQuantityInRound(roundId, productId, quantity, roundPrice = null) {
+    const quantityPayload = quantity === null || quantity === '' ? null : Number(quantity)
     await requestJson(`/preorder-rounds/${roundId}/products/${productId}`, {
       method: 'PUT',
       body: JSON.stringify({
-        quantity: Number(quantity),
+        quantity: quantityPayload,
+        roundPrice: roundPrice === '' || roundPrice == null ? null : Number(roundPrice),
       }),
     })
 
-    // Update the current round if it matches
-    if (currentRound.value && currentRound.value.id === roundId) {
-      const product = currentRound.value.products.find(p => String(p.id) === String(productId))
+    syncCurrentRound(roundId, (round) => {
+      const product = round.products.find((item) => String(item.id) === String(productId))
       if (product) {
-        product.quantityAvailable = Number(quantity)
+        product.quantityAvailable = quantityPayload
+        if (roundPrice !== undefined && roundPrice !== null && roundPrice !== '') {
+          product.roundPrice = Number(roundPrice)
+        }
       }
-    }
+    })
+  }
+
+  async function updateProductPriceInRound(roundId, productId, price) {
+    await requestJson(`/preorder-rounds/${roundId}/products/${productId}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        price: price === '' || price == null ? null : Number(price),
+      }),
+    })
+
+    syncCurrentRound(roundId, (round) => {
+      const product = round.products.find((item) => String(item.id) === String(productId))
+      if (product) {
+        product.roundPrice =
+          price === '' || price == null ? Number(product.basePrice) : Number(price)
+      }
+    })
   }
 
   async function reloadRounds() {
@@ -206,6 +238,7 @@ export function usePreorderStore() {
     addProductsToRound,
     removeProductFromRound,
     updateProductQuantityInRound,
+    updateProductPriceInRound,
     reloadRounds,
   }
 }

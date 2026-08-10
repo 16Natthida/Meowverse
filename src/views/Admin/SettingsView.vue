@@ -304,11 +304,13 @@ function applyThemeToDocument() {
   try {
     document.documentElement.style.setProperty('--theme-primary', themePrimary.value)
     document.documentElement.style.setProperty('--theme-accent', themeAccent.value)
-  } catch (e) {
+  } catch {
     // ignore in non-browser environments
   }
 }
 
+// Theme saving is reserved for the theme controls that will be enabled later.
+// eslint-disable-next-line no-unused-vars
 async function saveTheme() {
   themeSaving.value = true
   themeError.value = ''
@@ -398,70 +400,6 @@ async function saveTheme() {
           <p v-if="bannerSuccess" class="settings-note settings-note--success">
             {{ bannerSuccess }}
           </p>
-        </div>
-      </div>
-    </section>
-
-    <!-- Theme Section -->
-    <section class="panel settings-panel">
-      <header class="panel-head panel-head--stack">
-        <h3>ธีมเว็บไซต์</h3>
-        <p>ตั้งค่าสีหลักและสีเน้นของเว็บ</p>
-      </header>
-
-      <div class="settings-layout">
-        <div class="settings-preview">
-          <div
-            class="theme-preview"
-            style="
-              width: 100%;
-              height: 100%;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              flex-direction: column;
-            "
-          >
-            <div
-              style="width: 60%; height: 40px; border-radius: 8px; background: var(--theme-primary)"
-            ></div>
-            <div
-              style="
-                width: 40%;
-                height: 24px;
-                border-radius: 6px;
-                margin-top: 12px;
-                background: var(--theme-accent);
-              "
-            ></div>
-          </div>
-        </div>
-
-        <div class="settings-controls">
-          <label class="field">
-            สีหลัก (primary)
-            <input v-model="themePrimary" type="color" />
-          </label>
-
-          <label class="field">
-            สีเน้น (accent)
-            <input v-model="themeAccent" type="color" />
-          </label>
-
-          <div class="settings-actions">
-            <button
-              class="hero-btn hero-btn--primary"
-              type="button"
-              :disabled="themeSaving || themeLoading"
-              @click="saveTheme"
-            >
-              {{ themeSaving ? 'กำลังบันทึก...' : 'บันทึกธีม' }}
-            </button>
-          </div>
-
-          <p v-if="themeLoading" class="settings-note">กำลังโหลดค่าธีม...</p>
-          <p v-if="themeError" class="settings-note settings-note--error">{{ themeError }}</p>
-          <p v-if="themeSuccess" class="settings-note settings-note--success">{{ themeSuccess }}</p>
         </div>
       </div>
     </section>

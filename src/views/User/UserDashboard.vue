@@ -1,13 +1,76 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
 
 const router = useRouter()
+const route = useRoute()
 const { logout, getUser } = useAuth()
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 
 const currentUser = computed(() => getUser())
+const showUserMenu = ref(false)
+const userMenuRef = ref(null)
+
+// ── MOBILE NAV (hamburger menu + search toggle) ──
+const mobileMenuOpen = ref(false)
+const mobileMenuRef = ref(null)
+const mobileSearchOpen = ref(false)
+
+function toggleMobileMenu() {
+  mobileMenuOpen.value = !mobileMenuOpen.value
+  if (mobileMenuOpen.value) mobileSearchOpen.value = false
+}
+
+function closeMobileMenu() {
+  mobileMenuOpen.value = false
+}
+
+function toggleMobileSearch() {
+  mobileSearchOpen.value = !mobileSearchOpen.value
+}
+
+function toggleUserMenu() {
+  showUserMenu.value = !showUserMenu.value
+}
+
+function closeUserMenu() {
+  showUserMenu.value = false
+}
+
+function goToUserProfile() {
+  closeUserMenu()
+  closeMobileMenu()
+  router.push('/profile')
+}
+
+function goToMyOrders() {
+  closeUserMenu()
+  closeMobileMenu()
+  router.push('/order-list')
+}
+
+function handleOutsideClick(event) {
+  if (userMenuRef.value && !userMenuRef.value.contains(event.target)) {
+    closeUserMenu()
+  }
+  if (
+    mobileMenuRef.value &&
+    !mobileMenuRef.value.contains(event.target) &&
+    !event.target.closest('.navbar__hamburger')
+  ) {
+    closeMobileMenu()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('click', handleOutsideClick)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', handleOutsideClick)
+})
+
 const activeTab = ref('พร้อมส่ง')
 const activeCategory = ref(null)
 const products = ref([])
@@ -20,16 +83,38 @@ const searchQuery = ref('')
 const cartNotice = ref({ msg: '', type: '' })
 const cartLoading = ref({})
 const cartCount = ref(0) // จำนวนสินค้าใน cart badge
+const orderNotifDot = ref('') // 'red' | 'green' | ''
 const selectedProduct = ref(null)
 const selectedFlavor = ref('')
 const selectedPreviewIndex = ref(0)
 const detailQty = ref(1)
+const batchSelections = ref([]) // [{ flavor, qty }]
 const defaultBannerImageUrl = '/images/cat.jpg'
 const heroBannerImage = ref(defaultBannerImageUrl)
 const defaultLogoImageUrl = ''
 const logoImage = ref(defaultLogoImageUrl)
 
-const tabs = ['หน้าหลัก', 'พร้อมส่ง', 'พรีออเดอร์', 'ติดตามคำสั่งซื้อ', 'รายการออเดอร์']
+// ตัวแปรสำหรับเก็บรอบพรีออเดอร์ที่กำลังเปิดรับ
+const activePreorderRounds = ref([])
+
+const tabs = ['หน้าหลัก', 'พร้อมส่ง', 'พรีออเดอร์','รายการออเดอร์']
+
+// ── ผูก activeTab กับ path ปัจจุบัน เพื่อให้ "พร้อมส่ง" และ "พรีออเดอร์" มี path แยกกันชัดเจน ──
+// /products/ready-to-ship -> พร้อมส่ง, /products/preorder -> พรีออเดอร์, /dashboard -> หน้าหลัก
+function syncTabFromRoute() {
+  const browseTab = route.meta?.browseTab
+  if (browseTab) {
+    activeTab.value = browseTab
+  } else if (route.name === 'userDashboard') {
+    activeTab.value = 'หน้าหลัก'
+  }
+}
+
+watch(
+  () => route.fullPath,
+  () => syncTabFromRoute(),
+  { immediate: true },
+)
 
 const iconMap = [
   { keyword: 'ขนม', icon: '🍬' },
@@ -93,6 +178,19 @@ function parseFlavorStock(value) {
   )
 }
 
+// จัดรูปแบบวันที่เปิด-ปิดรอบพรีออเดอร์
+function formatDateTime(dateStr) {
+  if (!dateStr) return '-'
+  const d = new Date(dateStr)
+  return d.toLocaleDateString('th-TH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }) + ' น.'
+}
+
 // ── FETCH CATEGORIES ──
 const fetchCategories = async () => {
   try {
@@ -120,26 +218,38 @@ const fetchProducts = async () => {
     const data = await res.json()
     const arr = Array.isArray(data) ? data : (data.data ?? data.products ?? [])
     products.value = arr.map((p) => ({
+      preorderRoundId:
+        p.preorderRoundId != null
+          ? Number(p.preorderRoundId)
+          : p.preorder_round_id != null
+            ? Number(p.preorder_round_id)
+            : null,
       preorderEnabled: Boolean(p.preorderEnabled ?? p.isPreorder ?? false),
       readyToShipEnabled:
         p.readyToShipEnabled != null || p.isReadyToShip != null
           ? Boolean(p.readyToShipEnabled ?? p.isReadyToShip)
           : !(p.preorderEnabled ?? p.isPreorder ?? false),
-      imageUrls: [
-        ...(Array.isArray(p.imageUrls) ? p.imageUrls : []),
-        ...(Array.isArray(p.images) ? p.images : []),
-      ].filter(Boolean),
+      imageUrls: Array.isArray(p.imageUrls)
+        ? p.imageUrls.map((item) => (typeof item === 'string' ? item : item?.url || '')).filter(Boolean)
+        : [],
+      images: Array.isArray(p.images)
+        ? p.images.map((img) => ({ url: img?.url || img || '', flavor: img?.flavor || '' })).filter((img) => img.url)
+        : [],
       id: p.id,
       name: p.name,
       description: p.description || '',
       flavors: parseFlavorList(p.flavors),
       flavorStock: parseFlavorStock(p.flavorStock ?? p.flavor_stock),
       price: p.basePrice ?? p.price ?? 0,
+      // For preorder items prefer the round-specific price (p.price comes from preorder_round_products subquery)
+      preorderPrice: p.price ?? p.preorderPrice ?? p.preorder_price ?? p.basePrice ?? 0,
       image: p.imageUrls?.[0] ?? p.image_url?.[0] ?? p.imageUrl ?? p.image ?? null,
       categoryId: p.categoryId != null ? Number(p.categoryId) : null,
       categoryName: p.categoryName ?? '',
       stock: p.stock ?? 0,
-      isPreorder: Boolean(p.preorderEnabled ?? p.isPreorder ?? false),
+      isPreorder:
+        Boolean(p.preorderEnabled ?? p.isPreorder ?? false) &&
+        (p.preorderRoundId != null || p.preorder_round_id != null),
       isReadyToShip:
         p.readyToShipEnabled != null || p.isReadyToShip != null
           ? Boolean(p.readyToShipEnabled ?? p.isReadyToShip)
@@ -167,6 +277,47 @@ const fetchCartCount = async () => {
   }
 }
 
+// ── FETCH ORDER NOTIFICATION DOT ──
+const RED_DOT_STATUSES = ['pending', 'pending_import_fee', 'cancelled', 'invalid_slip', 'invalid_import_slip', 'missing']
+const GREEN_DOT_STATUSES = ['paid', 'ready_to_ship']
+
+function normalizeStatus(status) {
+  return String(status || '').trim().toLowerCase().replace(/[\s]+/g, '_')
+}
+
+const fetchOrderNotif = async () => {
+  const user = currentUser.value
+  if (!user?.id) return
+  try {
+    const res = await fetch(`${API_BASE_URL}/orders?user_id=${user.id}`)
+    if (!res.ok) return
+    const data = await res.json()
+    const arr = Array.isArray(data) ? data : (data.orders ?? [])
+    const hasRed = arr.some((o) => RED_DOT_STATUSES.includes(normalizeStatus(o.status)))
+    if (hasRed) { orderNotifDot.value = 'red'; return }
+    const hasGreen = arr.some((o) => GREEN_DOT_STATUSES.includes(normalizeStatus(o.status)))
+    orderNotifDot.value = hasGreen ? 'green' : ''
+  } catch (err) {
+    console.error('fetchOrderNotif:', err)
+  }
+}
+
+
+const fetchPreorderRounds = async () => {
+  try {
+    // เปลี่ยน URL ไปเรียก API เส้นใหม่ที่เพิ่งสร้าง
+    const res = await fetch(`${API_BASE_URL}/preorder-rounds/active`)
+    if (!res.ok) throw new Error('Failed to fetch preorder rounds')
+    const data = await res.json()
+    const rounds = Array.isArray(data) ? data : (data.data || [])
+    
+    // ไม่ต้อง .filter แล้วเพราะ Backend กรอง 'active' มาให้แล้ว
+    activePreorderRounds.value = rounds
+  } catch (err) {
+    console.error('fetchPreorderRounds:', err)
+  }
+}
+
 // ── ADD TO CART ──
 const addToCart = async (product, flavor = '', qty = 1) => {
   const user = currentUser.value
@@ -181,18 +332,35 @@ const addToCart = async (product, flavor = '', qty = 1) => {
     return
   }
 
-  // Check flavor stock
-  const flavorToAdd = String(flavor || '').trim() || product.flavors?.[0] || ''
-  const flavorStock = getFlavorStock(flavorToAdd)
-  if (flavorStock === 0) {
-    showNotice(`รสชาติ "${flavorToAdd}" หมดสต็อกแล้ว`, 'error')
-    return
-  }
+  const hasFlavors = Array.isArray(product.flavors) && product.flavors.length > 0
 
+  const flavorToAdd = String(flavor || '').trim() || product.flavors?.[0] || ''
   const qtyToAdd = Math.max(1, Number(qty) || 1)
-  if (qtyToAdd > flavorStock) {
-    showNotice(`สต็อกของ "${flavorToAdd}" มีเพียง ${flavorStock} ชิ้นเท่านั้น`, 'error')
-    return
+
+  if (itemType !== 'preorder') {
+    if (hasFlavors) {
+      const flavorStock = getFlavorStock(flavorToAdd, product)
+      if (flavorStock === 0) {
+        showNotice(`รสชาติ "${flavorToAdd}" หมดสต็อกแล้ว`, 'error')
+        return
+      }
+
+      if (qtyToAdd > flavorStock) {
+        showNotice(`สต็อกของ "${flavorToAdd}" มีเพียง ${flavorStock} ชิ้นเท่านั้น`, 'error')
+        return
+      }
+    } else {
+      const stock = Number(product.stock) || 0
+      if (stock === 0) {
+        showNotice('สินค้าหมดสต็อกแล้ว', 'error')
+        return
+      }
+
+      if (qtyToAdd > stock) {
+        showNotice(`สต็อกมีเพียง ${stock} ชิ้นเท่านั้น`, 'error')
+        return
+      }
+    }
   }
 
   cartLoading.value = { ...cartLoading.value, [product.id]: true }
@@ -254,6 +422,12 @@ function closeProductDetail() {
 }
 
 function increaseDetailQty() {
+  const itemType = getEffectiveItemType(selectedProduct.value)
+  if (itemType === 'preorder') {
+    detailQty.value = Math.min(detailQty.value + 1, 999)
+    return
+  }
+
   const stock = selectedFlavorStock.value || Number(selectedProduct.value?.stock) || 0
   if (stock > 0) {
     detailQty.value = Math.min(detailQty.value + 1, stock)
@@ -264,26 +438,33 @@ function decreaseDetailQty() {
   detailQty.value = Math.max(1, detailQty.value - 1)
 }
 
+// ทุกรูปของสินค้า (พร้อม flavor) — ใช้แสดงใน thumb row
 const detailImages = computed(() => {
-  const baseList = Array.isArray(selectedProduct.value?.imageUrls)
-    ? selectedProduct.value.imageUrls
-    : []
-  const list = [...baseList]
+  const product = selectedProduct.value
+  if (!product) return []
 
-  if (selectedProduct.value?.image && !list.includes(selectedProduct.value.image)) {
-    list.unshift(selectedProduct.value.image)
-  }
+  const rawImages = Array.isArray(product.images) && product.images.length > 0
+    ? product.images
+    : (Array.isArray(product.imageUrls) ? product.imageUrls.map((url) => ({ url, flavor: '' })) : [])
 
-  return list.filter(Boolean)
+  return rawImages
+    .map((img) => ({ url: img.url || img, flavor: img.flavor || '' }))
+    .filter((img) => img.url)
 })
 
+// รูปที่แสดงใน main — ใช้รูปของ thumb ที่กด
 const activeDetailImage = computed(() => {
-  if (detailImages.value.length === 0) {
-    return ''
+  const list = detailImages.value
+  if (list.length === 0) return ''
+
+  // ถ้าเลือกรสอยู่และมีรูปของรสนั้น ให้แสดงรูปรสก่อนเสมอ
+  if (selectedFlavor.value) {
+    const flavorImg = list.find((img) => img.flavor === selectedFlavor.value)
+    if (flavorImg) return flavorImg.url
   }
 
-  const safeIndex = Math.min(selectedPreviewIndex.value, detailImages.value.length - 1)
-  return detailImages.value[safeIndex] || detailImages.value[0]
+  const safeIndex = Math.min(selectedPreviewIndex.value, list.length - 1)
+  return list[safeIndex]?.url || ''
 })
 
 // ── GET FLAVOR STOCK ──
@@ -302,8 +483,33 @@ const getFlavorStock = (flavor, product = selectedProduct.value) => {
 
 const selectedFlavorStock = computed(() => {
   if (!selectedProduct.value) return 0
+
+  if (getEffectiveItemType(selectedProduct.value) === 'preorder') {
+    return 999
+  }
+
+  if (!(selectedProduct.value.flavors?.length > 0)) {
+    return Number(selectedProduct.value.stock) || 0
+  }
+
   return getFlavorStock(selectedFlavor.value)
 })
+
+function removeBatchSelection(index) {
+  batchSelections.value.splice(index, 1)
+}
+
+async function addBatchToCart() {
+  if (!selectedProduct.value || batchSelections.value.length === 0) return
+  for (const sel of batchSelections.value) {
+    try {
+      await addToCart(selectedProduct.value, sel.flavor, sel.qty)
+    } catch (e) {
+      console.error('addBatchToCart error', e)
+    }
+  }
+  batchSelections.value = []
+}
 
 let noticeTimer = null
 function showNotice(msg, type = 'success') {
@@ -343,6 +549,44 @@ function getEffectiveItemType(product) {
   }
 
   return ''
+}
+
+function getProductPrice(product) {
+  const itemType = getEffectiveItemType(product)
+  if (itemType === 'preorder') {
+    return product.preorderPrice ?? product.price
+  }
+  return product.price
+}
+
+function getTotalStock(product) {
+  if (!product) return 0
+
+  const flavorStock = product.flavorStock
+  if (flavorStock && typeof flavorStock === 'object' && !Array.isArray(flavorStock)) {
+    const totalFromFlavor = Object.values(flavorStock).reduce(
+      (sum, qty) => sum + (Number(qty) || 0),
+      0,
+    )
+    if (totalFromFlavor > 0 || (product.flavors?.length ?? 0) > 0) {
+      return totalFromFlavor
+    }
+  }
+
+  return Number(product.stock) || 0
+}
+
+function isOutOfStockForCurrentType(product) {
+  const itemType = getEffectiveItemType(product)
+  if (!itemType) {
+    return true
+  }
+
+  if (itemType === 'preorder') {
+    return false
+  }
+
+  return getTotalStock(product) === 0
 }
 
 function getProductTypeLabel(product) {
@@ -416,13 +660,38 @@ function goToPage(page) {
 }
 
 function handleTabClick(tab) {
+  closeMobileMenu()
   if (tab === 'รายการออเดอร์') {
     goToOrders()
     return
   }
-  activeTab.value = tab
   currentPage.value = 1
-  if (tab === 'หน้าหลัก') activeCategory.value = null
+  if (tab === 'หน้าหลัก') {
+    activeCategory.value = null
+    if (route.name !== 'userDashboard') {
+      router.push('/dashboard')
+      return
+    }
+    activeTab.value = tab
+    return
+  }
+  if (tab === 'พร้อมส่ง') {
+    if (route.name !== 'products-ready-to-ship') {
+      router.push('/products/ready-to-ship')
+      return
+    }
+    activeTab.value = tab
+    return
+  }
+  if (tab === 'พรีออเดอร์') {
+    if (route.name !== 'products-preorder') {
+      router.push('/products/preorder')
+      return
+    }
+    activeTab.value = tab
+    return
+  }
+  activeTab.value = tab
 }
 
 function handleCategoryClick(id) {
@@ -514,14 +783,25 @@ onMounted(async () => {
     fetchCartCount(),
     fetchBannerImage(),
     fetchLogoImage(),
+    fetchPreorderRounds(),
+    fetchOrderNotif(),
   ])
 })
 </script>
 
 <template>
   <div class="shop">
-    <!-- ───── NAVBAR ───── -->
     <nav class="navbar">
+      <button
+        type="button"
+        class="navbar__hamburger"
+        :class="{ 'navbar__hamburger--open': mobileMenuOpen }"
+        aria-label="เปิดเมนู"
+        @click.stop="toggleMobileMenu"
+      >
+        <span></span><span></span><span></span>
+      </button>
+
       <div class="navbar__logo">
         <img v-if="logoImage" :src="logoImage" alt="Meowverse logo" class="logo-icon-img" />
         <span v-else class="logo-icon">🐱</span>
@@ -535,13 +815,23 @@ onMounted(async () => {
           :class="['nav-tab', { 'nav-tab--active': activeTab === tab }]"
           @click="handleTabClick(tab)"
         >
-          {{ tab }}
+          <span class="nav-tab__label-wrap">
+            {{ tab }}
+            <span
+              v-if="tab === 'รายการออเดอร์' && orderNotifDot === 'red'"
+              class="order-notif-dot order-notif-dot--red"
+            ></span>
+            <span
+              v-else-if="tab === 'รายการออเดอร์' && orderNotifDot === 'green'"
+              class="order-notif-dot order-notif-dot--green"
+            ></span>
+          </span>
           <span v-if="activeTab === tab" class="nav-tab__underline" />
         </li>
       </ul>
 
       <div class="navbar__right">
-        <div class="search-box">
+        <div class="search-box" :class="{ 'search-box--mobile-open': mobileSearchOpen }">
           <svg class="search-icon" viewBox="0 0 20 20" fill="none">
             <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.7" />
             <path
@@ -554,7 +844,18 @@ onMounted(async () => {
           <input v-model="searchQuery" type="text" placeholder="ค้นหาสินค้า" class="search-input" />
         </div>
 
-        <!-- ── CART ICON BUTTON ── -->
+        <button
+          type="button"
+          class="mobile-search-btn"
+          aria-label="ค้นหาสินค้า"
+          @click.stop="toggleMobileSearch"
+        >
+          <svg viewBox="0 0 20 20" fill="none">
+            <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.7" />
+            <path d="M13 13l3.5 3.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+          </svg>
+        </button>
+
         <button class="cart-icon-btn" @click="goToCart" title="ตะกร้าสินค้า">
           <svg
             viewBox="0 0 24 24"
@@ -574,11 +875,23 @@ onMounted(async () => {
           }}</span>
         </button>
 
-        <div class="user-pill">
+        <div class="user-pill" ref="userMenuRef" @click.stop="toggleUserMenu" :class="{ 'user-pill--open': showUserMenu }">
           <svg viewBox="0 0 20 20" fill="currentColor" class="pill-icon">
             <path d="M10 10a4 4 0 100-8 4 4 0 000 8zm-7 8a7 7 0 1114 0H3z" />
           </svg>
           <span class="user-id">{{ currentUser?.username || 'MN0201' }}</span>
+          <svg viewBox="0 0 24 24" class="user-pill__chevron" aria-hidden="true">
+            <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+
+          <div v-if="showUserMenu" class="user-menu">
+            <button type="button" class="user-menu__item" @click="goToUserProfile">
+              บัญชีของฉัน
+            </button>
+            <button type="button" class="user-menu__item" @click="goToMyOrders">
+              การซื้อของฉัน
+            </button>
+          </div>
         </div>
         <button class="logout-btn" @click="handleLogout">
           <svg viewBox="0 0 20 20" fill="currentColor" class="pill-icon">
@@ -588,12 +901,54 @@ onMounted(async () => {
               clip-rule="evenodd"
             />
           </svg>
+          <span class="logout-btn__text">ออกจากระบบ</span>
+        </button>
+      </div>
+
+      <!-- ── MOBILE SEARCH BAR ── -->
+      <div v-if="mobileSearchOpen" class="mobile-search-bar">
+        <svg viewBox="0 0 20 20" fill="none">
+          <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.7" />
+          <path d="M13 13l3.5 3.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+        </svg>
+        <input
+          v-model="searchQuery"
+          type="text"
+          placeholder="ค้นหาสินค้า"
+          class="mobile-search-bar__input"
+          autofocus
+        />
+      </div>
+
+      <!-- ── MOBILE MENU (hamburger dropdown) ── -->
+      <div v-if="mobileMenuOpen" class="mobile-menu" ref="mobileMenuRef">
+        <button
+          v-for="tab in tabs"
+          :key="tab"
+          type="button"
+          class="mobile-menu__item"
+          :class="{ 'mobile-menu__item--active': activeTab === tab }"
+          @click="handleTabClick(tab)"
+        >
+          {{ tab }}
+          <span
+            v-if="tab === 'รายการออเดอร์' && orderNotifDot === 'red'"
+            class="order-notif-dot order-notif-dot--red"
+          ></span>
+          <span
+            v-else-if="tab === 'รายการออเดอร์' && orderNotifDot === 'green'"
+            class="order-notif-dot order-notif-dot--green"
+          ></span>
+        </button>
+        <div class="mobile-menu__divider"></div>
+        <button type="button" class="mobile-menu__item" @click="goToUserProfile">บัญชีของฉัน</button>
+        <button type="button" class="mobile-menu__item" @click="goToMyOrders">การซื้อของฉัน</button>
+        <button type="button" class="mobile-menu__item mobile-menu__item--danger" @click="handleLogout">
           ออกจากระบบ
         </button>
       </div>
     </nav>
 
-    <!-- ───── CART NOTICE ───── -->
     <transition name="slide-down">
       <div v-if="cartNotice.msg" :class="['cart-notice', `cart-notice--${cartNotice.type}`]">
         <span v-if="cartNotice.type === 'success'">
@@ -618,16 +973,21 @@ onMounted(async () => {
       </div>
     </transition>
 
-    <!-- ───── HERO BANNER ───── -->
     <section class="hero">
       <div class="hero__content">
         <p class="hero__eyebrow">Meowverse Store</p>
         <h1 class="hero__title">สวรรค์ของทาสแมวและเจ้าเหมียวตัวฟู ทุกสินค้า</h1>
         <div class="hero__actions">
-          <button class="btn btn--primary" @click="handleTabClick('พร้อมส่ง')">
+          <button
+            :class="['btn', activeTab === 'พร้อมส่ง' ? 'btn--primary' : 'btn--outline']"
+            @click="handleTabClick('พร้อมส่ง')"
+          >
             พร้อมส่งสินค้า
           </button>
-          <button class="btn btn--outline" @click="handleTabClick('พรีออเดอร์')">
+          <button
+            :class="['btn', activeTab === 'พรีออเดอร์' ? 'btn--primary' : 'btn--outline']"
+            @click="handleTabClick('พรีออเดอร์')"
+          >
             สินค้าพรีออเดอร์
           </button>
         </div>
@@ -637,7 +997,6 @@ onMounted(async () => {
       </div>
     </section>
 
-    <!-- ───── CATEGORY ICON ROW ───── -->
     <section class="categories">
       <div class="categories__header">
         <div>
@@ -669,7 +1028,6 @@ onMounted(async () => {
       </div>
     </section>
 
-    <!-- ───── PRODUCTS SECTION ───── -->
     <section class="products">
       <div class="products__header">
         <div>
@@ -684,10 +1042,33 @@ onMounted(async () => {
         </div>
       </div>
 
+      <div v-if="activeTab === 'พรีออเดอร์' && activePreorderRounds.length > 0" class="preorder-rounds-container">
+        <h3 class="rounds-title">📢 ประกาศ: รอบพรีออเดอร์ที่กำลังเปิดรับ</h3>
+        <div class="rounds-grid">
+          <div v-for="round in activePreorderRounds" :key="round.round_id" class="round-card">
+            <div class="round-header">
+              <h4 class="round-name">{{ round.round_name }}</h4>
+              <span class="round-status badge--active">กำลังเปิดรับ</span>
+            </div>
+            <p v-if="round.round_description" class="round-desc">{{ round.round_description }}</p>
+            <div class="round-dates">
+              <div class="date-item">
+                <span class="date-label">เปิดรอบ:</span>
+                <span class="date-val">{{ formatDateTime(round.start_date) }}</span>
+              </div>
+              <div class="date-item">
+                <span class="date-label">ปิดรอบ:</span>
+                <span class="date-val">{{ formatDateTime(round.end_date) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div v-if="loading" class="state-msg">กำลังโหลดสินค้า...</div>
       <div v-else-if="error" class="error-msg">{{ error }}</div>
       <div v-else-if="paginatedProducts.length === 0" class="state-msg">
-        ไม่พบสินค้าในหมวดหมู่นี้
+        ไม่พบรอบสินค้าพรีออเดอร์ที่เปิดในขณะนี้
       </div>
 
       <div v-else class="product-grid">
@@ -719,16 +1100,25 @@ onMounted(async () => {
             <div class="product-card__footer">
               <div class="product-card__price">
                 <span class="price-currency">฿</span>
-                <span class="price-amount">{{ Number(product.price).toLocaleString() }}</span>
+                <span class="price-amount">{{
+                  Number(getProductPrice(product)).toLocaleString()
+                }}</span>
               </div>
-              <span :class="['stock-badge', getStockStatusClass(product.stock)]">
-                สต็อก {{ product.stock }} ชิ้น
+              <span
+                v-if="getEffectiveItemType(product) !== 'preorder'"
+                :class="['stock-badge', getStockStatusClass(getTotalStock(product))]"
+              >
+                {{
+                  product.flavors?.length
+                    ? `สต็อกรวม ${getTotalStock(product)} ชิ้น`
+                    : `สต็อก ${getTotalStock(product)} ชิ้น`
+                }}
               </span>
             </div>
 
             <button
               class="btn-cart"
-              :disabled="cartLoading[product.id] || Number(product.stock) === 0"
+              :disabled="cartLoading[product.id] || isOutOfStockForCurrentType(product)"
               @click.stop="
                 product.flavors?.length ? openProductDetail(product) : addToCart(product)
               "
@@ -745,7 +1135,7 @@ onMounted(async () => {
                 </svg>
                 กำลังเพิ่ม...
               </span>
-              <span v-else-if="Number(product.stock) === 0" class="btn-cart__inner">
+              <span v-else-if="isOutOfStockForCurrentType(product)" class="btn-cart__inner">
                 สินค้าหมด
               </span>
               <span v-else class="btn-cart__inner">
@@ -771,7 +1161,6 @@ onMounted(async () => {
         </article>
       </div>
 
-      <!-- Pagination -->
       <div v-if="totalPages > 1" class="pagination">
         <button
           v-for="page in totalPages"
@@ -784,7 +1173,6 @@ onMounted(async () => {
       </div>
     </section>
 
-    <!-- ───── PRODUCT DETAIL MODAL ───── -->
     <transition name="fade-scale">
       <div v-if="selectedProduct" class="detail-overlay" @click.self="closeProductDetail">
         <section
@@ -810,25 +1198,40 @@ onMounted(async () => {
                   :src="activeDetailImage"
                   :alt="selectedProduct.name"
                 />
-                <div v-else class="detail-media__fallback">🐾</div>
+                <div v-else class="detail-media__fallback">
+                  <svg viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+                    <rect width="80" height="80" rx="16" fill="#f0e6ff"/>
+                    <rect x="18" y="22" width="44" height="36" rx="6" stroke="#c9a8f0" stroke-width="2.5" fill="none"/>
+                    <circle cx="30" cy="35" r="5" stroke="#c9a8f0" stroke-width="2" fill="none"/>
+                    <path d="M18 50l14-12 10 10 8-7 12 9" stroke="#c9a8f0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </div>
               </div>
 
               <div v-if="detailImages.length > 1" class="detail-thumb-row">
                 <button
-                  v-for="(image, index) in detailImages"
-                  :key="`${image}-${index}`"
+                  v-for="(img, index) in detailImages"
+                  :key="`${img.url}-${index}`"
                   type="button"
                   :class="[
                     'detail-thumb',
-                    { 'detail-thumb--active': selectedPreviewIndex === index },
+                    {
+                      'detail-thumb--active':
+                        selectedPreviewIndex === index ||
+                        (img.flavor && img.flavor === selectedFlavor),
+                    },
                   ]"
-                  @click="selectedPreviewIndex = index"
+                  @click="selectedPreviewIndex = index; if (img.flavor) selectedFlavor = img.flavor"
                 >
-                  <img :src="image" :alt="`${selectedProduct.name} ${index + 1}`" />
+                  <img :src="img.url" :alt="`${selectedProduct.name} ${index + 1}`" />
                 </button>
               </div>
 
-              <span v-if="selectedProduct.isPreorder" class="detail-badge">พรีออเดอร์</span>
+              <span
+                v-if="getCardBadge(selectedProduct)"
+                :class="['detail-badge', getCardBadge(selectedProduct).className]"
+                >{{ getCardBadge(selectedProduct).label }}</span
+              >
             </div>
 
             <div class="detail-content">
@@ -843,7 +1246,7 @@ onMounted(async () => {
               </p>
 
               <div class="detail-price-band">
-                ฿{{ Number(selectedProduct.price).toLocaleString() }}
+                ฿{{ Number(getProductPrice(selectedProduct)).toLocaleString() }}
               </div>
 
               <div v-if="selectedProduct.flavors?.length" class="detail-flavor-section">
@@ -856,11 +1259,28 @@ onMounted(async () => {
                     :class="[
                       'flavor-chip',
                       { 'flavor-chip--active': selectedFlavor === flavor },
-                      { 'flavor-chip--out': getFlavorStock(flavor) === 0 },
+                      {
+                        'flavor-chip--out':
+                          getEffectiveItemType(selectedProduct) !== 'preorder' &&
+                          getFlavorStock(flavor) === 0,
+                      },
                     ]"
-                    :disabled="getFlavorStock(flavor) === 0"
-                    @click="selectedFlavor = flavor"
+                    :disabled="
+                      getEffectiveItemType(selectedProduct) !== 'preorder' &&
+                      getFlavorStock(flavor) === 0
+                    "
+                    @click="
+                      selectedFlavor = flavor;
+                      const fi = detailImages.findIndex((img) => img.flavor === flavor);
+                      if (fi !== -1) selectedPreviewIndex = fi;
+                    "
                   >
+                    <img
+                      v-if="detailImages.find((img) => img.flavor === flavor)"
+                      :src="detailImages.find((img) => img.flavor === flavor).url"
+                      :alt="flavor"
+                      class="flavor-chip__img"
+                    />
                     <span>{{ flavor }}</span>
                     <span class="flavor-stock">{{ getFlavorStock(flavor) }}</span>
                   </button>
@@ -899,13 +1319,20 @@ onMounted(async () => {
                 </div>
                 <div class="detail-meta">
                   <span class="detail-meta__label">
-                    {{ selectedProduct.flavors?.length ? 'สต็อกรสที่เลือก' : 'สต็อก' }}
+                    {{
+                      getEffectiveItemType(selectedProduct) === 'preorder'
+                        ? 'เงื่อนไขรอบพรีออเดอร์'
+                        : selectedProduct.flavors?.length
+                          ? 'สต็อกรสที่เลือก'
+                          : 'สต็อก'
+                    }}
                   </span>
                   <strong class="detail-meta__value">
                     {{
-                      selectedProduct.flavors?.length ? selectedFlavorStock : selectedProduct.stock
+                      getEffectiveItemType(selectedProduct) === 'preorder'
+                        ? 'สั่งตามยอดจอง'
+                        : `${selectedProduct.flavors?.length ? selectedFlavorStock : getTotalStock(selectedProduct)} ชิ้น`
                     }}
-                    ชิ้น
                   </strong>
                 </div>
                 <div class="detail-meta">
@@ -914,11 +1341,48 @@ onMounted(async () => {
                     getProductTypeLabel(selectedProduct)
                   }}</strong>
                 </div>
+                <div
+                  v-if="
+                    getEffectiveItemType(selectedProduct) !== 'preorder' &&
+                    selectedProduct.flavors?.length
+                  "
+                  class="detail-meta"
+                >
+                  <span class="detail-meta__label">สต็อกรวม</span>
+                  <strong class="detail-meta__value"
+                    >{{ getTotalStock(selectedProduct) }} ชิ้น</strong
+                  >
+                </div>
+              </div>
+              <div v-if="batchSelections.length" class="batch-selection">
+                <p class="detail-option-label">รายการชุดพรีออเดอร์ที่เตรียมส่ง</p>
+                <div class="batch-list">
+                  <div v-for="(sel, idx) in batchSelections" :key="idx" class="batch-item">
+                    <span>{{ sel.flavor }} × {{ sel.qty }}</span>
+                    <button
+                      type="button"
+                      class="btn-remove-small"
+                      @click="removeBatchSelection(idx)"
+                    >
+                      ลบ
+                    </button>
+                  </div>
+                </div>
+                <div class="batch-actions">
+                  <button class="btn btn--primary" @click="addBatchToCart">
+                    เพิ่มทั้งหมดลงตะกร้า
+                  </button>
+                  <button class="btn btn--outline" @click="batchSelections = []">ยกเลิกชุด</button>
+                </div>
               </div>
 
               <div class="detail-actions">
                 <button
                   class="btn btn--primary detail-action-btn"
+                  :disabled="
+                    getEffectiveItemType(selectedProduct) !== 'preorder' &&
+                    Number(selectedFlavorStock) === 0
+                  "
                   @click="addToCart(selectedProduct, selectedFlavor, detailQty)"
                 >
                   {{
@@ -973,9 +1437,126 @@ onMounted(async () => {
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
-  z-index: 100;
+  z-index: 1000;
   box-shadow: 0 2px 16px rgba(89, 61, 125, 0.08);
   backdrop-filter: blur(8px);
+}
+
+/* ── MOBILE NAV: HAMBURGER BUTTON (hidden on desktop, shown <=768px) ── */
+.navbar__hamburger {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  width: 38px;
+  height: 38px;
+  border: none;
+  background: transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+.navbar__hamburger:hover {
+  background: #f4eaff;
+}
+.navbar__hamburger span {
+  display: block;
+  width: 20px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--primary);
+  transition: transform 0.22s ease, opacity 0.18s ease;
+}
+.navbar__hamburger--open span:nth-child(1) {
+  transform: translateY(6px) rotate(45deg);
+}
+.navbar__hamburger--open span:nth-child(2) {
+  opacity: 0;
+}
+.navbar__hamburger--open span:nth-child(3) {
+  transform: translateY(-6px) rotate(-45deg);
+}
+
+/* ── MOBILE SEARCH TOGGLE + BAR ── */
+.mobile-search-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 50%;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+.mobile-search-btn svg {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+.mobile-search-bar {
+  display: none;
+}
+
+/* ── MOBILE DROPDOWN MENU (hamburger contents) ── */
+.mobile-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: #fff;
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 14px 26px rgba(89, 61, 125, 0.14);
+  padding: 0.5rem;
+  display: grid;
+  gap: 0.15rem;
+  z-index: 999;
+  animation: mobile-menu-in 0.18s ease;
+}
+@keyframes mobile-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.mobile-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0.8rem 0.9rem;
+  border-radius: 10px;
+  font-size: 0.94rem;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+}
+.mobile-menu__item:active {
+  background: #f4eaff;
+}
+.mobile-menu__item--active {
+  color: var(--primary);
+  background: #f6eeff;
+}
+.mobile-menu__item--danger {
+  color: #e0455b;
+}
+.mobile-menu__divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0.4rem 0.2rem;
 }
 
 .navbar__logo {
@@ -1139,6 +1720,7 @@ onMounted(async () => {
 }
 
 .user-pill {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.32rem;
@@ -1149,8 +1731,46 @@ onMounted(async () => {
   font-size: 0.8rem;
   font-weight: 800;
   color: var(--primary);
+  cursor: pointer;
 }
 
+.user-pill--open {
+  box-shadow: 0 6px 20px rgba(111, 80, 160, 0.18);
+}
+
+.user-pill__chevron {
+  width: 1rem;
+  height: 1rem;
+}
+
+.user-menu {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  min-width: 180px;
+  background: #ffffff;
+  border: 1px solid #e4d9f5;
+  border-radius: 16px;
+  box-shadow: 0 18px 40px rgba(57, 33, 120, 0.12);
+  overflow: hidden;
+  z-index: 110;
+}
+
+.user-menu__item {
+  width: 100%;
+  padding: 0.85rem 1rem;
+  text-align: left;
+  background: transparent;
+  border: none;
+  font-size: 0.95rem;
+  color: #3f2f5d;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.user-menu__item:hover {
+  background: #f5efff;
+}
 .logout-btn {
   display: flex;
   align-items: center;
@@ -1164,9 +1784,7 @@ onMounted(async () => {
   color: #a74553;
   cursor: pointer;
   font-family: inherit;
-  transition:
-    background 0.2s,
-    box-shadow 0.2s;
+  transition: background 0.2s, box-shadow 0.2s;
   white-space: nowrap;
 }
 .logout-btn:hover {
@@ -1180,6 +1798,7 @@ onMounted(async () => {
   top: 66px;
   right: 1.5rem;
   z-index: 200;
+  pointer-events: none;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -1299,7 +1918,6 @@ onMounted(async () => {
   bottom: 0;
   width: 260px;
   z-index: 0;
-  overflow: hidden;
 }
 .hero__cat-img {
   width: 100%;
@@ -1443,6 +2061,7 @@ onMounted(async () => {
   padding: 1.15rem 1rem 1.35rem;
   box-shadow: 0 10px 28px rgba(89, 61, 125, 0.08);
 }
+
 .products__header {
   margin-bottom: 0.8rem;
 }
@@ -1803,8 +2422,7 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 5rem;
-  color: #b788ea;
+  background: linear-gradient(135deg, #f8f2ff, #ede0ff);
 }
 
 .detail-thumb-row {
@@ -1918,7 +2536,7 @@ onMounted(async () => {
   background: #fff;
   color: var(--primary-dark);
   border-radius: 8px;
-  padding: 0.42rem 0.88rem;
+  padding: 0.35rem 0.88rem 0.35rem 0.35rem;
   font-size: 0.82rem;
   font-weight: 700;
   cursor: pointer;
@@ -1927,6 +2545,18 @@ onMounted(async () => {
     background 0.18s ease,
     border-color 0.18s ease,
     box-shadow 0.18s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.flavor-chip__img {
+  width: 32px;
+  height: 32px;
+  border-radius: 5px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid #ede0ff;
 }
 
 .flavor-chip:hover {
@@ -2077,7 +2707,51 @@ onMounted(async () => {
 /* ── RESPONSIVE ── */
 @media (max-width: 768px) {
   .navbar {
-    padding: 0 1rem;
+    padding: 0 0.85rem;
+    position: relative;
+    gap: 0.6rem;
+  }
+  .navbar__hamburger {
+    display: flex;
+  }
+  .mobile-search-btn {
+    display: flex;
+  }
+  .mobile-search-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.65rem 1rem;
+    border-top: 1px solid var(--border);
+    background: #fff;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 998;
+    box-shadow: 0 10px 20px rgba(89, 61, 125, 0.1);
+  }
+  .mobile-search-bar svg {
+    width: 16px;
+    height: 16px;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  .mobile-search-bar__input {
+    flex: 1;
+    border: none;
+    outline: none;
+    font-size: 0.92rem;
+    font-family: inherit;
+    background: transparent;
+    min-width: 0;
+  }
+  .search-box {
+    display: none;
+  }
+  .user-pill,
+  .logout-btn {
+    display: none;
   }
   .navbar__tabs {
     display: none;
@@ -2109,9 +2783,6 @@ onMounted(async () => {
   }
   .product-grid {
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  }
-  .search-input {
-    width: 100px;
   }
 }
 @media (max-width: 480px) {
@@ -2154,5 +2825,119 @@ onMounted(async () => {
   .detail-media-main {
     max-height: 300px;
   }
+}
+
+/* ── PREORDER ROUNDS INFO ── */
+.preorder-rounds-container {
+  margin-bottom: 1.5rem;
+  background: linear-gradient(160deg, #fffaf5, #fff5f0);
+  border: 1px dashed #f1a17f;
+  border-radius: 16px;
+  padding: 1.25rem;
+}
+.rounds-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: #d56639;
+  margin: 0 0 1rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.rounds-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+}
+.round-card {
+  background: #ffffff;
+  border: 1px solid #ffe3d5;
+  border-radius: 12px;
+  padding: 1.1rem;
+  box-shadow: 0 4px 12px rgba(213, 102, 57, 0.06);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.round-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(213, 102, 57, 0.1);
+}
+.round-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.6rem;
+}
+.round-name {
+  font-size: 1.05rem;
+  font-weight: 900;
+  color: var(--primary-dark);
+  margin: 0;
+}
+.round-status {
+  font-size: 0.75rem;
+  font-weight: 800;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  background: #e8f9f2;
+  color: #187f5d;
+  border: 1px solid #bfead9;
+}
+.round-desc {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.9rem;
+  line-height: 1.45;
+}
+.round-dates {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  background: linear-gradient(160deg, #fcf9ff, #f8f2ff);
+  padding: 0.75rem;
+  border-radius: 10px;
+  border: 1px solid #f0e6ff;
+}
+.date-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.82rem;
+}
+.date-label {
+  color: var(--muted);
+  font-weight: 700;
+}
+/* ── ORDER NOTIF DOT (navbar tab) ── */
+.nav-tab__label-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+}
+.order-notif-dot {
+  position: absolute;
+  top: -5px;
+  right: -10px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid #fff;
+  flex-shrink: 0;
+}
+.order-notif-dot--red {
+  background: #ef4444;
+  animation: pulse-red-nav 2s infinite;
+}
+.order-notif-dot--green {
+  background: #22c55e;
+  animation: pulse-green-nav 2s infinite;
+}
+@keyframes pulse-red-nav {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.6); }
+  50%       { box-shadow: 0 0 0 4px rgba(239,68,68,0); }
+}
+@keyframes pulse-green-nav {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.6); }
+  50%       { box-shadow: 0 0 0 4px rgba(34,197,94,0); }
 }
 </style>

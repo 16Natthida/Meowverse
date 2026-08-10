@@ -134,7 +134,25 @@ export function useAdminProductStore() {
       stock: Number(payload.stock) || 0,
       flavorStock,
       basePrice: Number(payload.basePrice) || 0,
-      imageUrls: payload.imageUrls || [],
+      preorderPrice:
+        payload.preorderPrice === '' || payload.preorderPrice == null
+          ? Number(payload.basePrice) || 0
+          : Number(payload.preorderPrice) || 0,
+      images: Array.isArray(payload.images)
+        ? payload.images
+            .map((img) => ({
+              url: typeof img === 'string' ? img : String(img.url || '').trim(),
+              flavor: typeof img === 'object' ? String(img.flavor || '').trim() : '',
+            }))
+            .filter((img) => img.url)
+        : (payload.imageUrls || [])
+            .map((url) => ({ url: String(url || '').trim(), flavor: '' }))
+            .filter((img) => img.url),
+      imageUrls: Array.isArray(payload.images)
+        ? payload.images
+            .map((img) => (typeof img === 'string' ? img : String(img.url || '').trim()))
+            .filter(Boolean)
+        : (payload.imageUrls || []).map((url) => String(url || '').trim()).filter(Boolean),
       preorderEnabled: Boolean(payload.preorderEnabled),
       readyToShipEnabled: Boolean(payload.readyToShipEnabled),
     }

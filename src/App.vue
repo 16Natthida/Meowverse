@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { useAuth } from './composables/useAuth'
 
@@ -35,8 +35,36 @@ const pageTitle = computed(() => {
     return 'จัดการสต็อกสินค้า'
   }
 
+  if (route.path === '/admin/sales/ready-to-ship') {
+    return 'รายการยอดขายพร้อมส่ง'
+  }
+
+  if (route.path === '/admin/sales/preorder') {
+    return 'รายการยอดขายพรีออเดอร์'
+  }
+
+  if (route.path === '/admin/sales' || route.path === '/admin/orders') {
+    return 'รายการยอดขาย'
+  }
+
   if (route.path === '/admin/preorder-rounds') {
     return 'รอบนำเข้าสินค้า'
+  }
+
+  if (route.path === '/admin/postpones') {
+    return 'คำขอเลื่อนการชำระเงิน'
+  }
+
+  if (route.path === '/admin/slips') {
+    return 'จัดการสลิปการชำระเงิน'
+  }
+
+  if (route.path === '/admin/inventory-intake') {
+    return 'รับสินค้าเข้า'
+  }
+
+  if (route.path === '/admin/shipping') {
+    return 'รายการจัดส่ง'
   }
 
   return 'แดชบอร์ด'
@@ -44,6 +72,28 @@ const pageTitle = computed(() => {
 
 const isStandaloneRoute = computed(() => route.path === '/login')
 const isAdminRoute = computed(() => route.path.startsWith('/admin'))
+
+// ── เมนู "รายการยอดขาย" แบบขยาย/ย่อ แยกย่อยเป็นทั้งหมด / พร้อมส่ง / พรีออเดอร์ ──
+const isSalesRoute = computed(
+  () => route.path.startsWith('/admin/sales') || route.path === '/admin/orders',
+)
+const salesMenuOpen = ref(isSalesRoute.value)
+watch(isSalesRoute, (active) => {
+  if (active) salesMenuOpen.value = true
+})
+
+// ── MOBILE SIDEBAR DRAWER ──
+const sidebarOpen = ref(false)
+function toggleSidebar() {
+  sidebarOpen.value = !sidebarOpen.value
+}
+function closeSidebar() {
+  sidebarOpen.value = false
+}
+watch(
+  () => route.path,
+  () => closeSidebar(),
+)
 
 const profileInitials = computed(() => {
   const trimmedName = profile.name.trim()
@@ -223,7 +273,8 @@ onUnmounted(() => {
   <RouterView v-if="isStandaloneRoute || !isAdminRoute" />
 
   <div v-else class="app-layout">
-    <aside class="sidebar">
+    <div v-if="sidebarOpen" class="sidebar-backdrop" @click="closeSidebar"></div>
+    <aside class="sidebar" :class="{ 'sidebar--open': sidebarOpen }">
       <div class="brand-box">
         <div class="brand-avatar" aria-hidden="true">
           <img
@@ -243,9 +294,54 @@ onUnmounted(() => {
         <p class="menu-title">เมนูหลัก</p>
         <nav class="menu-list" aria-label="เมนูหลัก">
           <RouterLink to="/admin/home">แดชบอร์ด</RouterLink>
+
+          <div class="menu-group" :class="{ 'menu-group--active': isSalesRoute }">
+            <button
+              type="button"
+              class="menu-group__trigger"
+              :class="{ 'menu-group__trigger--active': isSalesRoute }"
+              @click="salesMenuOpen = !salesMenuOpen"
+              :aria-expanded="salesMenuOpen"
+            >
+              <span class="menu-group__label">รายการยอดขาย</span>
+              <span class="menu-group__chevron" :class="{ 'menu-group__chevron--open': salesMenuOpen }">
+                ⌄
+              </span>
+            </button>
+            <div class="menu-sub" v-show="salesMenuOpen">
+              <RouterLink to="/admin/sales" exact-active-class="menu-sub__link--active" class="menu-sub__link">
+                <span class="menu-sub__dot menu-sub__dot--all"></span>
+                ภาพรวมทั้งหมด
+              </RouterLink>
+              <RouterLink
+                to="/admin/sales/ready-to-ship"
+                exact-active-class="menu-sub__link--active"
+                class="menu-sub__link"
+              >
+                <span class="menu-sub__dot menu-sub__dot--ready"></span>
+                รายการสินค้าพร้อมส่ง
+              </RouterLink>
+              <RouterLink
+                to="/admin/sales/preorder"
+                exact-active-class="menu-sub__link--active"
+                class="menu-sub__link"
+              >
+                <span class="menu-sub__dot menu-sub__dot--pre"></span>
+                รายการสินค้าพรีออเดอร์
+              </RouterLink>
+            </div>
+          </div>
+
           <RouterLink to="/admin/products">สินค้า</RouterLink>
+          <RouterLink to="/admin/slips">จัดการสลิป</RouterLink>
           <RouterLink to="/admin/preorder-rounds">รอบนำเข้าสินค้า</RouterLink>
+          <RouterLink to="/admin/postpones">คำขอเลื่อนการชำระเงิน</RouterLink>
+          <RouterLink to="/admin/inventory-intake">รับสินค้าเข้า</RouterLink>
+          <RouterLink to="/admin/missing-items">สินค้าตกหล่น / ขาด</RouterLink>
+          <RouterLink to="/admin/import-fee">กรอกค่านำเข้า</RouterLink>
+          <RouterLink to="/admin/shipping">รายการจัดส่ง</RouterLink>
           <RouterLink to="/admin/settings">ตั้งค่าระบบ</RouterLink>
+          <RouterLink to="/admin/qrcodes">ตั้งค่า QR Payment</RouterLink>
           <RouterLink to="/admin/users">เพิ่ม User</RouterLink>
         </nav>
       </div>
@@ -261,9 +357,19 @@ onUnmounted(() => {
 
     <section class="workspace">
       <header class="topbar">
-        <label class="top-search" aria-label="ค้นหาสินค้า">
-          <input placeholder="ค้นหาสินค้า" type="text" />
-        </label>
+        <div class="topbar-main">
+          <button
+            type="button"
+            class="sidebar-toggle"
+            aria-label="เปิดเมนู"
+            @click="toggleSidebar"
+          >
+            <span></span><span></span><span></span>
+          </button>
+          <label class="top-search" aria-label="ค้นหาสินค้า">
+            <input placeholder="ค้นหาสินค้า" type="text" />
+          </label>
+        </div>
 
         <div class="topbar-right">
           <button class="notify" type="button" @click="goToWebsite">หน้าเว็บไซต์หลัก</button>
@@ -287,11 +393,6 @@ onUnmounted(() => {
             <label class="field">
               ชื่อแอดมิน
               <input v-model="profileForm.name" type="text" />
-            </label>
-
-            <label class="field">
-              ตำแหน่ง
-              <input v-model="profileForm.role" type="text" />
             </label>
 
             <div class="field">
@@ -607,6 +708,100 @@ onUnmounted(() => {
   font-weight: 700;
 }
 
+/* ── EXPANDABLE "รายการยอดขาย" MENU GROUP ── */
+.menu-group {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.menu-group__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  width: 100%;
+  border: none;
+  background: none;
+  border-radius: 10px;
+  padding: 0.52rem 0.62rem;
+  color: #5c4f70;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+
+.menu-group__trigger:hover {
+  background: color-mix(in srgb, var(--theme-primary) 10%, #fff);
+}
+
+.menu-group__trigger--active {
+  color: #583a78;
+  font-weight: 700;
+}
+
+.menu-group__chevron {
+  font-size: 0.75rem;
+  color: #9b8caf;
+  transition: transform 0.18s ease;
+  line-height: 1;
+}
+
+.menu-group__chevron--open {
+  transform: rotate(180deg);
+  color: var(--theme-primary);
+}
+
+.menu-sub {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.15rem 0 0.3rem 0.55rem;
+  margin-left: 0.55rem;
+  border-left: 2px solid #eee2f7;
+}
+
+.menu-sub__link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 9px;
+  padding: 0.44rem 0.55rem;
+  color: #6b5a84;
+  font-size: 0.84rem;
+  line-height: 1.3;
+}
+
+.menu-sub__link:hover {
+  background: color-mix(in srgb, var(--theme-primary) 10%, #fff);
+  color: #432f61;
+}
+
+.menu-sub__link--active {
+  background: color-mix(in srgb, var(--theme-primary) 22%, #fff);
+  color: #432f61;
+  font-weight: 700;
+}
+
+.menu-sub__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.menu-sub__dot--all {
+  background: #9b8caf;
+}
+
+.menu-sub__dot--ready {
+  background: #15803d;
+}
+
+.menu-sub__dot--pre {
+  background: #b45309;
+}
+
 .workspace {
   min-width: 0;
   display: flex;
@@ -623,6 +818,43 @@ onUnmounted(() => {
   gap: 1rem;
   align-items: center;
   padding: 0.65rem 1.15rem;
+}
+
+.topbar-main {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── MOBILE SIDEBAR TOGGLE (hidden on desktop) ── */
+.sidebar-toggle {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  width: 40px;
+  height: 40px;
+  border: 1px solid #e7dff1;
+  background: #fff;
+  border-radius: 10px;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+.sidebar-toggle span {
+  display: block;
+  width: 18px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--theme-primary, #b673ee);
+}
+
+/* ── MOBILE SIDEBAR BACKDROP ── */
+.sidebar-backdrop {
+  display: none;
 }
 
 .top-search {
@@ -800,9 +1032,37 @@ onUnmounted(() => {
     grid-template-columns: 1fr;
   }
 
+  .sidebar-toggle {
+    display: flex;
+  }
+
   .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 270px;
+    max-width: 84vw;
+    z-index: 1200;
+    overflow-y: auto;
+    background: #fffaff;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: 10px 0 28px rgba(60, 30, 80, 0.18);
     border-right: 0;
-    border-bottom: 1px solid #ece7f4;
+    border-bottom: 0;
+  }
+
+  .sidebar--open {
+    transform: translateX(0);
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 10, 30, 0.4);
+    z-index: 1100;
   }
 
   .topbar {
@@ -818,6 +1078,21 @@ onUnmounted(() => {
     width: 100%;
     position: static;
     margin-top: 0.35rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .topbar-right {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .page {
+    padding: 0.85rem;
+  }
+
+  .page-title {
+    font-size: 1.3rem;
   }
 }
 </style>

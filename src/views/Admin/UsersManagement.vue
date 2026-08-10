@@ -9,7 +9,9 @@
           <span class="count">{{ filteredUsers.length }}</span>
         </div>
       </div>
-      <button class="btn-add-user" @click="goToAddUser"><span>➕</span> เพิ่มผู้ใช้ใหม่</button>
+      <div class="header-actions">
+        <button class="btn-add-user" @click="goToAddUser"><span>➕</span> เพิ่มผู้ใช้ใหม่</button>
+      </div>
     </div>
 
     <div class="controls-section">
@@ -77,6 +79,7 @@
             <td>{{ user.line_id || '-' }}</td>
             <td class="date-cell">{{ user.created_at }}</td>
             <td class="actions-cell">
+              <button class="edit-btn" type="button" @click="openEditModal(user)">แก้ไข</button>
               <button class="delete-btn" type="button" @click="deleteUser(user)">ลบ</button>
             </td>
           </tr>
@@ -86,6 +89,47 @@
 
     <div class="empty-state" v-else>
       <p>ไม่พบผู้ใช้ที่ตรงกับการค้นหา</p>
+    </div>
+
+    <!-- Edit User Modal -->
+    <div v-if="showEditModal" class="modal-overlay" @click="closeEditModal">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <h2>แก้ไขข้อมูลผู้ใช้</h2>
+          <button class="close-btn" @click="closeEditModal">✕</button>
+        </div>
+        <form @submit.prevent="saveUserEdits" class="edit-form">
+          <div class="form-group">
+            <label for="edit-username">ชื่อผู้ใช้:</label>
+            <input v-model="editingUser.username" type="text" id="edit-username" required />
+          </div>
+
+          <div class="form-group">
+            <label for="edit-password">รหัสผ่าน (ปล่อยว่างไว้เพื่อไม่เปลี่ยนแปลง):</label>
+            <input v-model="editingUser.password" type="password" id="edit-password" />
+          </div>
+
+          <div class="form-group">
+            <label for="edit-full-name">ชื่อจริง:</label>
+            <input v-model="editingUser.full_name" type="text" id="edit-full-name" required />
+          </div>
+
+          <div class="form-group">
+            <label for="edit-phone">เบอร์โทรศัพท์:</label>
+            <input v-model="editingUser.phone_number" type="text" id="edit-phone" />
+          </div>
+
+          <div class="form-group">
+            <label for="edit-line">LINE ID:</label>
+            <input v-model="editingUser.line_id" type="text" id="edit-line" />
+          </div>
+
+          <div class="modal-actions">
+            <button type="button" class="btn-cancel" @click="closeEditModal">ยกเลิก</button>
+            <button type="submit" class="btn-save">บันทึก</button>
+          </div>
+        </form>
+      </div>
     </div>
   </main>
 </template>
@@ -104,6 +148,15 @@ const searchQuery = ref('')
 const activeFilter = ref('all')
 const loading = ref(false)
 const fetchError = ref('')
+const showEditModal = ref(false)
+const editingUser = ref({
+  user_id: null,
+  username: '',
+  password: '',
+  full_name: '',
+  phone_number: '',
+  line_id: '',
+})
 const currentUser = computed(() => getUser())
 
 const filteredUsers = computed(() => {
@@ -174,6 +227,84 @@ async function deleteUser(user) {
     users.value = users.value.filter((item) => item.user_id !== user.user_id)
   } catch (err) {
     fetchError.value = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการลบผู้ใช้'
+  }
+}
+
+function openEditModal(user) {
+  editingUser.value = {
+    user_id: user.user_id,
+    username: user.username,
+    password: '',
+    full_name: user.full_name,
+    phone_number: user.phone_number || '',
+    line_id: user.line_id || '',
+  }
+  showEditModal.value = true
+}
+
+function closeEditModal() {
+  showEditModal.value = false
+  editingUser.value = {
+    user_id: null,
+    username: '',
+    password: '',
+    full_name: '',
+    phone_number: '',
+    line_id: '',
+  }
+}
+
+async function saveUserEdits() {
+  if (!editingUser.value.username || !editingUser.value.full_name) {
+    alert('กรุณากรอกชื่อผู้ใช้และชื่อจริง')
+    return
+  }
+
+  try {
+    const payload = {
+      username: editingUser.value.username,
+      full_name: editingUser.value.full_name,
+      phone_number: editingUser.value.phone_number || null,
+      line_id: editingUser.value.line_id || null,
+    }
+
+    if (editingUser.value.password && editingUser.value.password.trim()) {
+      payload.password = editingUser.value.password
+    }
+
+    const response = await fetch(`${API_BASE_URL}/admin/users/${editingUser.value.user_id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-role': String(currentUser.value?.role || '').toLowerCase() || 'user',
+        'x-user-id': String(currentUser.value?.user_id || currentUser.value?.id || ''),
+      },
+      body: JSON.stringify(payload),
+    })
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}))
+      throw new Error(body.error || `ไม่สามารถแก้ไขข้อมูลได้ (${response.status})`)
+    }
+
+    // Update local data
+    const userIndex = users.value.findIndex((u) => u.user_id === editingUser.value.user_id)
+    if (userIndex > -1) {
+      users.value[userIndex] = {
+        ...users.value[userIndex],
+        username: editingUser.value.username,
+        full_name: editingUser.value.full_name,
+        phone_number: editingUser.value.phone_number,
+        line_id: editingUser.value.line_id,
+      }
+    }
+
+    closeEditModal()
+    alert('แก้ไขข้อมูลสำเร็จ')
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการแก้ไข'
+    alert(errorMsg)
+    console.error('Error updating user:', err)
   }
 }
 
@@ -407,6 +538,24 @@ onMounted(() => {
   width: 92px;
 }
 
+.edit-btn {
+  border: 1px solid #b788ea;
+  background: linear-gradient(180deg, #f3e5f5, #e8d5f2);
+  color: #6f50a0;
+  font-weight: 700;
+  font-size: 0.82rem;
+  padding: 0.45rem 0.8rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-right: 0.5rem;
+}
+
+.edit-btn:hover {
+  background: #dcc8f5;
+  border-color: #9a7dbf;
+}
+
 .delete-btn {
   border: 1px solid #f5b5c1;
   background: linear-gradient(180deg, #fff, #fff4f6);
@@ -422,6 +571,133 @@ onMounted(() => {
 .delete-btn:hover {
   background: #ffe7ec;
   border-color: #ef9aaa;
+}
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: white;
+  border-radius: 16px;
+  padding: 2rem;
+  max-width: 500px;
+  width: 90%;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  border-bottom: 2px solid #eadff5;
+  padding-bottom: 1rem;
+}
+
+.modal-header h2 {
+  margin: 0;
+  color: #2f2348;
+  font-size: 1.5rem;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  color: #9a7dbf;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.close-btn:hover {
+  color: #6f50a0;
+}
+
+.edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.form-group label {
+  margin-bottom: 0.5rem;
+  color: #2f2348;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.form-group input {
+  padding: 0.75rem;
+  border: 1px solid #eadff5;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  color: #3b2f57;
+  transition: all 0.2s;
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: #b788ea;
+  box-shadow: 0 0 0 4px rgba(183, 136, 234, 0.12);
+}
+
+.modal-actions {
+  display: flex;
+  gap: 1rem;
+  justify-content: flex-end;
+  margin-top: 2rem;
+  border-top: 1px solid #eadff5;
+  padding-top: 1rem;
+}
+
+.btn-cancel {
+  padding: 0.7rem 1.5rem;
+  border: 1px solid #dcc8f5;
+  background: white;
+  color: #6f50a0;
+  font-weight: 700;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-cancel:hover {
+  background: #f8f5ff;
+  border-color: #b788ea;
+}
+
+.btn-save {
+  padding: 0.7rem 1.5rem;
+  border: none;
+  background: linear-gradient(180deg, #cda2fb, #bc8aed);
+  color: white;
+  font-weight: 700;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 4px 12px rgba(132, 86, 179, 0.24);
+}
+
+.btn-save:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 16px rgba(132, 86, 179, 0.32);
 }
 
 .empty-state {

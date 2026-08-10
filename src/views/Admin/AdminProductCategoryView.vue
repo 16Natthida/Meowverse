@@ -15,10 +15,18 @@ const store = useAdminProductStore()
 const searchKeyword = ref('')
 const productPanelOpen = ref(false)
 const categoryPanelOpen = ref(false)
+const showAddStockModal = ref(false)
 const editingProductId = ref(null)
 const isSubmitting = ref(false)
 const isCategorySubmitting = ref(false)
+const isAddingStock = ref(false)
 const flavorInput = ref('')
+const selectedProductForStock = ref(null)
+const stockForm = reactive({
+  quantity: 0,
+  flavorStock: {},
+  readyToShipEnabled: true,
+})
 
 const notice = reactive({
   type: '',
@@ -32,10 +40,12 @@ const form = reactive({
   sku: '',
   categoryId: '',
   basePrice: 0,
-  stock: 0,
+  preorderPrice: 0,
   flavorStock: {},
   imageUrls: [],
+  images: [],
   preorderEnabled: false,
+  stock: 0,
   readyToShipEnabled: true,
 })
 
@@ -91,7 +101,6 @@ const filteredProducts = computed(() => {
 })
 
 const flavorItems = computed(() => parseFlavorsText(form.flavorsText))
-
 const totalFlavorStock = computed(() => {
   if (!form.flavorStock || Object.keys(form.flavorStock).length === 0) {
     return 0
@@ -158,7 +167,6 @@ function addFlavorFromInput() {
     const alreadyExists = currentItems.some((item) => item.toLowerCase() === value.toLowerCase())
     if (!alreadyExists) {
       currentItems.push(value)
-      // Initialize flavor stock for new flavor
       if (!(value in form.flavorStock)) {
         form.flavorStock[value] = 0
       }
@@ -174,7 +182,6 @@ function removeFlavor(index) {
   const currentItems = parseFlavorsText(form.flavorsText)
   const removedFlavor = currentItems[index]
   currentItems.splice(index, 1)
-  // Remove flavor stock entry when flavor is removed
   if (removedFlavor in form.flavorStock) {
     delete form.flavorStock[removedFlavor]
   }
@@ -200,6 +207,7 @@ async function handleImageSelected(event) {
   for (const file of filesToUpload) {
     try {
       const result = await store.uploadProductImage(file)
+      form.images.push({ url: result.url, flavor: '' })
       form.imageUrls.push(result.url)
       uploadedCount += 1
     } catch {
@@ -220,11 +228,11 @@ async function handleImageSelected(event) {
 }
 
 function clearImage(index) {
+  form.images.splice(index, 1)
   form.imageUrls.splice(index, 1)
 }
 
 async function submitForm() {
-  // Auto-commit any typed flavor before submit so user does not lose input.
   addFlavorFromInput()
 
   if (!form.name.trim() || !form.sku.trim() || !form.categoryId) {
@@ -240,6 +248,11 @@ async function submitForm() {
   isSubmitting.value = true
 
   try {
+    const processedImages = form.images.map((img) => ({
+      url: img.url,
+      flavor: img.flavor || '',
+    }))
+
     const payload = {
       name: form.name.trim(),
       description: form.description.trim(),
@@ -247,17 +260,26 @@ async function submitForm() {
       sku: form.sku.trim(),
       categoryId: form.categoryId,
       basePrice: Number(form.basePrice) || 0,
+      preorderPrice: Number(form.preorderPrice) || 0,
+      flavorStock: { ...form.flavorStock },
+      images: processedImages,
+      imageUrls: processedImages.map((img) => img.url),
+      preorderEnabled: form.preorderEnabled,
+      readyToShipEnabled: form.readyToShipEnabled,
       stock:
         parseFlavorsText(form.flavorsText).length > 0
           ? totalFlavorStock.value
           : Number(form.stock) || 0,
-      flavorStock: { ...form.flavorStock },
-      imageUrls: [...form.imageUrls],
-      preorderEnabled: form.preorderEnabled,
-      readyToShipEnabled: form.readyToShipEnabled,
     }
 
     if (editingProductId.value) {
+      const existingProduct = store.products.find(
+        (p) => String(p.id) === String(editingProductId.value),
+      )
+      if (existingProduct) {
+        payload.stock = Number(existingProduct.stock) || 0
+        payload.readyToShipEnabled = Boolean(existingProduct.readyToShipEnabled)
+      }
       await store.updateProduct(editingProductId.value, payload)
       setNotice('success', 'อัปเดตสินค้าเรียบร้อยแล้ว')
     } else {
@@ -377,10 +399,21 @@ function editProduct(product) {
   form.sku = product.sku
   form.categoryId = product.categoryId
   form.basePrice = Number(product.basePrice) || 0
-  form.stock = Number(product.stock) || 0
+  form.preorderPrice = Number(product.preorderPrice ?? product.basePrice) || 0
   form.flavorStock = typeof product.flavorStock === 'object' ? { ...product.flavorStock } : {}
-  form.imageUrls = [...(product.imageUrls || [])]
+
+  const safeImages = product.images
+    ? JSON.parse(JSON.stringify(product.images))
+    : (product.imageUrls || []).map((item) => ({
+        url: typeof item === 'string' ? item : item.url || item.imageUrl || '',
+        flavor: item.flavor || '',
+      }))
+
+  form.images = safeImages
+  form.imageUrls = safeImages.map((img) => img.url)
+
   form.preorderEnabled = Boolean(product.preorderEnabled)
+  form.stock = Number(product.stock) || 0
   form.readyToShipEnabled = Boolean(product.readyToShipEnabled)
   flavorInput.value = ''
 }
@@ -392,15 +425,83 @@ function resetForm() {
   form.sku = ''
   form.categoryId = ''
   form.basePrice = 0
-  form.stock = 0
+  form.preorderPrice = 0
   form.flavorStock = {}
   form.imageUrls = []
+  form.images = []
   form.preorderEnabled = false
+  form.stock = 0
   form.readyToShipEnabled = true
   flavorInput.value = ''
 
   editingProductId.value = null
   productPanelOpen.value = false
+}
+function openAddStockModal(product) {
+  selectedProductForStock.value = product
+  const parsedFlavors = Array.isArray(product.flavors) ? product.flavors : []
+
+  stockForm.quantity = Number(product.stock) || 0
+  stockForm.flavorStock = parsedFlavors.length > 0 ? { ...product.flavorStock } : {}
+  stockForm.readyToShipEnabled = Boolean(product.readyToShipEnabled)
+
+  showAddStockModal.value = true
+}
+
+function closeAddStockModal() {
+  showAddStockModal.value = false
+  selectedProductForStock.value = null
+  stockForm.quantity = 0
+  stockForm.flavorStock = {}
+  stockForm.readyToShipEnabled = true
+}
+
+async function submitAddStock() {
+  if (!selectedProductForStock.value) return
+
+  isAddingStock.value = true
+  try {
+    const payload = {
+      name: selectedProductForStock.value.name,
+      description: selectedProductForStock.value.description || '',
+      flavors: selectedProductForStock.value.flavors || [],
+      sku: selectedProductForStock.value.sku,
+      categoryId: selectedProductForStock.value.categoryId,
+      basePrice: Number(selectedProductForStock.value.basePrice) || 0,
+      preorderPrice:
+        Number(
+          selectedProductForStock.value.preorderPrice ?? selectedProductForStock.value.basePrice,
+        ) || 0,
+      stock:
+        Array.isArray(selectedProductForStock.value.flavors) &&
+        selectedProductForStock.value.flavors.length > 0
+          ? Object.values(stockForm.flavorStock).reduce((sum, qty) => sum + Number(qty || 0), 0)
+          : Number(stockForm.quantity) || 0,
+      flavorStock: { ...stockForm.flavorStock },
+      images: Array.isArray(selectedProductForStock.value.images)
+        ? selectedProductForStock.value.images
+        : (selectedProductForStock.value.imageUrls || []).map((item) => ({
+            url: typeof item === 'string' ? item : item.url || '',
+            flavor: typeof item === 'object' ? item.flavor || '' : '',
+          })),
+      imageUrls: Array.isArray(selectedProductForStock.value.images)
+        ? selectedProductForStock.value.images.map((img) => img.url)
+        : (selectedProductForStock.value.imageUrls || []).map((item) =>
+            typeof item === 'string' ? item : item.url || '',
+          ),
+      preorderEnabled: Boolean(selectedProductForStock.value.preorderEnabled),
+      readyToShipEnabled: Boolean(stockForm.readyToShipEnabled),
+    }
+
+    await store.updateProduct(selectedProductForStock.value.id, payload)
+    setNotice('success', 'เพิ่มสต็อกเรียบร้อยแล้ว')
+    closeAddStockModal()
+  } catch (error) {
+    setNotice('error', 'เพิ่มสต็อกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
+    console.error(error)
+  } finally {
+    isAddingStock.value = false
+  }
 }
 
 function getImageCount(product) {
@@ -409,9 +510,10 @@ function getImageCount(product) {
 
 function getPrimaryImage(product) {
   if (Array.isArray(product.imageUrls) && product.imageUrls.length > 0) {
-    return resolveImageUrl(product.imageUrls[0])
+    const firstImg = product.imageUrls[0]
+    const url = typeof firstImg === 'object' ? firstImg.url : firstImg
+    return resolveImageUrl(url)
   }
-
   return ''
 }
 
@@ -680,11 +782,19 @@ onMounted(async () => {
         </label>
 
         <label>
-          ราคา *
+          ราคาพร้อมส่ง * ราคา *
           <input v-model.number="form.basePrice" min="0" step="1" type="number" />
         </label>
 
         <label>
+          ราคาพรีออเดอร์ *
+          <input
+            v-model.number="form.preorderPrice"
+            min="0"
+            step="1"
+            type="number"
+            placeholder="ถ้าไม่กรอกจะใช้ราคาพร้อมส่ง"
+          />
           จำนวนคงเหลือ
           <input
             v-model.number="form.stock"
@@ -717,9 +827,9 @@ onMounted(async () => {
         </label>
 
         <label class="upload-field">
-          รูปภาพ ({{ form.imageUrls.length }}/{{ MAX_IMAGE_COUNT }})
+          รูปภาพ ({{ form.images.length }}/{{ MAX_IMAGE_COUNT }})
           <input
-            :disabled="form.imageUrls.length >= MAX_IMAGE_COUNT"
+            :disabled="form.images.length >= MAX_IMAGE_COUNT"
             accept="image/*"
             multiple
             type="file"
@@ -729,11 +839,29 @@ onMounted(async () => {
 
         <div class="image-list">
           <div
-            v-for="(imageUrl, imageIndex) in form.imageUrls"
-            :key="`${imageUrl}-${imageIndex}`"
+            v-for="(url, imageIndex) in form.imageUrls"
+            :key="`${url}-${imageIndex}`"
             class="image-item"
           >
-            <img :src="resolveImageUrl(imageUrl)" alt="product" />
+            <img :src="resolveImageUrl(url)" alt="product" />
+
+            <select
+              v-if="form.images[imageIndex]"
+              v-model="form.images[imageIndex].flavor"
+              style="
+                width: 100%;
+                margin: 6px 0;
+                padding: 4px;
+                font-size: 0.8rem;
+                border-radius: 4px;
+                border: 1px solid #ced4da;
+                background-color: #fff;
+              "
+            >
+              <option value="">(รูปหลัก)</option>
+              <option v-for="f in flavorItems" :key="f" :value="f">{{ f }}</option>
+            </select>
+
             <button class="ghost" type="button" @click="clearImage(imageIndex)">ลบรูป</button>
           </div>
         </div>
@@ -785,11 +913,24 @@ onMounted(async () => {
             }).format(Number(product.basePrice) || 0)
           }}
         </p>
+        <p class="meta">
+          พรีออเดอร์:
+          {{
+            new Intl.NumberFormat('th-TH', {
+              style: 'currency',
+              currency: 'THB',
+              maximumFractionDigits: 0,
+            }).format(Number(product.preorderPrice ?? product.basePrice) || 0)
+          }}
+        </p>
         <p class="meta">คงเหลือ: {{ product.stock }} ชิ้น</p>
         <p class="meta">รูปภาพทั้งหมด: {{ getImageCount(product) }}</p>
 
         <div class="card-actions">
           <button class="ghost" type="button" @click="editProduct(product)">แก้ไข</button>
+          <button class="ghost" type="button" @click="openAddStockModal(product)">
+            เพิ่มสต็อก
+          </button>
           <button class="danger" type="button" @click="deleteProduct(product.id)">ลบ</button>
         </div>
       </article>
@@ -802,6 +943,65 @@ onMounted(async () => {
         เพิ่มสินค้า
       </button>
     </section>
+
+    <div
+      v-if="showAddStockModal && selectedProductForStock"
+      class="modal-overlay"
+      @click.self="closeAddStockModal"
+    >
+      <div class="modal modal-stock">
+        <div class="modal-header">
+          <h2>เพิ่มสต็อก - {{ selectedProductForStock.name }}</h2>
+          <button class="close-btn" type="button" @click="closeAddStockModal">×</button>
+        </div>
+
+        <div class="modal-body">
+          <form @submit.prevent="submitAddStock">
+            <div
+              v-if="
+                !selectedProductForStock.flavors || selectedProductForStock.flavors.length === 0
+              "
+            >
+              <label>
+                จำนวนสต็อก *
+                <input v-model.number="stockForm.quantity" type="number" min="0" placeholder="0" />
+              </label>
+            </div>
+
+            <div v-else>
+              <p class="flavor-stock-label">สต็อกแต่ละรสชาติ</p>
+              <div class="flavor-stock-grid">
+                <div
+                  v-for="flavor in selectedProductForStock.flavors"
+                  :key="flavor"
+                  class="flavor-stock-item"
+                >
+                  <span class="flavor-name">{{ flavor }}</span>
+                  <input
+                    v-model.number="stockForm.flavorStock[flavor]"
+                    type="number"
+                    min="0"
+                    placeholder="0"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <label class="checkbox-label">
+              <input v-model="stockForm.readyToShipEnabled" type="checkbox" />
+              <span>เปิดให้ "พร้อมส่ง" หลังจากเพิ่มสต็อก</span>
+            </label>
+
+            <div class="form-actions">
+              <button type="button" class="ghost" @click="closeAddStockModal">ยกเลิก</button>
+              <button type="submit" :disabled="isAddingStock">
+                {{ isAddingStock ? 'กำลังบันทึก...' : 'บันทึก' }}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -1039,6 +1239,7 @@ onMounted(async () => {
 }
 
 .image-item img {
+  display: block;
   width: 100%;
   height: 86px;
   object-fit: cover;
@@ -1110,6 +1311,7 @@ onMounted(async () => {
 }
 
 .media img {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -1583,5 +1785,166 @@ textarea:focus {
   .category-item .danger {
     width: 100%;
   }
+}
+
+/* Add Stock Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  max-width: 500px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal.modal-stock {
+  max-width: 450px;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px;
+  border-bottom: 1px solid #eee;
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  color: #3f2f5d;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  font-size: 24px;
+  color: #999;
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.close-btn:hover {
+  color: #333;
+}
+
+.modal-body {
+  padding: 20px;
+}
+
+.modal-body form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.modal-body label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-weight: 600;
+  color: #3f2f5d;
+}
+
+.modal-body input[type='number'] {
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.flavor-stock-label {
+  font-weight: 600;
+  color: #3f2f5d;
+  margin: 0 0 12px 0;
+}
+
+.flavor-stock-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.flavor-stock-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.flavor-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #666;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  color: #3f2f5d;
+  cursor: pointer;
+}
+
+.checkbox-label input {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.form-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+.form-actions button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.form-actions button[type='submit'] {
+  background: linear-gradient(135deg, #ff93b8 0%, #f7c8e4 100%);
+  color: white;
+}
+
+.form-actions button[type='submit']:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.form-actions button.ghost {
+  background: transparent;
+  border: 1px solid #ddd;
+  color: #666;
+}
+
+.form-actions button.ghost:hover {
+  border-color: #999;
 }
 </style>

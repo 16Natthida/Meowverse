@@ -40,12 +40,91 @@ const router = createRouter({
       component: LoginView,
     },
     {
+      path: '/preorder-payment/:orderId',
+      component: () => import('../views/User/PreorderPayment.vue'),
+      meta: { requiresAuth: true, roles: ['user'] },
+    },
+    {
+      path: '/ready-payment/:orderId',
+      component: () => import('../views/User/ReadyPayment.vue'),
+      meta: { requiresAuth: true, roles: ['user'] },
+    },
+    {
+      path: '/preorder-payment-temp',
+      component: () => import('../views/User/PreorderPayment.vue'),
+      meta: { requiresAuth: true, roles: ['user'] },
+    },
+    {
+      path: '/ready-payment-temp',
+      component: () => import('../views/User/ReadyPayment.vue'),
+      meta: { requiresAuth: true, roles: ['user'] },
+    },
+    {
+      path: '/admin/slips',
+      component: () => import('../views/Admin/SlipManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/admin/orders',
+      name: 'admin-orders',
+      component: () => import('../views/Admin/OrderManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/admin/sales',
+      name: 'admin-sales',
+      component: () => import('../views/Admin/OrderManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    // ── เส้นทางแยกสำหรับรายการยอดขาย "พร้อมส่ง" และ "พรีออเดอร์" ให้แอดมินเลือกดูแยกกันได้ชัดเจน ──
+    {
+      path: '/admin/sales/ready-to-ship',
+      name: 'admin-sales-ready-to-ship',
+      component: () => import('../views/Admin/OrderManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'], orderType: 'ready' },
+    },
+    {
+      path: '/admin/sales/preorder',
+      name: 'admin-sales-preorder',
+      component: () => import('../views/Admin/OrderManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'], orderType: 'preorder' },
+    },
+    {
+      path: '/admin/inventory-intake',
+      component: () => import('../views/Admin/InventoryIntakeManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/admin/missing-items',
+      name: 'admin-missing-items',
+      component: () => import('../views/Admin/MissingItemsReport.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/admin/import-fee',
+      name: 'admin-import-fee',
+      component: () => import('../views/Admin/ImportFeeManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
       path: '/dashboard',
       name: 'userDashboard',
       component: UserDashboard,
       meta: { requiresAuth: true, roles: ['user', 'admin'] },
     },
-    // เปลี่ยนจาก ./ เป็น ../
+    // ── เส้นทางแยกสำหรับหมวดสินค้า "พร้อมส่ง" และ "พรีออเดอร์" ให้ user เห็นชัดเจนใน URL ──
+    {
+      path: '/products/ready-to-ship',
+      name: 'products-ready-to-ship',
+      component: UserDashboard,
+      meta: { requiresAuth: true, roles: ['user', 'admin'], browseTab: 'พร้อมส่ง' },
+    },
+    {
+      path: '/products/preorder',
+      name: 'products-preorder',
+      component: UserDashboard,
+      meta: { requiresAuth: true, roles: ['user', 'admin'], browseTab: 'พรีออเดอร์' },
+    },
     { path: '/cart', component: () => import('../views/User/CartPage.vue') },
     {
       path: '/order/:orderId',
@@ -54,8 +133,28 @@ const router = createRouter({
     },
     {
       path: '/order-list',
+      name: 'order-list',
       component: () => import('../views/User/Orderlist.vue'),
       meta: { requiresAuth: true, roles: ['user'] },
+    },
+    // ── เส้นทางแยกสำหรับรายการออเดอร์ "พร้อมส่ง" และ "พรีออเดอร์" ให้เลือกดูแยกกันได้ชัดเจน ──
+    {
+      path: '/order-list/ready-to-ship',
+      name: 'order-list-ready-to-ship',
+      component: () => import('../views/User/Orderlist.vue'),
+      meta: { requiresAuth: true, roles: ['user'], orderType: 'ready' },
+    },
+    {
+      path: '/order-list/preorder',
+      name: 'order-list-preorder',
+      component: () => import('../views/User/Orderlist.vue'),
+      meta: { requiresAuth: true, roles: ['user'], orderType: 'preorder' },
+    },
+    {
+      path: '/profile',
+      name: 'user-profile',
+      component: () => import('../views/User/MyProfile.vue'),
+      meta: { requiresAuth: true, roles: ['user', 'admin'] },
     },
     {
       path: '/admin',
@@ -96,6 +195,12 @@ const router = createRouter({
       meta: { requiresAuth: true, roles: ['admin'] },
     },
     {
+      path: '/admin/qrcodes',
+      name: 'admin-qrcodes',
+      component: () => import('../views/Admin/QRcodeSetting.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
       path: '/admin/users/add',
       name: 'admin-add-user',
       component: () => import('../views/Admin/Adduser.vue'),
@@ -105,6 +210,24 @@ const router = createRouter({
       path: '/admin/preorder-rounds',
       name: 'admin-preorder-rounds',
       component: () => import('../views/Admin/Preorder_lots.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/admin/postpones',
+      name: 'admin-postpones',
+      component: () => import('../views/Admin/PostponeRequests.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/admin/shipping',
+      name: 'admin-shipping',
+      component: () => import('../views/Admin/ShippingManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/admin/postpones',
+      name: 'admin-postpones',
+      component: () => import('../views/Admin/PostponeRequests.vue'),
       meta: { requiresAuth: true, roles: ['admin'] },
     },
     {
