@@ -317,35 +317,73 @@ async function createPreorderOrdersForClosedRound(connection, roundId) {
   return autoOrderSummary
 }
 
-async function autoCloseExpiredPreorderRounds() {
+function resolvePreorderRoundStatus(statusValue, startDate, endDate, now = new Date()) {
+  const normalizedStatus = String(statusValue || '').trim().toLowerCase()
+  const start = new Date(startDate)
+  const end = new Date(endDate)
+
+  // เปลี่ยน Logic สำหรับ scheduled:
+  if (normalizedStatus === 'scheduled') {
+    // ถ้าเกินวันสิ้นสุดแล้ว ให้ปิดรอบ
+    if (now > end) return 'closed'
+    // ถ้าถึงวันเริ่มแล้ว (และยังไม่เกินวันปิด) ให้เปิดรอบเป็น active
+    if (now >= start && now <= end) return 'active'
+    // นอกนั้นให้คงสถานะ scheduled ไว้เหมือนเดิม
+    return 'scheduled'
+  }
+
+  if (normalizedStatus === 'open') return 'active'
+  if (normalizedStatus === 'archived') return 'archived'
+  if (normalizedStatus === 'closed') return 'closed'
+
+  // ตรวจสอบวันเวลาสำหรับสถานะอื่นๆ (เช่น active)
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+    return normalizedStatus === 'active' ? 'active' : 'closed'
+  }
+
+  if (now > end) return 'closed'
+  
+  return 'active'
+}
+async function autoSyncPreorderRoundStatuses() {
   const connection = await pool.getConnection()
 
   try {
     await connection.beginTransaction()
 
     const [roundRows] = await connection.query(
-      `SELECT round_id
+      `SELECT round_id, status, start_date, end_date
        FROM preorder_rounds
-       WHERE LOWER(status) IN ('active', 'open')
-         AND end_date <= NOW()`,
+       WHERE LOWER(status) IN ('active', 'open', 'closed', 'scheduled')`,
     )
+
+    const now = new Date()
 
     for (const row of roundRows) {
       const roundId = Number(row.round_id)
       if (!roundId) continue
 
+      const previousStatus = String(row.status || '').trim().toLowerCase()
+      const targetStatus = resolvePreorderRoundStatus(previousStatus, row.start_date, row.end_date, now)
+
+      if (targetStatus === previousStatus) {
+        continue
+      }
+
       await connection.query('UPDATE preorder_rounds SET status = ? WHERE round_id = ?', [
-        'closed',
+        targetStatus,
         roundId,
       ])
 
-      await createPreorderOrdersForClosedRound(connection, roundId)
+      if (targetStatus === 'closed' && previousStatus !== 'closed') {
+        await createPreorderOrdersForClosedRound(connection, roundId)
+      }
     }
 
     await connection.commit()
   } catch (error) {
     await connection.rollback()
-    console.error('[auto-close] failed to close expired preorder rounds:', error.message)
+    console.error('[auto-sync] failed to update preorder round statuses:', error.message)
   } finally {
     connection.release()
   }
@@ -861,7 +899,9 @@ async function queryProductsByIds(productIds, connection = pool) {
           FROM preorder_round_products prp
           JOIN preorder_rounds r ON r.round_id = prp.round_id
           WHERE prp.prod_id = p.prod_id
-            AND LOWER(r.status) IN ('active', 'open')
+            AND LOWER(r.status) IN ('active', 'open', 'scheduled')
+            AND r.start_date <= NOW()
+            AND r.end_date >= NOW()
           ORDER BY r.start_date DESC, r.round_id DESC
           LIMIT 1
         ) AS price,
@@ -870,7 +910,9 @@ async function queryProductsByIds(productIds, connection = pool) {
           FROM preorder_round_products prp
           JOIN preorder_rounds r ON r.round_id = prp.round_id
           WHERE prp.prod_id = p.prod_id
-            AND LOWER(r.status) IN ('active', 'open')
+            AND LOWER(r.status) IN ('active', 'open', 'scheduled')
+            AND r.start_date <= NOW()
+            AND r.end_date >= NOW()
           ORDER BY r.start_date DESC, r.round_id DESC
           LIMIT 1
         ) AS preorderRoundId,
@@ -1011,13 +1053,18 @@ async function ensureAdminSchema() {
       round_description VARCHAR(255) NULL,
       start_date DATETIME NOT NULL,
       end_date DATETIME NOT NULL,
-      status ENUM('active', 'closed', 'archived') NOT NULL DEFAULT 'active',
+      status ENUM('active', 'closed', 'archived', 'scheduled') NOT NULL DEFAULT 'active',
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (round_id),
       KEY idx_preorder_rounds_status (status),
       KEY idx_preorder_rounds_dates (start_date, end_date)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+  `)
+
+  await pool.query(`
+    ALTER TABLE preorder_rounds
+    MODIFY COLUMN status ENUM('active', 'closed', 'archived', 'scheduled') NOT NULL DEFAULT 'active'
   `)
 
   await pool.query(`
@@ -1999,7 +2046,9 @@ app.get('/api/products/preorder', async (req, res) => {
       JOIN preorder_rounds r ON r.round_id = prp.round_id
       JOIN products p ON p.prod_id = prp.prod_id
       LEFT JOIN categories c ON c.cat_id = p.cat_id
-      WHERE LOWER(r.status) IN ('active', 'open')
+      WHERE LOWER(r.status) IN ('active', 'open', 'scheduled')
+        AND r.start_date <= NOW()
+        AND r.end_date >= NOW()
     `
     const params = []
 
@@ -2205,6 +2254,8 @@ app.get('/api/products/alerts/low-stock', async (req, res) => {
 // Admin API: Get ALL preorder rounds (ทุกสถานะ)
 app.get('/api/preorder-rounds', authenticateToken, requireAdmin, async (_req, res) => {
   try {
+    await autoSyncPreorderRoundStatuses()
+
     const [rounds] = await pool.query(`
       SELECT
         round_id          AS id,
@@ -2228,6 +2279,8 @@ app.get('/api/preorder-rounds', authenticateToken, requireAdmin, async (_req, re
 // Public API: Get active preorder rounds for users
 app.get('/api/preorder-rounds/active', async (_req, res) => {
   try {
+    await autoSyncPreorderRoundStatuses()
+
     const [rounds] = await pool.query(`
       SELECT
         round_id,
@@ -2237,7 +2290,9 @@ app.get('/api/preorder-rounds/active', async (_req, res) => {
         end_date,
         status
       FROM preorder_rounds
-      WHERE status = 'active'
+      WHERE LOWER(status) IN ('active', 'scheduled')
+        AND start_date <= NOW()
+        AND end_date >= NOW()
       ORDER BY end_date ASC
     `)
 
@@ -2382,12 +2437,7 @@ app.post('/api/preorder-rounds', authenticateToken, requireAdmin, async (req, re
 
   const statusValue =
     status && String(status).trim() ? String(status).trim().toLowerCase() : 'active'
-  const normalizedStatus =
-    statusValue === 'open'
-      ? 'active'
-      : ['active', 'closed', 'archived'].includes(statusValue)
-        ? statusValue
-        : 'active'
+  const normalizedStatus = resolvePreorderRoundStatus(statusValue, startDate, endDate, new Date())
 
   try {
     const [result] = await pool.query(
@@ -2432,21 +2482,17 @@ app.put('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
 
   const statusValue =
     status && String(status).trim() ? String(status).trim().toLowerCase() : 'active'
-  const normalizedStatus =
-    statusValue === 'open'
-      ? 'active'
-      : ['active', 'closed', 'archived'].includes(statusValue)
-        ? statusValue
-        : 'active'
+  const normalizedStatus = resolvePreorderRoundStatus(statusValue, startDate, endDate, new Date())
 
   try {
     const [existingRoundRows] = await pool.query(
-      'SELECT status FROM preorder_rounds WHERE round_id = ? LIMIT 1',
+      'SELECT status, start_date, end_date FROM preorder_rounds WHERE round_id = ? LIMIT 1',
       [roundId],
     )
     const previousStatus = String(existingRoundRows[0]?.status || '')
       .trim()
       .toLowerCase()
+    const previousEndDate = existingRoundRows[0]?.end_date
 
     const [result] = await pool.query(
       `
@@ -2491,7 +2537,10 @@ app.put('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
 
     // ✅ Auto-create orders เมื่อรอบถูกปิด
     // สร้าง order แยกต่อ user จากสินค้า item_type = 'preorder' ของรอบนี้เท่านั้น
+// ✅ Auto-create orders เมื่อรอบถูกปิด
     let autoOrderSummary = { created: 0, skipped: 0, errors: [] }
+    
+    // ลบการดักเงื่อนไข roundHasEnded ออก เพื่อให้ทำงานทันทีที่ถูกเปลี่ยนเป็น closed
     if (normalizedStatus === 'closed' && previousStatus !== 'closed') {
       const connection = await pool.getConnection()
       try {
@@ -3924,10 +3973,9 @@ app.post(
         )
 
         await connection.query(
-          'UPDATE orders SET total_amount = ?, status = ? WHERE order_id = ?',
+          'UPDATE orders SET total_amount = ? WHERE order_id = ?',
           [
             Math.max(Number(row.ordered_amount) - Number(row.refund_amount) + 0, 0),
-            newStatus,
             row.order_id,
           ],
         )
@@ -4174,14 +4222,22 @@ app.post(
         })
       }
 
+<<<<<<< HEAD
       const newStatus = resolveOrderStatusAfterIntake(order.status, allReceived, allMissing)
+=======
+const newStatus = allReceived
+        ? 'Ready_to_Ship'
+        : allMissing
+          ? 'Missing'
+          : 'Partially_Received'
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
       const newTotalAmount = Math.max(Number(order.total_amount) - refundAmount, 0)
 
       await connection.query(
         `UPDATE orders
-         SET total_amount = ?, status = ?
+         SET total_amount = ?
          WHERE order_id = ?`,
-        [newTotalAmount, newStatus, orderId],
+        [newTotalAmount, orderId],
       )
 
       const [sessionResult] = await connection.query(
@@ -4939,13 +4995,13 @@ async function startServer() {
   try {
     await ensureAdminSchema()
 
-    autoCloseExpiredPreorderRounds().catch((error) => {
-      console.error('[auto-close] initial run failed:', error.message)
+    autoSyncPreorderRoundStatuses().catch((error) => {
+      console.error('[auto-sync] initial run failed:', error.message)
     })
 
     const preorderRoundAutoCloseTimer = setInterval(() => {
-      autoCloseExpiredPreorderRounds().catch((error) => {
-        console.error('[auto-close] scheduled run failed:', error.message)
+      autoSyncPreorderRoundStatuses().catch((error) => {
+        console.error('[auto-sync] scheduled run failed:', error.message)
       })
     }, 60 * 1000)
 

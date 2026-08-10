@@ -63,6 +63,11 @@ function resolveItemImage(it) {
 const loading = ref(true)
 const error = ref(null)
 const notice = ref({ msg: '', type: '' })
+const totalItemQuantity = computed(() =>
+  Number(
+    order.value?.items?.reduce((sum, item) => sum + Number(item.qty || 0), 0) || 0,
+  ),
+)
 const itemsTotal = computed(() =>
   Number(
     order.value?.items?.reduce(
@@ -507,7 +512,7 @@ onMounted(async () => {
               <div class="hero-meta">
                 <div class="hero-meta-item">
                   <span class="hero-meta-label">รายการ</span>
-                  <strong>{{ order.items?.length || 0 }}</strong>
+                  <strong>{{ totalItemQuantity }}</strong>
                 </div>
                 <div class="hero-meta-divider"></div>
                 <div class="hero-meta-item">
@@ -526,7 +531,7 @@ onMounted(async () => {
           <div class="section-card">
             <div class="section-header">
               <h2 class="section-title" style="display: flex; align-items: center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg> รายการสินค้า</h2>
-              <span class="section-pill">{{ order.items?.length || 0 }} รายการ</span>
+              <span class="section-pill">{{ totalItemQuantity }} รายการ</span>
             </div>
             <div class="item-list">
               <div v-for="it in order.items" :key="it.detail_id" class="order-item">

@@ -79,7 +79,15 @@ const statusConfig = {
   Pending: { label: 'รอชำระ', color: '#d97706', bg: '#fef3e2' },
   Paid: { label: 'ชำระแล้ว', color: '#16a34a', bg: '#e9f9ef' },
   Slip_submitted: { label: 'แนบสลิปแล้ว รอตรวจสอบ', color: '#2563eb', bg: '#eaf1fd' },
+<<<<<<< HEAD
   Import_slip_submitted: { label: 'แนบสลิปค่านำเข้าแล้ว รอตรวจสอบ', color: '#2563eb', bg: '#eaf1fd' },
+=======
+  Import_slip_submitted: {
+    label: 'แนบสลิปค่านำเข้าแล้ว รอตรวจสอบ',
+    color: '#2563eb',
+    bg: '#eaf1fd',
+  },
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
   Wait_for_Import_Fee: { label: 'รอนำเข้า', color: '#8b5cf6', bg: '#f2ecfd' },
   Pending_import_fee: { label: 'รอชำระค่านำเข้า', color: '#7c3aed', bg: '#efe7fc' },
   Ready_to_Ship: { label: 'พร้อมจัดส่ง', color: '#0891b2', bg: '#e5f6f9' },
@@ -102,25 +110,30 @@ function getStatus(status) {
 }
 
 // ── NOTIFICATION DOT HELPERS ──
-const RED_DOT_STATUSES = ['Pending', 'Pending_import_fee', 'Cancelled', 'Invalid slip', 'Invalid import slip']
+const RED_DOT_STATUSES = [
+  'Pending',
+  'Pending_import_fee',
+  'Cancelled',
+  'Invalid slip',
+  'Invalid import slip',
+]
 const GREEN_DOT_STATUSES = ['Paid', 'Ready_to_Ship']
 
 function hasRedDot(status) {
   const normalized = String(status || '').trim()
-  return RED_DOT_STATUSES.some(
-    (s) => s.toLowerCase() === normalized.toLowerCase()
-  )
+  return RED_DOT_STATUSES.some((s) => s.toLowerCase() === normalized.toLowerCase())
 }
 
 function hasGreenDot(status) {
   const normalized = String(status || '').trim()
-  return GREEN_DOT_STATUSES.some(
-    (s) => s.toLowerCase() === normalized.toLowerCase()
-  )
+  return GREEN_DOT_STATUSES.some((s) => s.toLowerCase() === normalized.toLowerCase())
 }
 
 function isInvalidSlipStatus(status) {
-  const normalized = String(status || '').trim().toLowerCase().replace(/[_\s]+/g, ' ')
+  const normalized = String(status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, ' ')
   return normalized === 'invalid slip' || normalized === 'invalid import slip'
 }
 
@@ -169,17 +182,40 @@ function formatDate(dateStr) {
 }
 
 // ── NAV BADGE (mirrors Dashboard's exact RED/GREEN priority logic, derived from existing orders data) ──
+<<<<<<< HEAD
 const NAV_RED_DOT_STATUSES = ['pending', 'pending_import_fee', 'cancelled', 'invalid_slip', 'invalid_import_slip']
 const NAV_GREEN_DOT_STATUSES = ['paid', 'ready_to_ship']
 
 function normalizeStatus(status) {
   return String(status || '').trim().toLowerCase().replace(/[\s]+/g, '_')
+=======
+const NAV_RED_DOT_STATUSES = [
+  'pending',
+  'pending_import_fee',
+  'cancelled',
+  'invalid_slip',
+  'invalid_import_slip',
+]
+const NAV_GREEN_DOT_STATUSES = ['paid', 'ready_to_ship']
+
+function normalizeStatus(status) {
+  return String(status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s]+/g, '_')
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 }
 
 const orderNotifDot = computed(() => {
   const hasRed = orders.value.some((o) => NAV_RED_DOT_STATUSES.includes(normalizeStatus(o.status)))
   if (hasRed) return 'red'
+<<<<<<< HEAD
   const hasGreen = orders.value.some((o) => NAV_GREEN_DOT_STATUSES.includes(normalizeStatus(o.status)))
+=======
+  const hasGreen = orders.value.some((o) =>
+    NAV_GREEN_DOT_STATUSES.includes(normalizeStatus(o.status)),
+  )
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
   return hasGreen ? 'green' : ''
 })
 
@@ -194,7 +230,13 @@ const statusTabs = [
 ]
 
 function matchTab(order, tabKey) {
+<<<<<<< HEAD
   const normalized = String(order.status || '').trim().toLowerCase()
+=======
+  const normalized = String(order.status || '')
+    .trim()
+    .toLowerCase()
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
   switch (tabKey) {
     case 'pending_payment':
       return ['pending', 'slip_submitted', 'invalid slip', 'invalid_slip'].includes(normalized)
@@ -214,7 +256,10 @@ function matchTab(order, tabKey) {
   }
 }
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 const filteredOrders = computed(() => {
   if (activeStatusTab.value === 'all') return orders.value
   return orders.value.filter((o) => matchTab(o, activeStatusTab.value))
@@ -230,8 +275,21 @@ const progressIcons = [
 ]
 
 function getProgressStep(status) {
+<<<<<<< HEAD
   const normalized = String(status || '').trim().toLowerCase()
   const cancelledStates = ['cancelled', 'invalid slip', 'invalid_slip', 'invalid import slip', 'invalid_import_slip']
+=======
+  const normalized = String(status || '')
+    .trim()
+    .toLowerCase()
+  const cancelledStates = [
+    'cancelled',
+    'invalid slip',
+    'invalid_slip',
+    'invalid import slip',
+    'invalid_import_slip',
+  ]
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
   if (cancelledStates.includes(normalized)) return 0
   if (normalized === 'completed') return 5
   if (['shipped', 'ready_to_ship'].includes(normalized)) return 4
@@ -295,7 +353,10 @@ onMounted(() => {
             <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.7" />
             <path
               d="M13 13l3.5 3.5"
+<<<<<<< HEAD
               
+=======
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
               stroke="currentColor"
               stroke-width="1.7"
               stroke-linecap="round"
@@ -323,13 +384,33 @@ onMounted(() => {
           }}</span>
         </button>
 
+<<<<<<< HEAD
         <div class="user-pill" ref="userMenuRef" @click.stop="toggleUserMenu" :class="{ 'user-pill--open': showUserMenu }">
+=======
+        <div
+          class="user-pill"
+          ref="userMenuRef"
+          @click.stop="toggleUserMenu"
+          :class="{ 'user-pill--open': showUserMenu }"
+        >
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
           <svg viewBox="0 0 20 20" fill="currentColor" class="pill-icon">
             <path d="M10 10a4 4 0 100-8 4 4 0 000 8zm-7 8a7 7 0 1114 0H3z" />
           </svg>
           <span class="user-id">{{ currentUser?.username || 'MN0201' }}</span>
           <svg viewBox="0 0 24 24" class="user-pill__chevron" aria-hidden="true">
+<<<<<<< HEAD
             <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+=======
+            <path
+              d="M6 9l6 6 6-6"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
           </svg>
 
           <div v-if="showUserMenu" class="user-menu">
@@ -357,10 +438,24 @@ onMounted(() => {
     <!-- ── HERO ── -->
     <div class="hero">
       <div class="hero__emblem">
+<<<<<<< HEAD
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 8L12 3 3 8l9 5 9-5z"/>
           <path d="M3 8v9l9 5 9-5V8"/>
           <path d="M12 13v9"/>
+=======
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.7"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 8L12 3 3 8l9 5 9-5z" />
+          <path d="M3 8v9l9 5 9-5V8" />
+          <path d="M12 13v9" />
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
         </svg>
       </div>
       <h1 class="hero__title">รายการสั่งซื้อ</h1>
@@ -393,10 +488,24 @@ onMounted(() => {
 
       <div v-else-if="orders.length === 0" class="state-wrap">
         <div class="empty-icon">
+<<<<<<< HEAD
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 8L12 3 3 8l9 5 9-5z"/>
             <path d="M3 8v9l9 5 9-5V8"/>
             <path d="M12 13v9"/>
+=======
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M21 8L12 3 3 8l9 5 9-5z" />
+            <path d="M3 8v9l9 5 9-5V8" />
+            <path d="M12 13v9" />
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
           </svg>
         </div>
         <p class="empty-text">ยังไม่มีรายการออเดอร์</p>
@@ -414,8 +523,21 @@ onMounted(() => {
             class="order-card"
             @click="goToOrder(order)"
           >
+<<<<<<< HEAD
             <span v-if="hasRedDot(order.status)" class="notif-dot notif-dot--red" aria-label="ต้องดำเนินการ"></span>
             <span v-else-if="hasGreenDot(order.status)" class="notif-dot notif-dot--green" aria-label="อัพเดทสถานะใหม่"></span>
+=======
+            <span
+              v-if="hasRedDot(order.status)"
+              class="notif-dot notif-dot--red"
+              aria-label="ต้องดำเนินการ"
+            ></span>
+            <span
+              v-else-if="hasGreenDot(order.status)"
+              class="notif-dot notif-dot--green"
+              aria-label="อัพเดทสถานะใหม่"
+            ></span>
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 
             <div class="order-card__head">
               <div class="order-card__id">เลขที่ใบสั่งซื้อ {{ order.order_id }}</div>
@@ -438,8 +560,23 @@ onMounted(() => {
                 >
                   <div class="order-item__img">
                     <img v-if="item.image" :src="item.image" :alt="item.name" />
+<<<<<<< HEAD
                     <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
                       <path d="M4 8.5c0-1.4.6-3.6 1.6-4.8.3-.3.8-.2.9.2l.7 2.4c1.5-.6 3.2-.9 4.8-.9s3.3.3 4.8.9l.7-2.4c.1-.4.6-.5.9-.2 1 1.2 1.6 3.4 1.6 4.8 0 4.4-3.6 8-8 8s-8-3.6-8-8z"/>
+=======
+                    <svg
+                      v-else
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.6"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path
+                        d="M4 8.5c0-1.4.6-3.6 1.6-4.8.3-.3.8-.2.9.2l.7 2.4c1.5-.6 3.2-.9 4.8-.9s3.3.3 4.8.9l.7-2.4c.1-.4.6-.5.9-.2 1 1.2 1.6 3.4 1.6 4.8 0 4.4-3.6 8-8 8s-8-3.6-8-8z"
+                      />
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
                     </svg>
                   </div>
                   <div class="order-item__info">
@@ -448,7 +585,13 @@ onMounted(() => {
                   </div>
                   <div class="order-item__price">{{ Number(item.price).toLocaleString() }} บาท</div>
                   <div class="order-item__x">x {{ item.qty }}</div>
+<<<<<<< HEAD
                   <div class="order-item__subtotal">{{ Number(item.price * item.qty).toLocaleString() }} บาท</div>
+=======
+                  <div class="order-item__subtotal">
+                    {{ Number(item.price * item.qty).toLocaleString() }} บาท
+                  </div>
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
                 </div>
 
                 <button
@@ -461,9 +604,20 @@ onMounted(() => {
                   <svg
                     class="expand-icon"
                     :class="{ 'expand-icon--open': expandedOrders[order.order_id] }"
+<<<<<<< HEAD
                     viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"
                   >
                     <polyline points="6 9 12 15 18 9"/>
+=======
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.4"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polyline points="6 9 12 15 18 9" />
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
                   </svg>
                 </button>
               </template>
@@ -471,16 +625,35 @@ onMounted(() => {
               <template v-else>
                 <div class="order-item order-item--placeholder">
                   <div class="order-item__img">
+<<<<<<< HEAD
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
                       <path d="M21 8L12 3 3 8l9 5 9-5z"/>
                       <path d="M3 8v9l9 5 9-5V8"/>
+=======
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.6"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path d="M21 8L12 3 3 8l9 5 9-5z" />
+                      <path d="M3 8v9l9 5 9-5V8" />
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
                     </svg>
                   </div>
                   <div class="order-item__info">
                     <p class="order-item__name">
                       {{ order.Order_type === 'Preorder' ? 'สินค้าพรีออเดอร์' : 'สินค้าพร้อมส่ง' }}
                     </p>
+<<<<<<< HEAD
                     <p class="order-item__variant">สั่งซื้อเมื่อ {{ formatDate(order.Order_date) }}</p>
+=======
+                    <p class="order-item__variant">
+                      สั่งซื้อเมื่อ {{ formatDate(order.Order_date) }}
+                    </p>
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
                   </div>
                 </div>
               </template>
@@ -489,11 +662,30 @@ onMounted(() => {
             <!-- ── INVALID SLIP ALERT ── -->
             <div v-if="isInvalidSlipStatus(order.status)" class="invalid-slip-alert">
               <span class="invalid-slip-alert__icon">
+<<<<<<< HEAD
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+=======
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path
+                    d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+                  ></path>
+                  <line x1="12" y1="9" x2="12" y2="13"></line>
+                  <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
               </span>
               <div class="invalid-slip-alert__body">
                 <strong>สลิปไม่ถูกต้อง กรุณาแนบสลิปใหม่</strong>
-                <span>แอดมินตรวจสอบแล้วพบว่าสลิปที่แนบมาไม่ถูกต้อง กดดูรายละเอียดเพื่ออัปโหลดใหม่</span>
+                <span
+                  >แอดมินตรวจสอบแล้วพบว่าสลิปที่แนบมาไม่ถูกต้อง กดดูรายละเอียดเพื่ออัปโหลดใหม่</span
+                >
               </div>
             </div>
 
@@ -505,6 +697,7 @@ onMounted(() => {
                   :class="{ 'progress-step--active': i < getProgressStep(order.status) }"
                   :title="icon.label"
                 >
+<<<<<<< HEAD
                   <svg v-if="icon.key === 'ordered'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
                  <svg v-else-if="icon.key === 'import'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M2 21c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1 .6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>
@@ -516,6 +709,76 @@ onMounted(() => {
                   <svg v-else-if="icon.key === 'customs'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12h6M9 16h6M9 8h1"/><path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/></svg>
                   <svg v-else-if="icon.key === 'process'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                   <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+=======
+                  <svg
+                    v-if="icon.key === 'ordered'"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path
+                      d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
+                    />
+                  </svg>
+                  <svg
+                    v-else-if="icon.key === 'import'"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path
+                      d="M2 21c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1 .6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"
+                    />
+                    <path d="M19.38 20A11.6 11.6 0 0 0 21 14l-9-4-9 4c0 2.9.94 5.34 2.81 7.76" />
+                    <path d="M19 13V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6" />
+                    <path d="M12 10v4" />
+                    <path d="M12 2v3" />
+                  </svg>
+                  <svg
+                    v-else-if="icon.key === 'customs'"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M9 12h6M9 16h6M9 8h1" />
+                    <path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
+                  </svg>
+                  <svg
+                    v-else-if="icon.key === 'process'"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <circle cx="12" cy="12" r="3" />
+                    <path
+                      d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+                    />
+                  </svg>
+                  <svg
+                    v-else
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                    <polyline points="22 4 12 14.01 9 11.01" />
+                  </svg>
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
                 </span>
                 <span
                   v-if="i < progressIcons.length - 1"
@@ -525,14 +788,46 @@ onMounted(() => {
               </template>
             </div>
             <div class="progress-track progress-track--cancelled" v-else>
+<<<<<<< HEAD
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+=======
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="15" y1="9" x2="9" y2="15" />
+                <line x1="9" y1="9" x2="15" y2="15" />
+              </svg>
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
               <span>{{ getStatus(order.status).label }}</span>
             </div>
 
             <!-- ── META CHIPS ── -->
+<<<<<<< HEAD
             <div class="meta-row" v-if="order.deadline || (order.Order_type === 'Preorder' && Number(order.import_fee_total) > 0)">
               <span v-if="order.deadline" class="meta-chip">กำหนดจ่าย {{ formatDate(order.deadline) }}</span>
               <span v-if="order.Order_type === 'Preorder' && Number(order.import_fee_total) > 0" class="meta-chip meta-chip--warn">
+=======
+            <div
+              class="meta-row"
+              v-if="
+                order.deadline ||
+                (order.Order_type === 'Preorder' && Number(order.import_fee_total) > 0)
+              "
+            >
+              <span v-if="order.deadline" class="meta-chip"
+                >กำหนดจ่าย {{ formatDate(order.deadline) }}</span
+              >
+              <span
+                v-if="order.Order_type === 'Preorder' && Number(order.import_fee_total) > 0"
+                class="meta-chip meta-chip--warn"
+              >
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
                 ค่านำเข้ารอบที่ 2 ฿{{ Number(order.import_fee_total).toLocaleString() }}
               </span>
             </div>
@@ -550,10 +845,25 @@ onMounted(() => {
                     Number(order.import_fee_total) > 0
                   "
                 >
+<<<<<<< HEAD
                   {{ Number(order.import_fee_total).toLocaleString('th-TH', { minimumFractionDigits: 2 }) }} บาท
                 </template>
                 <template v-else>
                   {{ Number(order.total_amount).toLocaleString('th-TH', { minimumFractionDigits: 2 }) }} บาท
+=======
+                  {{
+                    Number(order.import_fee_total).toLocaleString('th-TH', {
+                      minimumFractionDigits: 2,
+                    })
+                  }}
+                  บาท
+                </template>
+                <template v-else>
+                  {{
+                    Number(order.total_amount).toLocaleString('th-TH', { minimumFractionDigits: 2 })
+                  }}
+                  บาท
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
                 </template>
               </span>
             </div>
@@ -565,6 +875,7 @@ onMounted(() => {
     <!-- ── TRUST BADGES ── -->
     <div class="trust-badges">
       <div class="trust-item">
+<<<<<<< HEAD
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8M12 17v4M7 4h10l-1 8a4 4 0 0 1-8 0L7 4z"/><path d="M7 4H4a1 1 0 0 0-1 1c0 3 2 5 4 5M17 4h3a1 1 0 0 1 1 1c0 3-2 5-4 5"/></svg>
         <div><p>Trusted Quality</p><span>สินค้าคัดสรรคุณภาพดีที่สุด</span></div>
       </div>
@@ -579,13 +890,98 @@ onMounted(() => {
       <div class="trust-item">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
         <div><p>Customer Support</p><span>ทีมงานพร้อมดูแลตลอดเวลา</span></div>
+=======
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M8 21h8M12 17v4M7 4h10l-1 8a4 4 0 0 1-8 0L7 4z" />
+          <path d="M7 4H4a1 1 0 0 0-1 1c0 3 2 5 4 5M17 4h3a1 1 0 0 1 1 1c0 3-2 5-4 5" />
+        </svg>
+        <div>
+          <p>Trusted Quality</p>
+          <span>สินค้าคัดสรรคุณภาพดีที่สุด</span>
+        </div>
+      </div>
+      <div class="trust-item">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M20 6L9 17l-5-5" />
+        </svg>
+        <div>
+          <p>Pre-order Protection</p>
+          <span>รับประกันเงินคืนหากสินค้ามีปัญหา</span>
+        </div>
+      </div>
+      <div class="trust-item">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <rect x="1" y="6" width="15" height="12" rx="2" />
+          <path d="M16 10h3.5L22 13v5h-6" />
+          <circle cx="6" cy="19" r="1.5" />
+          <circle cx="18.5" cy="19" r="1.5" />
+        </svg>
+        <div>
+          <p>Real Shipping Cost</p>
+          <span>คิดค่านำเข้าตามจริง ไม่บวกเพิ่ม</span>
+        </div>
+      </div>
+      <div class="trust-item">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
+          <path
+            d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"
+          />
+        </svg>
+        <div>
+          <p>Customer Support</p>
+          <span>ทีมงานพร้อมดูแลตลอดเวลา</span>
+        </div>
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
       </div>
     </div>
 
     <footer class="site-footer">
       <span class="logo-icon logo-icon--footer">
+<<<<<<< HEAD
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="M4 8.5c0-1.4.6-3.6 1.6-4.8.3-.3.8-.2.9.2l.7 2.4c1.5-.6 3.2-.9 4.8-.9s3.3.3 4.8.9l.7-2.4c.1-.4.6-.5.9-.2 1 1.2 1.6 3.4 1.6 4.8 0 4.4-3.6 8-8 8s-8-3.6-8-8z"/>
+=======
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path
+            d="M4 8.5c0-1.4.6-3.6 1.6-4.8.3-.3.8-.2.9.2l.7 2.4c1.5-.6 3.2-.9 4.8-.9s3.3.3 4.8.9l.7-2.4c.1-.4.6-.5.9-.2 1 1.2 1.6 3.4 1.6 4.8 0 4.4-3.6 8-8 8s-8-3.6-8-8z"
+          />
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
         </svg>
       </span>
       <span>Meowverse — 2026 สงวนลิขสิทธิ์ทุกประการ</span>
@@ -856,7 +1252,13 @@ onMounted(() => {
   color: #a74553;
   cursor: pointer;
   font-family: inherit;
+<<<<<<< HEAD
   transition: background 0.2s, box-shadow 0.2s;
+=======
+  transition:
+    background 0.2s,
+    box-shadow 0.2s;
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
   white-space: nowrap;
 }
 .logout-btn:hover {
@@ -890,6 +1292,7 @@ onMounted(() => {
   animation: pulse-green-nav 2s infinite;
 }
 @keyframes pulse-red-nav {
+<<<<<<< HEAD
   0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.6); }
   50%       { box-shadow: 0 0 0 4px rgba(239,68,68,0); }
 }
@@ -899,6 +1302,26 @@ onMounted(() => {
 }
 
 
+=======
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(239, 68, 68, 0);
+  }
+}
+@keyframes pulse-green-nav {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(34, 197, 94, 0);
+  }
+}
+
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 /* ── HERO ── */
 .hero {
   position: relative;
@@ -917,8 +1340,24 @@ onMounted(() => {
   border-radius: 50%;
   background: rgba(139, 92, 246, 0.08);
 }
+<<<<<<< HEAD
 .hero::before { width: 140px; height: 140px; top: -50px; left: -40px; }
 .hero::after { width: 110px; height: 110px; bottom: -40px; right: -20px; background: rgba(124, 58, 237, 0.08); }
+=======
+.hero::before {
+  width: 140px;
+  height: 140px;
+  top: -50px;
+  left: -40px;
+}
+.hero::after {
+  width: 110px;
+  height: 110px;
+  bottom: -40px;
+  right: -20px;
+  background: rgba(124, 58, 237, 0.08);
+}
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 .hero__ribbon {
   position: absolute;
   top: 18px;
@@ -933,9 +1372,18 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 5px;
+<<<<<<< HEAD
   box-shadow: 0 3px 8px rgba(0,0,0,0.15);
 }
 .hero__ribbon svg { width: 13px; height: 13px; }
+=======
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+}
+.hero__ribbon svg {
+  width: 13px;
+  height: 13px;
+}
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 .hero__emblem {
   width: 68px;
   height: 68px;
@@ -950,7 +1398,14 @@ onMounted(() => {
   position: relative;
   z-index: 1;
 }
+<<<<<<< HEAD
 .hero__emblem svg { width: 30px; height: 30px; }
+=======
+.hero__emblem svg {
+  width: 30px;
+  height: 30px;
+}
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 .hero__title {
   position: relative;
   z-index: 1;
@@ -985,9 +1440,19 @@ onMounted(() => {
   cursor: pointer;
   white-space: nowrap;
   border-bottom: 2.5px solid transparent;
+<<<<<<< HEAD
   transition: color 0.15s, border-color 0.15s;
 }
 .tab:hover { color: var(--primary); }
+=======
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+.tab:hover {
+  color: var(--primary);
+}
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 .tab--active {
   color: var(--primary);
   border-bottom-color: var(--primary);
@@ -1006,7 +1471,14 @@ onMounted(() => {
   border-radius: 18px;
   padding: 1.4rem 1.6rem;
   cursor: pointer;
+<<<<<<< HEAD
   transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+=======
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    border-color 0.15s ease;
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 }
 .order-card:hover {
   transform: translateY(-2px);
@@ -1023,9 +1495,10 @@ onMounted(() => {
   height: 14px;
   border-radius: 50%;
   border: 2.5px solid #fff;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.18);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
   z-index: 2;
 }
+<<<<<<< HEAD
 .notif-dot--red { background: var(--danger); animation: pulse-red 2s infinite; }
 .notif-dot--green { background: var(--success); animation: pulse-green 2s infinite; }
 @keyframes pulse-red {
@@ -1035,6 +1508,41 @@ onMounted(() => {
 @keyframes pulse-green {
   0%, 100% { box-shadow: 0 0 0 0 rgba(63,157,104,0.55), 0 2px 6px rgba(0,0,0,0.18); }
   50%       { box-shadow: 0 0 0 5px rgba(63,157,104,0),  0 2px 6px rgba(0,0,0,0.18); }
+=======
+.notif-dot--red {
+  background: var(--danger);
+  animation: pulse-red 2s infinite;
+}
+.notif-dot--green {
+  background: var(--success);
+  animation: pulse-green 2s infinite;
+}
+@keyframes pulse-red {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 0 rgba(201, 79, 67, 0.55),
+      0 2px 6px rgba(0, 0, 0, 0.18);
+  }
+  50% {
+    box-shadow:
+      0 0 0 5px rgba(201, 79, 67, 0),
+      0 2px 6px rgba(0, 0, 0, 0.18);
+  }
+}
+@keyframes pulse-green {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 0 rgba(63, 157, 104, 0.55),
+      0 2px 6px rgba(0, 0, 0, 0.18);
+  }
+  50% {
+    box-shadow:
+      0 0 0 5px rgba(63, 157, 104, 0),
+      0 2px 6px rgba(0, 0, 0, 0.18);
+  }
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 }
 
 /* ── CARD HEAD ── */
@@ -1091,7 +1599,14 @@ onMounted(() => {
   height: 100%;
   object-fit: cover;
 }
+<<<<<<< HEAD
 .order-item__img svg { width: 26px; height: 26px; }
+=======
+.order-item__img svg {
+  width: 26px;
+  height: 26px;
+}
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 .order-item__info {
   flex: 1;
   min-width: 0;
@@ -1145,6 +1660,7 @@ onMounted(() => {
   height: 13px;
   transition: transform 0.2s;
 }
+<<<<<<< HEAD
 .expand-icon--open { transform: rotate(180deg); }
 
 /* ── PROGRESS TRACKER ── */
@@ -1224,6 +1740,99 @@ onMounted(() => {
   font-size: 1.1rem;
   font-weight: 900;
   color: var(--primary-dark);
+=======
+.expand-icon--open {
+  transform: rotate(180deg);
+}
+
+/* ── PROGRESS TRACKER ── */
+.progress-track {
+  display: flex;
+  align-items: center;
+  margin: 0.9rem 0 1.1rem;
+}
+.progress-step {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ede7f9;
+  color: #b8aed1;
+  transition:
+    background 0.2s,
+    color 0.2s;
+}
+.progress-step svg {
+  width: 15px;
+  height: 15px;
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
+}
+.progress-step--active {
+  background: var(--success);
+  color: #fff;
+}
+.progress-step__line {
+  flex: 1;
+  height: 3px;
+  background: #ede7f9;
+  margin: 0 2px;
+  transition: background 0.2s;
+}
+.progress-step__line--active {
+  background: var(--success);
+}
+.progress-track--cancelled {
+  gap: 8px;
+  color: var(--danger);
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+.progress-track--cancelled svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* ── META CHIPS ── */
+.meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.meta-chip {
+  font-size: 0.76rem;
+  font-weight: 700;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+}
+.meta-chip--warn {
+  background: #f2ecfd;
+  color: var(--primary-dark);
+}
+
+/* ── CARD FOOT ── */
+.order-card__foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 0.9rem;
+  border-top: 1px dashed var(--border);
+}
+.foot-count {
+  font-size: 0.88rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+.foot-total {
+  font-size: 1.1rem;
+  font-weight: 900;
+  color: var(--primary-dark);
 }
 
 /* ── STATES ── */
@@ -1231,6 +1840,12 @@ onMounted(() => {
   text-align: center;
   padding: 4rem 1rem;
   color: var(--muted);
+<<<<<<< HEAD
+=======
+}
+.state-wrap--small {
+  padding: 2.5rem 1rem;
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 }
 .state-wrap--small { padding: 2.5rem 1rem; }
 .loader {
@@ -1286,6 +1901,17 @@ onMounted(() => {
   background: #fbeae8;
   border: 1.5px solid #f0b3ab;
   color: var(--danger);
+<<<<<<< HEAD
+=======
+}
+.invalid-slip-alert__icon svg {
+  width: 18px;
+  height: 18px;
+}
+.invalid-slip-alert__icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 }
 .invalid-slip-alert__icon svg { width: 18px; height: 18px; }
 .invalid-slip-alert__icon { flex-shrink: 0; margin-top: 1px; }
@@ -1314,6 +1940,7 @@ onMounted(() => {
   grid-template-columns: repeat(4, 1fr);
   gap: 1.25rem;
   border-top: 1px solid var(--border);
+<<<<<<< HEAD
 }
 .trust-item {
   display: flex;
@@ -1366,5 +1993,80 @@ onMounted(() => {
   .order-card { padding: 1.1rem 1.1rem; }
   .order-item__subtotal { min-width: 60px; }
   .trust-badges { grid-template-columns: 1fr; }
+=======
+}
+.trust-item {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+.trust-item svg {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  color: var(--primary);
+}
+.trust-item p {
+  margin: 0;
+  font-size: 0.86rem;
+  font-weight: 800;
+  color: var(--text);
+}
+.trust-item span {
+  font-size: 0.74rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* ── SITE FOOTER ── */
+.site-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 1.25rem 1rem 2rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.logo-icon--footer {
+  width: 18px;
+  height: 18px;
+}
+
+/* ── RESPONSIVE ── */
+@media (max-width: 720px) {
+  .trust-badges {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 768px) {
+  .navbar {
+    padding: 0 1rem;
+  }
+  .navbar__tabs {
+    display: none;
+  }
+  .search-input {
+    width: 100px;
+  }
+}
+@media (max-width: 600px) {
+  .navbar {
+    gap: 0.5rem;
+  }
+  .content {
+    padding: 1.25rem 0.85rem 2rem;
+  }
+  .order-card {
+    padding: 1.1rem 1.1rem;
+  }
+  .order-item__subtotal {
+    min-width: 60px;
+  }
+  .trust-badges {
+    grid-template-columns: 1fr;
+  }
+>>>>>>> e318943b2486fe57f2e9178703c660f5d0d18421
 }
 </style>
