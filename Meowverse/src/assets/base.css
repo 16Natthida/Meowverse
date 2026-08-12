@@ -1,0 +1,36 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700;800&family=Nunito+Sans:wght@400;600;700;800;900&display=swap');
+
+:root {
+  --app-bg: #f9f4fb;
+  --app-text: #4b3b61;
+  --theme-primary: #b673ee;
+  --theme-accent: #ff93b8;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+  color: var(--app-text);
+  background: var(--app-bg);
+  line-height: 1.55;
+  font-family: 'Nunito Sans', 'Noto Sans Thai', sans-serif;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
