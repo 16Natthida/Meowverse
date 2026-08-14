@@ -31,7 +31,7 @@
         <div class="select-wrap">
           <select v-model="selectedRoundId" class="round-select" :disabled="loading">
             <option value="" disabled>— เลือกรอบพรีออเดอร์ —</option>
-            <option v-for="r in rounds" :key="r.round_id" :value="r.round_id">
+            <option v-for="r in rounds" :key="r.round_key" :value="r.round_key">
               {{ r.round_name }}
             </option>
           </select>
@@ -60,16 +60,21 @@
     </div>
 
     <!-- Product table -->
-    <div v-if="selectedRound" class="card table-card">
+    <div v-if="selectedRound && statusGroups.length > 0" class="card table-card">
       <div class="table-header">
         <span class="table-title"
           >รายการสินค้าในรอบ <b>{{ selectedRound.round_name }}</b></span
         >
-        <span class="table-count">{{ selectedRound.products.length }} รายการ</span>
+        <span class="table-count">{{ visibleProductCount }} รายการ</span>
       </div>
 
       <div class="table-wrap">
-        <table class="fee-table">
+        <div v-for="group in statusGroups" :key="group.status" class="status-group">
+          <div class="status-group-header">
+            <span class="status-group-title">{{ arrivalStatusLabel(group.status) }}</span>
+            <span class="status-group-count">{{ group.items.length }} รายการ</span>
+          </div>
+          <table class="fee-table">
           <thead>
             <tr>
               <th>สินค้า</th>
@@ -82,7 +87,7 @@
           <!-- แทนที่ <tbody> เดิมด้วยโค้ดนี้ -->
           <tbody>
             <tr
-              v-for="item in groupedProducts"
+              v-for="item in group.items"
               :key="item.key"
               :class="{
                 'row--filled': feeInputs[item.key] > 0,
@@ -123,7 +128,8 @@
               </td>
             </tr>
           </tbody>
-        </table>
+          </table>
+        </div>
       </div>
 
       <!-- Warning note -->
@@ -207,6 +213,9 @@
     </div>
 
     <!-- Empty state -->
+    <div v-else-if="selectedRound && !loading" class="empty-state">
+      <p>รอบนี้ยังไม่มีรายการที่พร้อมกรอกค่านำเข้า</p>
+    </div>
     <div v-else-if="!loading" class="empty-state">
       <svg
         width="40"
@@ -244,8 +253,21 @@ const successMessage = ref('')
 const errorMessage = ref('')
 
 const selectedRound = computed(
-  () => rounds.value.find((r) => r.round_id === selectedRoundId.value) || null,
+  () => rounds.value.find((r) => r.round_key === selectedRoundId.value) || null,
 )
+
+function normalizeArrivalStatus(status) {
+  const normalized = String(status || 'Pending').trim().toLowerCase()
+  if (normalized === 'delayed') return 'Delayed'
+  if (normalized === 'missing') return 'Missing'
+  if (normalized === 'pending') return 'Pending'
+  return 'Arrived'
+}
+
+function arrivalStatusLabel(status) {
+  const normalized = normalizeArrivalStatus(status)
+  return normalized
+}
 
 // แสดงรายการแยกตาม variant / line (ไม่รวมกันตาม prod_id)
 const groupedProducts = computed(() => {
@@ -253,10 +275,10 @@ const groupedProducts = computed(() => {
 
   // จัดเป็นรายการแยกโดยใช้ prod_id + flavor เป็นคีย์ (variant-level)
   return selectedRound.value.products.map((item) => {
-    const key = `${item.prod_id}|${String(item.flavor || '').trim()}`
+    const arrivalStatus = normalizeArrivalStatus(item.arrival_status)
+    const key = item.key || `${item.prod_id}|${String(item.flavor || '').trim()}|${arrivalStatus.toLowerCase()}`
     const receivedQty = Number(item.total_received_qty || 0)
     const orderedQty = Number(item.total_sold_qty || 0)
-    const canEnter = receivedQty > 0 && receivedQty === orderedQty
 
     return {
       key,
@@ -268,11 +290,29 @@ const groupedProducts = computed(() => {
       total_received_qty: receivedQty,
       unit_price: Number(item.unit_price) || 0,
       current_import_fee: Number(item.current_import_fee) || 0,
+      arrival_status: arrivalStatus,
+      arrival_group: arrivalStatus,
       hasReceivedQty: receivedQty > 0,
-      canEnterImportFee: canEnter,
+      canEnterImportFee: arrivalStatus === 'Arrived' && receivedQty >= orderedQty,
     }
   })
 })
+
+const statusGroups = computed(() => {
+  const groups = new Map()
+  for (const item of groupedProducts.value) {
+    if (!groups.has(item.arrival_group)) groups.set(item.arrival_group, [])
+    groups.get(item.arrival_group).push(item)
+  }
+
+  return ['Arrived', 'Delayed', 'Pending', 'Missing']
+    .filter((status) => groups.has(status))
+    .map((status) => ({ status, items: groups.get(status) }))
+})
+
+const visibleProductCount = computed(() =>
+  statusGroups.value.reduce((total, group) => total + group.items.length, 0),
+)
 
 function authHeaders() {
   const user = currentUser.value || {}
@@ -314,9 +354,15 @@ async function fetchRounds() {
     })
     if (!res.ok) throw new Error(`โหลดรอบพรีออเดอร์ไม่สำเร็จ (${res.status})`)
     const data = await res.json()
-    rounds.value = data
-    if (!selectedRoundId.value && data.length > 0) {
-      selectedRoundId.value = data[0].round_id
+    // Only fully received items are eligible for import-fee collection.
+    // Pending, Delayed, and Missing remain available in intake/report pages.
+    const visibleRounds = data.filter(
+      (round) => String(round.arrival_status || '').toLowerCase() === 'arrived',
+    )
+    rounds.value = visibleRounds
+    const selectedStillExists = visibleRounds.some((round) => round.round_key === selectedRoundId.value)
+    if (!selectedStillExists) {
+      selectedRoundId.value = visibleRounds.length > 0 ? visibleRounds[0].round_key : ''
     }
   } catch (e) {
     errorMessage.value = translateError(e)
@@ -381,7 +427,7 @@ async function saveImportFees() {
       {
         method: 'PUT',
         headers: authHeaders(),
-        body: JSON.stringify({ fees }),
+        body: JSON.stringify({ fees, segment: selectedRound.value.arrival_status }),
       },
     )
     const data = await res.json().catch(() => ({}))
@@ -557,6 +603,26 @@ async function saveImportFees() {
 }
 .table-wrap {
   overflow-x: auto;
+}
+.status-group + .status-group {
+  border-top: 1px solid #ede9f8;
+}
+.status-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.8rem 1.5rem;
+  background: #fbfaff;
+  border-bottom: 1px solid #ede9f8;
+}
+.status-group-title {
+  color: #5b21b6;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+.status-group-count {
+  color: #6b7280;
+  font-size: 0.8rem;
 }
 .fee-table {
   width: 100%;

@@ -200,6 +200,9 @@ async function processIntake() {
     }
 
     intakeMessage.value = `บันทึกสำเร็จ ยอดคืน: ${formatMoney(data.refund_amount || 0)}`
+    if (Array.isArray(data.delayed_order_ids) && data.delayed_order_ids.length > 0) {
+      intakeMessage.value += ` แยกรายการที่รับไม่ครบเป็นออเดอร์ Delayed แล้ว (#${data.delayed_order_ids.join(', #')})`
+    }
     if (Number(data.excess_qty) > 0) {
       intakeMessage.value += data.excess_stock_action === 'moved_to_stock'
         ? ` นำส่วนเกิน ${data.excess_qty} ชิ้นเข้าสต็อกพร้อมส่งแล้ว`

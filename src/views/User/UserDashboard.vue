@@ -278,7 +278,7 @@ const fetchCartCount = async () => {
 }
 
 // ── FETCH ORDER NOTIFICATION DOT ──
-const RED_DOT_STATUSES = ['pending', 'pending_import_fee', 'cancelled', 'invalid_slip', 'invalid_import_slip']
+const RED_DOT_STATUSES = ['pending', 'pending_import_fee', 'cancelled', 'invalid_slip', 'invalid_import_slip', 'missing']
 const GREEN_DOT_STATUSES = ['paid', 'ready_to_ship']
 
 function normalizeStatus(status) {
@@ -1282,7 +1282,11 @@ onMounted(async () => {
                       class="flavor-chip__img"
                     />
                     <span>{{ flavor }}</span>
-                    <span class="flavor-stock">{{ getFlavorStock(flavor) }}</span>
+                    <span
+                      v-if="getEffectiveItemType(selectedProduct) !== 'preorder'"
+                      class="flavor-stock"
+                      >{{ getFlavorStock(flavor) }}</span
+                    >
                   </button>
                 </div>
               </div>

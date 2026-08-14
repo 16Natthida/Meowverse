@@ -53,7 +53,7 @@
 
             <div class="field-group">
               <label>เบอร์โทรศัพท์</label>
-              <input v-model="form.phone_number" type="text" placeholder="Phone number" />
+              <input v-model="form.phone_number" type="text" placeholder="0812345678" />
             </div>
           </div>
 

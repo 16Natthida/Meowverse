@@ -77,13 +77,15 @@ async function saveProfile() {
   error.value = null
   success.value = null
 
+  const sanitizedPhone = String(profile.value.phone_number || '').replace(/\D/g, '')
+
   try {
     const response = await fetch(`${API_BASE_URL}/users/me`, {
       method: 'PUT',
       headers: authHeaders(),
       body: JSON.stringify({
         full_name: profile.value.full_name,
-        phone_number: profile.value.phone_number,
+        phone_number: sanitizedPhone,
         line_id: profile.value.line_id,
         notes: profile.value.notes,
       }),
@@ -151,7 +153,7 @@ onMounted(fetchProfile)
 
         <div class="profile-section">
           <label class="profile-label">เบอร์โทร</label>
-          <input type="text" v-model="profile.phone_number" placeholder="เช่น 099-999-9999" />
+          <input type="text" v-model="profile.phone_number" placeholder="เช่น 0999999999" />
         </div>
 
         <div class="profile-section">

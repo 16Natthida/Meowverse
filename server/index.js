@@ -160,7 +160,7 @@ async function splitDelayedItemsFromOrder(connection, orderId, sourceDetailId = 
     const [childResult] = await connection.query(
       `INSERT INTO orders
        (user_id, total_amount, status, Order_type, deadline, import_fee_total, split_parent_order_id)
-       VALUES (?, 0, 'Missing', ?, ?, 0, ?)`,
+       VALUES (?, 0, 'Delayed', ?, ?, 0, ?)`,
       [parent.user_id, parent.Order_type, parent.deadline || null, orderId],
     )
     childOrderId = Number(childResult.insertId)
@@ -426,6 +426,13 @@ const uploadStorage = multer.diskStorage({
 const upload = multer({
   storage: uploadStorage,
   limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => {
+    // อนุญาตเฉพาะไฟล์รูปภาพเท่านั้น (ใช้กับสลิปโอนเงินและรูปสินค้า/QR code)
+    if (!file.mimetype || !file.mimetype.startsWith('image/')) {
+      return callback(new Error('อนุญาตเฉพาะไฟล์รูปภาพเท่านั้น'))
+    }
+    callback(null, true)
+  },
 })
 
 // CORS: allow requests from LOCAL_DEV_ORIGINS and enable credentials for cookies/auth
@@ -1258,6 +1265,7 @@ async function ensureAdminSchema() {
       'Ready_to_Ship',
       'Partially_Received',
       'Missing',
+      'Delayed',
       'Cancelled',
       'Invalid slip',
       'Invalid_Slip',
@@ -2775,6 +2783,22 @@ app.get(
 
 // ========== Preorder Import Fee Management ========== //
 
+function getImportFeeDisplayStatus(row) {
+  const orderedQty = Math.max(Number(row.ordered_qty ?? row.qty) || 0, 0)
+  const receivedQty = Math.max(Number(row.received_qty) || 0, 0)
+  const orderStatus = String(row.order_status || '').trim().toLowerCase()
+  const arrivalStatus = String(row.arrival_status || '').trim().toLowerCase()
+
+  // Import fee is a payment step for goods that have actually arrived.
+  // A delayed order may still carry the old `Delayed` order status after the
+  // stock arrives, so quantity completion must take precedence here.
+  if (orderedQty > 0 && receivedQty >= orderedQty) return 'Arrived'
+  if (arrivalStatus === 'delayed' || orderStatus === 'delayed') return 'Delayed'
+  if (arrivalStatus === 'missing' || orderStatus === 'missing') return 'Missing'
+  if (arrivalStatus === 'pending') return 'Pending'
+  return 'Arrived'
+}
+
 // 1A. GET /api/admin/preorder-import-fee/rounds
 app.get(
   '/api/admin/preorder-import-fee/rounds',
@@ -2792,6 +2816,20 @@ app.get(
         od.prod_id,
         p.prod_name AS product_name,
         od.flavor,
+        CASE
+          WHEN COALESCE(od.received_qty, 0) >= od.qty
+            THEN 'Arrived'
+          WHEN LOWER(COALESCE(od.arrival_status, 'Pending')) = 'delayed'
+            OR LOWER(COALESCE(o.status, '')) = 'delayed'
+            THEN 'Delayed'
+          WHEN LOWER(COALESCE(od.arrival_status, 'Pending')) = 'missing'
+            OR LOWER(COALESCE(o.status, '')) = 'missing'
+            THEN 'Missing'
+          WHEN LOWER(COALESCE(od.arrival_status, 'Pending')) = 'pending'
+            THEN 'Pending'
+          ELSE 'Arrived'
+        END AS arrival_status,
+        o.status AS order_status,
         SUM(od.qty) AS total_sold_qty,
         SUM(COALESCE(od.received_qty, 0)) AS total_received_qty,
         MIN(od.Price) AS unit_price,
@@ -2801,6 +2839,8 @@ app.get(
       JOIN orders o ON o.order_id = od.order_id
       LEFT JOIN products p ON p.prod_id = od.prod_id
       WHERE LOWER(o.Order_type) = 'preorder'
+        AND od.qty > 0
+        AND COALESCE(od.received_qty, 0) >= od.qty
       GROUP BY
         pr.round_id,
         pr.round_name,
@@ -2809,27 +2849,51 @@ app.get(
         pr.end_date,
         od.prod_id,
         p.prod_name,
-        od.flavor
+        od.flavor,
+        CASE
+          WHEN COALESCE(od.received_qty, 0) >= od.qty
+            THEN 'Arrived'
+          WHEN LOWER(COALESCE(od.arrival_status, 'Pending')) = 'delayed'
+            OR LOWER(COALESCE(o.status, '')) = 'delayed'
+            THEN 'Delayed'
+          WHEN LOWER(COALESCE(od.arrival_status, 'Pending')) = 'missing'
+            OR LOWER(COALESCE(o.status, '')) = 'missing'
+            THEN 'Missing'
+          WHEN LOWER(COALESCE(od.arrival_status, 'Pending')) = 'pending'
+            THEN 'Pending'
+          ELSE 'Arrived'
+        END,
+        o.status
       ORDER BY pr.round_id DESC, od.prod_id ASC, od.flavor ASC
     `)
 
-      // Group by round
+      // Split one preorder round into separate import-fee rounds by intake status.
       const roundMap = new Map()
       for (const row of rows) {
-        if (!roundMap.has(row.round_id)) {
-          roundMap.set(row.round_id, {
+        const arrivalStatus = row.arrival_status || 'Pending'
+        const roundKey = `${row.round_id}|${arrivalStatus}`
+        if (!roundMap.has(roundKey)) {
+          roundMap.set(roundKey, {
             round_id: row.round_id,
-            round_name: row.round_name,
+            round_key: roundKey,
+            round_name:
+              arrivalStatus === 'Arrived'
+                ? row.round_name
+                : `${row.round_name} (${arrivalStatus})`,
             round_status: row.round_status,
             start_date: row.start_date,
             end_date: row.end_date,
+            arrival_status: arrivalStatus,
             products: [],
           })
         }
-        roundMap.get(row.round_id).products.push({
+        roundMap.get(roundKey).products.push({
+          key: `${row.prod_id}|${String(row.flavor || '').trim()}|${arrivalStatus.toLowerCase()}`,
           prod_id: row.prod_id,
           product_name: row.product_name,
           flavor: row.flavor,
+          arrival_status: row.arrival_status || 'Pending',
+          order_status: row.order_status || '',
           total_sold_qty: Number(row.total_sold_qty) || 0,
           total_received_qty: Number(row.total_received_qty) || 0,
           unit_price: Number(row.unit_price) || 0,
@@ -2851,6 +2915,14 @@ app.put(
   async (req, res) => {
     const roundId = Number(req.params.roundId)
     const { fees } = req.body || {}
+    const requestedSegment = String(req.body?.segment || '').trim()
+    if (requestedSegment && requestedSegment !== 'Arrived') {
+      return res.status(400).json({
+        success: false,
+        message: 'ยังไม่สามารถกรอกค่านำเข้าได้จนกว่าสินค้าจะรับเข้าครบ',
+      })
+    }
+    const segment = requestedSegment === 'Arrived' ? 'Arrived' : null
     if (!Array.isArray(fees) || fees.length === 0) {
       return res.status(400).json({ success: false, message: 'fees array is required' })
     }
@@ -2859,40 +2931,28 @@ app.put(
     try {
       await connection.beginTransaction()
 
-      // Update import fee values per variant/key (expected input: { key: "prodId|flavor", prod_id, flavor, import_fee })
+      // Update import fee values per product/flavor/status segment.
       const feeByKey = new Map()
-      const feeTotalByProd = new Map()
       for (const item of fees) {
         const key = String(item.key || `${item.prod_id}|${String(item.flavor || '').trim()}`)
+          .trim()
+          .toLowerCase()
         const feeValue = Number(item.import_fee) || 0
         feeByKey.set(key, Number.isNaN(feeValue) ? 0 : feeValue)
-
-        const prodId = Number(item.prod_id)
-        if (Number.isFinite(prodId)) {
-          feeTotalByProd.set(
-            prodId,
-            (feeTotalByProd.get(prodId) || 0) + (Number.isNaN(feeValue) ? 0 : feeValue),
-          )
-        }
-      }
-
-      // Update preorder_round_products.import_fee_per_products to be the sum of provided fees per product (backwards-compat)
-      for (const [prodId, feeValue] of feeTotalByProd.entries()) {
-        await connection.query(
-          `UPDATE preorder_round_products
-           SET import_fee_per_products = ?
-           WHERE round_id = ? AND prod_id = ?`,
-          [feeValue, roundId, prodId],
-        )
       }
 
       // ดึง order_details ที่เป็น preorder ของรอบนี้
       const [detailRows] = await connection.query(
         `SELECT od.detail_id, od.order_id, od.prod_id, od.flavor, od.qty,
-          COALESCE(od.received_qty, 0) AS received_qty
+          COALESCE(od.received_qty, 0) AS received_qty,
+          COALESCE(od.arrival_status, 'Pending') AS arrival_status,
+          COALESCE(od.Import_fee, 0) AS current_import_fee,
+          o.status AS order_status
          FROM order_details od
+         JOIN orders o ON o.order_id = od.order_id
          WHERE od.preorder_round_id = ?
-           AND od.item_type = 'preorder'`,
+           AND od.item_type = 'preorder'
+           AND od.qty > 0`,
         [roundId],
       )
 
@@ -2900,15 +2960,25 @@ app.put(
       // ค่านำเข้าที่แอดมินกรอกเป็นยอดรวมของสินค้านั้นทั้งรอบ
       const totalOrderedQtyByKey = {}
       for (const row of detailRows) {
-        const key = `${row.prod_id}|${String(row.flavor || '').trim()}`
+        const status = getImportFeeDisplayStatus(row)
+        if (segment && status !== segment) continue
+        if ((Number(row.received_qty) || 0) < (Number(row.qty) || 0)) continue
+        const key = `${row.prod_id}|${String(row.flavor || '').trim()}|${status}`.toLowerCase()
         const orderedQty = Math.max(Number(row.qty) || 0, 0)
         totalOrderedQtyByKey[key] = (totalOrderedQtyByKey[key] || 0) + orderedQty
       }
 
       const orderTotals = {}
+      for (const row of detailRows) {
+        orderTotals[row.order_id] =
+          (orderTotals[row.order_id] || 0) + Number(row.current_import_fee || 0)
+      }
       const rowsByKey = new Map()
       for (const row of detailRows) {
-        const key = `${row.prod_id}|${String(row.flavor || '').trim()}`
+        const status = getImportFeeDisplayStatus(row)
+        if (segment && status !== segment) continue
+        if ((Number(row.received_qty) || 0) < (Number(row.qty) || 0)) continue
+        const key = `${row.prod_id}|${String(row.flavor || '').trim()}|${status}`.toLowerCase()
         if (!rowsByKey.has(key)) rowsByKey.set(key, [])
         rowsByKey.get(key).push(row)
       }
@@ -2916,18 +2986,16 @@ app.put(
       for (const [key, rows] of rowsByKey.entries()) {
         const totalOrderedQty = totalOrderedQtyByKey[key] || 0
         const importFeeTotalForKey = feeByKey.get(key) || 0
-        const eligibleRows = rows.filter((row) => {
-          const receivedQty = Math.max(Number(row.received_qty) || 0, 0)
-          const orderedQty = Math.max(Number(row.qty) || 0, 0)
-          return receivedQty > 0 && receivedQty === orderedQty
-        })
+        const eligibleRows = rows
         let allocatedFee = 0
 
         for (const row of rows) {
-          const receivedQty = Math.max(Number(row.received_qty) || 0, 0)
           const orderedQty = Math.max(Number(row.qty) || 0, 0)
-          const isEligible = receivedQty > 0 && receivedQty === orderedQty
+          const isEligible = true
           let detailImportFee = 0
+
+          orderTotals[row.order_id] =
+            (orderTotals[row.order_id] || 0) - Number(row.current_import_fee || 0)
 
           if (isEligible && totalOrderedQty > 0) {
             // แบ่งจากจำนวนที่สั่งทั้งหมด ไม่ใช่จำนวนที่รับจริง
@@ -2953,21 +3021,36 @@ app.put(
         }
       }
 
+      // Keep the legacy round-level fee column equal to all status segments combined.
+      const [roundProductFees] = await connection.query(
+        `SELECT prod_id, COALESCE(SUM(Import_fee), 0) AS import_fee
+         FROM order_details
+         WHERE preorder_round_id = ? AND item_type = 'preorder'
+         GROUP BY prod_id`,
+        [roundId],
+      )
+      for (const row of roundProductFees) {
+        await connection.query(
+          `UPDATE preorder_round_products
+           SET import_fee_per_products = ?
+           WHERE round_id = ? AND prod_id = ?`,
+          [Number(row.import_fee) || 0, roundId, row.prod_id],
+        )
+      }
+
       await connection.query(
         `ALTER TABLE orders ADD COLUMN IF NOT EXISTS import_fee_total DECIMAL(10,2) DEFAULT 0`,
       )
 
       let updatedOrders = 0
       const allOrderIds = [...new Set(detailRows.map((row) => Number(row.order_id)))]
-      const orderIds = Object.entries(orderTotals)
-        .filter(([, amount]) => Number(amount) > 0)
-        .map(([orderId]) => Number(orderId))
+      const orderIds = new Set()
       for (const [orderId, amount] of Object.entries(orderTotals)) {
         await connection.query(`UPDATE orders SET import_fee_total = ? WHERE order_id = ?`, [
           Math.round(amount * 100) / 100,
           Number(orderId),
         ])
-        orderIds.push(Number(orderId))
+        if (Number(amount) > 0) orderIds.add(Number(orderId))
         if (Number(amount) > 0) updatedOrders++
       }
 
@@ -2978,8 +3061,9 @@ app.put(
         }
       }
 
-      if (orderIds.length > 0) {
-        const placeholders = orderIds.map(() => '?').join(',')
+      if (orderIds.size > 0) {
+        const orderIdList = Array.from(orderIds)
+        const placeholders = orderIdList.map(() => '?').join(',')
         const deadline48h = new Date(Date.now() + 48 * 60 * 60 * 1000)
 
         // เปลี่ยนสถานะและตั้ง deadline เฉพาะออเดอร์ที่แอดมินอนุมัติสลิปรอบแรกแล้ว (Wait_for_Import_Fee) เท่านั้น
@@ -2989,8 +3073,8 @@ app.put(
                deadline = ?
            WHERE order_id IN (${placeholders})
              AND Order_type = 'Preorder'
-             AND status = 'Wait_for_Import_Fee'`,
-          [deadline48h, ...orderIds],
+             AND status IN ('Wait_for_Import_Fee', 'Delayed', 'Paid')`,
+           [deadline48h, ...orderIdList],
         )
       }
 
@@ -3015,6 +3099,11 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
   const { payment_method, shipping_name, shipping_phone, shipping_address, notes } = req.body
   const { shipping_carrier } = req.body
   const slip_url = req.file ? `/uploads/${req.file.filename}` : null
+
+  // บังคับให้แนบสลิปการโอนเงินเสมอก่อนบันทึกการชำระเงิน (กันเคส bypass ฝั่ง frontend)
+  if (!slip_url) {
+    return res.status(400).json({ error: 'กรุณาแนบหลักฐานการโอนเงิน (สลิป) ก่อนยืนยันการชำระเงิน' })
+  }
 
   const connection = await pool.getConnection()
   try {
@@ -3795,6 +3884,7 @@ app.post(
 
       const detailResults = []
       const orderSummaryMap = new Map()
+      const autoSplitOrderIds = new Set()
       let hasIntakeChange = false
       let totalExcessQty = 0
 
@@ -3865,6 +3955,15 @@ app.post(
             await connection.query(`UPDATE order_details SET Import_fee = 0 WHERE detail_id = ?`, [
               detail.detail_id,
             ])
+
+            // Any incomplete line is moved to a separate delayed child order
+            // immediately. The received quantity remains on the original order.
+            const delayedOrderId = await splitDelayedItemsFromOrder(
+              connection,
+              Number(detail.order_id),
+              Number(detail.detail_id),
+            )
+            if (delayedOrderId) autoSplitOrderIds.add(Number(delayedOrderId))
           }
 
           if (!orderSummaryMap.has(Number(detail.order_id))) {
@@ -4044,6 +4143,7 @@ app.post(
         ordered_amount: orderedAmount,
         received_amount: receivedAmount,
         refund_amount: refundAmount,
+        delayed_order_ids: Array.from(autoSplitOrderIds),
         excess_qty: totalExcessQty,
         excess_stock_action:
           totalExcessQty > 0 ? (moveExcessToStock ? 'moved_to_stock' : 'not_moved') : 'none',

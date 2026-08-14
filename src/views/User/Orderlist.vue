@@ -124,6 +124,8 @@ const statusConfig = {
   Shipped: { label: 'ดำเนินการส่ง', color: '#0891b2', bg: '#e5f6f9' },
   Completed: { label: 'จัดส่งสำเร็จ', color: '#16a34a', bg: '#e9f9ef' },
   Cancelled: { label: 'ยกเลิกแล้ว', color: '#ef4444', bg: '#fdeded' },
+  Missing: { label: 'สินค้าขาด', color: '#ef4444', bg: '#fdeded' },
+  Delayed: { label: 'รอสินค้าที่แยกส่ง', color: '#d97706', bg: '#fff7ed' },
   'Invalid slip': { label: 'สลิปไม่ถูกต้อง', color: '#ef4444', bg: '#fdeded' },
   Invalid_Slip: { label: 'สลิปไม่ถูกต้อง', color: '#ef4444', bg: '#fdeded' },
   'Invalid import slip': { label: 'สลิปค่านำเข้าไม่ถูกต้อง', color: '#ef4444', bg: '#fdeded' },
@@ -140,11 +142,12 @@ function getStatus(status) {
 }
 
 // ── NOTIFICATION DOT HELPERS ──
-const RED_DOT_STATUSES = ['Pending', 'Pending_import_fee', 'Cancelled', 'Invalid slip', 'Invalid import slip']
+const RED_DOT_STATUSES = ['Pending', 'Pending_import_fee', 'Cancelled', 'Invalid slip', 'Invalid import slip', 'Missing']
 const GREEN_DOT_STATUSES = ['Paid', 'Ready_to_Ship']
 
-function hasRedDot(status) {
+function hasRedDot(status, importFeeTotal = 0) {
   const normalized = String(status || '').trim()
+  if (normalized.toLowerCase() === 'delayed' && Number(importFeeTotal) > 0) return true
   return RED_DOT_STATUSES.some(
     (s) => s.toLowerCase() === normalized.toLowerCase()
   )
@@ -207,7 +210,7 @@ function formatDate(dateStr) {
 }
 
 // ── NAV BADGE (mirrors Dashboard's exact RED/GREEN priority logic, derived from existing orders data) ──
-const NAV_RED_DOT_STATUSES = ['pending', 'pending_import_fee', 'cancelled', 'invalid_slip', 'invalid_import_slip']
+const NAV_RED_DOT_STATUSES = ['pending', 'pending_import_fee', 'cancelled', 'invalid_slip', 'invalid_import_slip', 'missing']
 const NAV_GREEN_DOT_STATUSES = ['paid', 'ready_to_ship']
 
 function normalizeStatus(status) {
@@ -215,7 +218,11 @@ function normalizeStatus(status) {
 }
 
 const orderNotifDot = computed(() => {
-  const hasRed = orders.value.some((o) => NAV_RED_DOT_STATUSES.includes(normalizeStatus(o.status)))
+  const hasRed = orders.value.some(
+    (o) =>
+      NAV_RED_DOT_STATUSES.includes(normalizeStatus(o.status)) ||
+      (normalizeStatus(o.status) === 'delayed' && Number(o.import_fee_total) > 0),
+  )
   if (hasRed) return 'red'
   const hasGreen = orders.value.some((o) => NAV_GREEN_DOT_STATUSES.includes(normalizeStatus(o.status)))
   return hasGreen ? 'green' : ''
@@ -278,7 +285,7 @@ function matchTab(order, tabKey) {
         'import_slip_submitted',
         'invalid import slip',
         'invalid_import_slip',
-      ].includes(normalized)
+      ].includes(normalized) || (normalized === 'delayed' && Number(order.import_fee_total) > 0)
     case 'shipping':
       return ['ready_to_ship', 'shipped'].includes(normalized)
     default:
@@ -308,12 +315,16 @@ const progressIcons = [
   { key: 'done', label: 'จัดส่งสำเร็จ' },
 ]
 
-function getProgressStep(status) {
-  const normalized = String(status || '').trim().toLowerCase()
+function getProgressStep(order) {
+  const normalized = String(order?.status || '').trim().toLowerCase()
+  const hasPaidImportFee = normalized === 'paid' && Number(order?.import_fee_total) > 0
   const cancelledStates = ['cancelled', 'invalid slip', 'invalid_slip', 'invalid import slip', 'invalid_import_slip']
   if (cancelledStates.includes(normalized)) return 0
   if (normalized === 'completed') return 5
   if (['shipped', 'ready_to_ship'].includes(normalized)) return 4
+  // Paid after the second (import-fee) payment means the order is ready to
+  // move into the preparation/shipping stage (the gear icon).
+  if (hasPaidImportFee) return 4
 
   // ตัด wait_for_import_fee ออกจากบรรทัดนี้ (ให้เหลือแค่รอชำระค่านำเข้า และ ส่งสลิปค่านำเข้าแล้ว)
   if (['pending_import_fee', 'import_slip_submitted'].includes(normalized)) return 3
@@ -572,7 +583,7 @@ onMounted(() => {
             class="order-card"
             @click="goToOrder(order)"
           >
-            <span v-if="hasRedDot(order.status)" class="notif-dot notif-dot--red" aria-label="ต้องดำเนินการ"></span>
+            <span v-if="hasRedDot(order.status, order.import_fee_total)" class="notif-dot notif-dot--red" aria-label="ต้องดำเนินการ"></span>
             <span v-else-if="hasGreenDot(order.status)" class="notif-dot notif-dot--green" aria-label="อัพเดทสถานะใหม่"></span>
 
             <div class="order-card__head">
@@ -656,11 +667,11 @@ onMounted(() => {
             </div>
 
             <!-- ── PROGRESS TRACKER ── -->
-            <div class="progress-track" v-if="getProgressStep(order.status) > 0">
+            <div class="progress-track" v-if="getProgressStep(order) > 0">
               <template v-for="(icon, i) in progressIcons" :key="icon.key">
                 <span
                   class="progress-step"
-                  :class="{ 'progress-step--active': i < getProgressStep(order.status) }"
+                  :class="{ 'progress-step--active': i < getProgressStep(order) }"
                   :title="icon.label"
                 >
                   <svg v-if="icon.key === 'ordered'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
@@ -678,7 +689,7 @@ onMounted(() => {
                 <span
                   v-if="i < progressIcons.length - 1"
                   class="progress-step__line"
-                  :class="{ 'progress-step__line--active': i < getProgressStep(order.status) - 1 }"
+                  :class="{ 'progress-step__line--active': i < getProgressStep(order) - 1 }"
                 ></span>
               </template>
             </div>
@@ -704,7 +715,8 @@ onMounted(() => {
                 <template
                   v-if="
                     order.Order_type === 'Preorder' &&
-                    ['Wait_for_Import_Fee', 'Pending_import_fee'].includes(order.status) &&
+                    (['Wait_for_Import_Fee', 'Pending_import_fee'].includes(order.status) ||
+                      (String(order.status).toLowerCase() === 'delayed' && Number(order.import_fee_total) > 0)) &&
                     Number(order.import_fee_total) > 0
                   "
                 >

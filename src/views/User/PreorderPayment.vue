@@ -7,6 +7,17 @@ function displayPrice(item) {
   }
   return Number(item.price || item.Price || item.unit_price || 0)
 }
+
+// ยอดรวมต่อรายการ (แสดงในช่อง "item-total")
+// ในรอบค่านำเข้า ค่า import_fee ที่ backend คำนวณไว้ต่อรายการ (order_details.Import_fee)
+// เป็น "ยอดรวมค่านำเข้าของรายการนั้นทั้งหมด" อยู่แล้ว (สัดส่วนจากยอดรวมค่านำเข้าทั้งรอบ)
+// ไม่ใช่ราคาต่อชิ้น จึงห้ามคูณ qty ซ้ำอีก มิฉะนั้นยอดรวมจะไม่ตรงกับ "ยอดรวม" ที่ต้องชำระจริง
+function itemLineTotal(item) {
+  if (isImportFeePaymentStage.value) {
+    return displayPrice(item)
+  }
+  return displayPrice(item) * Number(item.qty || 0)
+}
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
@@ -70,13 +81,13 @@ const error = ref(null)
 const notice = ref({ msg: '', type: '' })
 
 // ── สรุปยอดและประเภทสินค้าของ Preorder ──
+// หมายเหตุ: order_details.Import_fee ต่อรายการ คือ "ยอดรวมค่านำเข้าของรายการนั้น" (แบ่งสัดส่วนมาจากยอดรวมทั้งรอบแล้ว)
+// ไม่ใช่ราคาต่อชิ้น จึงต้องบวกตรงๆ ห้ามคูณ qty ซ้ำ ไม่งั้นยอดจะไม่ตรงกับ import_fee_total ของออเดอร์
 const importFeeTotal = computed(() => {
   const orderTotal = Number(order.value?.import_fee_total || 0)
   const itemTotal = Number(
     order.value?.items?.reduce(
-      (sum, item) =>
-        sum +
-        Number(item.import_fee || item.Import_fee || 0) * Number(item.qty || 0),
+      (sum, item) => sum + Number(item.import_fee || item.Import_fee || 0),
       0,
     ) || 0,
   )
@@ -112,6 +123,7 @@ const isImportFeeStage = computed(() => {
 
 // รอแอดมินแจ้งค่านำเข้า: ล็อกทุกอย่างยกเว้นขอเลื่อนเวลา
 const isWaitingForImportFee = computed(() => normalizedOrderStatus.value === 'wait for import fee')
+const isMissing = computed(() => normalizedOrderStatus.value === 'missing')
 
 const isRoundOpen = computed(() => {
   const roundStatus = String(order.value?.preorder_round_status || '')
@@ -136,7 +148,7 @@ const isShippingLocked = computed(() => {
 
 // ล็อกทั้งหน้าเฉพาะเมื่อออเดอร์จบหรือยกเลิกแล้ว รอบค่านำเข้ายังต้องแนบสลิปได้
 const isReadOnlyStage = computed(() =>
-  ['paid', 'ready to ship', 'cancelled'].includes(normalizedOrderStatus.value),
+  ['paid', 'ready to ship', 'cancelled', 'missing'].includes(normalizedOrderStatus.value),
 )
 
 // ✅ ซ่อนปุ่มขอเลื่อนกำหนดชำระเงิน และสกัดการเลือกช่องทางการโอนเมื่อออเดอร์จ่ายเสร็จสมบูรณ์/จัดส่งแล้ว
@@ -319,6 +331,20 @@ const orderStatusDisplay = computed(() => {
       color: '#ef4444',
       icon: getIcon(
         '<circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>',
+      ),
+    },
+    missing: {
+      label: 'สินค้านำเข้าล่าช้า กรุณารอทางแอดมินแจ้งอีกครั้ง',
+      color: '#ef4444',
+      icon: getIcon(
+        '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>',
+      ),
+    },
+    delayed: {
+      label: 'รอสินค้าที่แยกส่ง',
+      color: '#d97706',
+      icon: getIcon(
+        '<path d="M3 12h18"></path><path d="M12 3v18"></path>',
       ),
     },
     'ready to ship': {
@@ -508,8 +534,14 @@ const onFileChange = async (e) => {
   if (isReadOnlyStage.value || isFullyPaid.value || isRoundOpen.value) return
   const file = e.target.files[0]
   if (!file) return
+  if (!file.type || !file.type.startsWith('image/')) {
+    showNotice('กรุณาแนบไฟล์รูปภาพเท่านั้น (เช่น JPG, PNG)', 'error')
+    e.target.value = ''
+    return
+  }
   if (file.size > 5 * 1024 * 1024) {
     showNotice('ขนาดไฟล์ต้องไม่เกิน 5MB', 'error')
+    e.target.value = ''
     return
   }
   slipFile.value = file
@@ -613,7 +645,7 @@ const fetchOrder = async () => {
         'pending import fee',
         'import slip submitted',
         'invalid import slip',
-      ].includes(orderStatus)
+      ].includes(orderStatus) || (orderStatus === 'delayed' && Number(data.import_fee_total) > 0)
       const slipToLoad = isImportFeePaymentStage
         ? data.saved_shipping.import_fee_slip_url
         : data.saved_shipping.slip_url
@@ -657,7 +689,17 @@ const confirmPayment = async () => {
     'import slip submitted',
     'invalid import slip',
     'paid',
-  ].includes(normalizedStatus)
+  ].includes(normalizedStatus) || (normalizedStatus === 'delayed' && importFeeTotal.value > 0)
+
+  // สถานะที่ต้องอัปเดตแค่ที่อยู่จัดส่ง (ไม่แตะ payment) ไม่บังคับให้แนบสลิปใหม่
+  const isShippingOnlyStageCheck = ['paid'].includes(normalizedStatus)
+
+  // ทุกกรณีที่ต้องส่งหลักฐานการชำระเงิน (สร้างออเดอร์ใหม่ / จ่ายรอบแรก / จ่ายค่านำเข้า)
+  // ต้องมีสลิปแนบมาด้วยเสมอ ไม่ว่าจะเป็นไฟล์ใหม่หรือสลิปเดิมที่เคยอัปโหลดไว้แล้ว
+  if (!isShippingOnlyStageCheck && !slipFile.value && !slipImageUrl.value) {
+    showNotice('กรุณาแนบหลักฐานการโอนเงินก่อนยืนยันการชำระเงิน', 'error')
+    return
+  }
 
   if (isInputActiveStage) {
     if (
@@ -762,7 +804,8 @@ const confirmPayment = async () => {
     if (
       ['wait for import fee', 'pending import fee', 'import slip submitted', 'invalid import slip'].includes(
         normalizedStatus,
-      )
+      ) ||
+      (normalizedStatus === 'delayed' && importFeeTotal.value > 0)
     ) {
       formData.append('type', 'Import_Fee')
     }
@@ -1069,7 +1112,7 @@ onMounted(async () => {
                   <div class="item-meta">
                     <div class="item-qty">x{{ it.qty }}</div>
                     <div class="item-total">
-                      ฿{{ (displayPrice(it) * Number(it.qty)).toLocaleString() }}
+                      ฿{{ itemLineTotal(it).toLocaleString() }}
                     </div>
                   </div>
                 </div>
@@ -1163,7 +1206,7 @@ onMounted(async () => {
                       class="item-price-small"
                       style="color: #f59e42; font-weight: 600"
                     >
-                      ราคานำเข้า: ฿{{ displayPrice(it).toLocaleString() }} / ชิ้น
+                      ค่านำเข้ารวม: ฿{{ displayPrice(it).toLocaleString() }}
                     </p>
                     <p v-else class="item-price-small">
                       ราคา ฿{{ displayPrice(it).toLocaleString() }} / ชิ้น
@@ -1172,7 +1215,7 @@ onMounted(async () => {
                   <div class="item-meta">
                     <div class="item-qty">x{{ it.qty }}</div>
                     <div class="item-total">
-                      ฿{{ (displayPrice(it) * Number(it.qty)).toLocaleString() }}
+                      ฿{{ itemLineTotal(it).toLocaleString() }}
                     </div>
                   </div>
                 </div>
@@ -1266,7 +1309,7 @@ onMounted(async () => {
                   <div class="item-meta">
                     <div class="item-qty">x{{ it.qty }}</div>
                     <div class="item-total">
-                      ฿{{ (displayPrice(it) * Number(it.qty)).toLocaleString() }}
+                      ฿{{ itemLineTotal(it).toLocaleString() }}
                     </div>
                   </div>
                 </div>
@@ -1596,7 +1639,37 @@ onMounted(async () => {
             </div>
 
             <div
-              v-if="!isCancelled && !isWaitingForImportFee"
+              v-if="isMissing"
+              class="section-card glass-card payment-panel payment-panel--locked"
+            >
+              <div class="invalid-slip-banner invalid-slip-banner--import">
+                <div class="invalid-slip-banner__icon">
+                  <svg
+                    width="22"
+                    height="22"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path
+                      d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+                    ></path>
+                    <line x1="12" y1="9" x2="12" y2="13"></line>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                  </svg>
+                </div>
+                <div class="invalid-slip-banner__text">
+                  <strong>สินค้านำเข้าล่าช้า กรุณารอทางแอดมินแจ้งอีกครั้ง</strong>
+                  <span>ระบบจะเปิดให้ชำระเงินและแนบสลิปได้อีกครั้งเมื่อแอดมินแจ้งข้อมูลเพิ่มเติมแล้ว</span>
+                </div>
+              </div>
+            </div>
+
+            <div
+              v-else-if="!isCancelled && !isWaitingForImportFee"
               class="section-card glass-card payment-panel"
             >
               <h3 class="section-title" style="display: flex; align-items: center">
@@ -1618,7 +1691,7 @@ onMounted(async () => {
               </h3>
               <div
                 class="payment-methods"
-                :style="isFullyPaid ? { pointerEvents: 'none', opacity: 0.75 } : {}"
+                :style="isFullyPaid || isMissing ? { pointerEvents: 'none', opacity: 0.75 } : {}"
               >
                 <div
                   v-for="method in paymentMethods"
@@ -1741,7 +1814,7 @@ onMounted(async () => {
                   accept="image/*"
                   @change="onFileChange"
                   class="hidden-input"
-                  :disabled="isReadOnlyStage || isFullyPaid || isRoundOpen"
+                  :disabled="isReadOnlyStage || isFullyPaid || isRoundOpen || isMissing"
                 />
                 <div v-if="!slipImageUrl" class="upload-label" @click="editSlipImage">
                   <div class="upload-prompt">
@@ -1772,7 +1845,7 @@ onMounted(async () => {
                     title="คลิกเพื่อดูรูปภาพขนาดเต็ม"
                   />
                   <div
-                    v-if="!(isReadOnlyStage || isFullyPaid)"
+                    v-if="!(isReadOnlyStage || isFullyPaid || isMissing)"
                     class="edit-overlay"
                     @click.stop="editSlipImage"
                   >

@@ -547,6 +547,11 @@ router.post('/:order_id/postpone', async (req, res) => {
     return res.status(400).json({ error: 'กรุณาระบุเหตุผลการขอเลื่อน' })
   }
 
+  const normalizedPhone = String(contact_phone || '').replace(/\D/g, '')
+  if (!normalizedPhone || !/^0\d{9}$/.test(normalizedPhone)) {
+    return res.status(400).json({ error: 'กรุณากรอกเบอร์ติดต่อให้ครบ 10 หลัก (ตัวเลขเท่านั้น)' })
+  }
+
   const connection = await getDB(req).getConnection()
   try {
     await connection.beginTransaction()
@@ -574,7 +579,7 @@ router.post('/:order_id/postpone', async (req, res) => {
       order_id,
       details || null,
       String(reason || '').trim(),
-      contact_phone || null,
+      normalizedPhone,
       'Pending',
     ]
 
@@ -657,7 +662,8 @@ router.get('/postpones', async (req, res) => {
          p.contact_phone,
          p.post_detail,
          p.status,
-         p.Post_date,
+         p.Post_date AS created_at,
+         o.total_amount,
          o.status AS order_status
        FROM postpone p
        LEFT JOIN orders o ON o.order_id = p.order_id

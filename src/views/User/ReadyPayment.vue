@@ -245,8 +245,14 @@ const shippingInfo = ref({ name: '', phone: '', address: '', notes: '', carrier:
 const onFileChange = (e) => {
   const file = e.target.files[0]
   if (!file) return
+  if (!file.type || !file.type.startsWith('image/')) {
+    showNotice('กรุณาแนบไฟล์รูปภาพเท่านั้น (เช่น JPG, PNG)', 'error')
+    e.target.value = ''
+    return
+  }
   if (file.size > 5 * 1024 * 1024) {
     showNotice('ขนาดไฟล์ต้องไม่เกิน 5MB', 'error')
+    e.target.value = ''
     return
   }
   slipFile.value = file

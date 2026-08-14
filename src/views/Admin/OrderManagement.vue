@@ -42,6 +42,7 @@ const statusConfig = {
   Wait_for_Import_Fee: { label: 'รอนำเข้า', color: '#6366f1', bg: '#eef2ff' },
   Pending_import_fee: { label: 'รอชำระค่านำเข้า', color: '#7c3aed', bg: '#f3e8ff' },
   Ready_to_Ship: { label: 'พร้อมจัดส่ง', color: '#0ea5e9', bg: '#f0f9ff' },
+  Delayed: { label: 'รอสินค้าที่แยกส่ง', color: '#d97706', bg: '#fff7ed' },
   Cancelled: { label: 'ยกเลิกแล้ว', color: '#ef4444', bg: '#fef2f2' },
 }
 

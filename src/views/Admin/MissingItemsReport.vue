@@ -186,7 +186,7 @@ function formatOrderStatus(status) {
     Ready_to_Ship: 'พร้อมส่ง',
     Pending: 'รอชำระเงิน',
     Paid: 'ชำระแล้ว',
-    Delayed: 'รอของ',
+    Delayed: 'รอของที่แยกส่ง',
   }
   return map[status] || status
 }
