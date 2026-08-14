@@ -16,7 +16,8 @@ dotenv.config()
 
 const app = express()
 
-const port = Number(process.env.API_PORT) || 3001
+const port = Number(process.env.PORT || process.env.API_PORT || 3001)
+const host = process.env.IP || process.env.HOST || '127.0.0.1'
 
 const frontendOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:5173'
 const LOCAL_DEV_ORIGINS = [
@@ -39,6 +40,7 @@ const DEFAULT_THEME_ACCENT = '#ff93b8'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const uploadsDir = path.join(__dirname, 'uploads')
+const distDir = path.join(__dirname, '..', 'dist')
 
 mkdirSync(uploadsDir, { recursive: true })
 
@@ -343,7 +345,7 @@ function resolvePreorderRoundStatus(statusValue, startDate, endDate, now = new D
   }
 
   if (now > end) return 'closed'
-  
+
   return 'active'
 }
 async function autoSyncPreorderRoundStatuses() {
@@ -2546,7 +2548,7 @@ app.put('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
     // สร้าง order แยกต่อ user จากสินค้า item_type = 'preorder' ของรอบนี้เท่านั้น
 // ✅ Auto-create orders เมื่อรอบถูกปิด
     let autoOrderSummary = { created: 0, skipped: 0, errors: [] }
-    
+
     // ลบการดักเงื่อนไข roundHasEnded ออก เพื่อให้ทำงานทันทีที่ถูกเปลี่ยนเป็น closed
     if (normalizedStatus === 'closed' && previousStatus !== 'closed') {
       const connection = await pool.getConnection()
@@ -5070,6 +5072,16 @@ app.delete('/api/admin/qrcodes/:id', authenticateToken, requireAdmin, async (req
   }
 })
 
+app.use(express.static(distDir))
+
+app.use((req, res, next) => {
+  if (req.method === 'GET' && !req.path.startsWith('/api')) {
+    return res.sendFile(path.join(distDir, 'index.html'))
+  }
+
+  next()
+})
+
 app.use((error, _req, res, _next) => {
   res.status(500).json({ message: error.message })
 })
@@ -5090,8 +5102,8 @@ async function startServer() {
 
     preorderRoundAutoCloseTimer.unref?.()
 
-    app.listen(port, () => {
-      console.log(`API server running at http://localhost:${port}`)
+    app.listen(port, host, () => {
+  console.log(`API server running at ${host}:${port}`)
     })
   } catch (error) {
     console.error('Failed to start API server:', error)
