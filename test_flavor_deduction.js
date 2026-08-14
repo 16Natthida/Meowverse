@@ -1,6 +1,6 @@
 // test_flavor_deduction.js - End-to-end test for flavor-specific stock deduction
 
-const API_BASE = 'http://localhost:3001/api'
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api'
 const TEST_USER_ID = 9 // ใช้ user ที่มีอยู่
 
 async function log(msg, data = null) {
