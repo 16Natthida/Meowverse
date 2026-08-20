@@ -284,6 +284,7 @@ const checkout = async () => {
         user_id: userId,
         items: activeItems.value,
         order_type: data.order_type,
+        shipping_fee: data.shipping_fee,
         total_amount: data.total_amount,
         item_count: data.item_count,
       }),

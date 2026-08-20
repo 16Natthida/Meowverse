@@ -42,7 +42,7 @@ function resolveItemImage(it) {
   const imgs = productImageMap.value[it.prod_id]
   const flavorKey = it.flavor ? String(it.flavor) : null
   let finalUrl = it.image ?? null
-  
+
   if (imgs) {
     if (flavorKey && imgs[flavorKey]) finalUrl = imgs[flavorKey]
     else if (imgs['__default__']) finalUrl = imgs['__default__']
@@ -56,7 +56,7 @@ function resolveItemImage(it) {
     const originServer = new URL(API_BASE_URL).origin
     return `${originServer}${finalUrl}`
   }
-  
+
   return finalUrl
 }
 
@@ -79,6 +79,23 @@ const itemsTotal = computed(() =>
       0,
   ),
 )
+
+const shippingFee = computed(() => {
+  const storedFee = Number(order.value?.shipping_fee || 0)
+  if (storedFee > 0) return storedFee
+
+  const orderType = String(order.value?.Order_type || '').trim().toLowerCase()
+  const status = String(order.value?.status || '').trim().toLowerCase().replace(/[_\s]+/g, ' ')
+  const isUnpaidReadyOrder = ['pending', 'slip submitted', 'invalid slip'].includes(status)
+
+  return orderType === 'ready' && (isUnpaidReadyOrder || !order.value?.order_id) ? 49 : 0
+})
+
+const totalPayable = computed(() => {
+  const storedFee = Number(order.value?.shipping_fee || 0)
+  const orderTotal = Number(order.value?.total_amount ?? itemsTotal.value)
+  return orderTotal + (storedFee > 0 ? 0 : shippingFee.value)
+})
 
 const slipFile = ref(null)
 const slipPreview = ref(null)
@@ -178,7 +195,10 @@ const displayStatus = computed(() => {
     return hasPaymentEvidence ? 'รอแอดมินตรวจสอบ' : 'รอชำระเงิน'
   }
 
-  if (normalized === 'paid') return 'จ่ายเงินสำเร็จ รอแอดมินเรียกเก็บค่าจัดส่งในLINE'
+  if (normalized === 'paid') return 'จ่ายเงินสำเร็จ รอแอดมินตรวจสอบและจัดส่ง'
+
+  if (normalized === 'shipped') return 'จัดส่งแล้ว'
+  if (normalized === 'delivered') return 'นำจ่ายแล้ว'
 
   if (normalized === 'ready to ship' || status === 'ready_to_ship' || status === 'readytoship')
     return 'เตรียมพร้อมส่ง'
@@ -201,20 +221,36 @@ const isPaidOrReady = computed(() => {
   )
 })
 
-const isReadyToShip = computed(() => {
+const isShippingLocked = computed(() => {
   const raw = String(order.value?.status || '').trim()
-  const lower = raw.toLowerCase()
-  const normalized = lower.replace(/[_\s]+/g, ' ')
-  return normalized === 'ready to ship' || lower === 'ready_to_ship' || lower === 'readytoship'
+  const normalized = raw.toLowerCase().replace(/[_\s]+/g, ' ')
+  return [
+    'slip submitted',
+    'import slip submitted',
+    'paid',
+    'ready to ship',
+    'shipped',
+    'delivered',
+    'cancelled',
+  ].includes(normalized)
+})
+
+const isPaymentComplete = computed(() => {
+  const normalized = String(order.value?.status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, ' ')
+  return ['paid', 'ready to ship', 'shipped', 'delivered'].includes(normalized)
 })
 
 const primaryButtonLabel = computed(() => {
+  if (isPaymentComplete.value) return 'ชำระเงินและจัดส่งเรียบร้อยแล้ว'
   if (isPaidOrReady.value) return loading.value ? 'กำลังประมวลผล...' : 'บันทึกข้อมูลจัดส่ง'
   return loading.value ? 'กำลังประมวลผล...' : 'ยืนยันการชำระเงิน'
 })
 
 async function onPrimaryAction() {
-  if (isReadyToShip.value) {
+  if (isShippingLocked.value) {
     return
   }
 
@@ -236,7 +272,7 @@ async function onPrimaryAction() {
 }
 
 const selectPaymentMethod = (methodId) => {
-  if (isPaidOrReady.value) return
+  if (isShippingLocked.value || isPaymentComplete.value) return
   selectedPaymentMethod.value = methodId
 }
 
@@ -298,6 +334,7 @@ const fetchOrder = async () => {
         order_id: null,
         items: pendingData.items,
         total_amount: pendingData.total_amount,
+        shipping_fee: pendingData.shipping_fee,
         Order_type: 'Ready',
         user_id: pendingData.user_id,
       }
@@ -336,7 +373,7 @@ const fetchOrder = async () => {
       shippingInfo.value.notes = data.saved_shipping.notes || ''
       shippingInfo.value.carrier = data.saved_shipping.carrier || ''
       resolveSelectedPaymentMethod(data.saved_shipping.payment_method || 'bank_transfer')
-      
+
       if (data.saved_shipping.slip_url) {
         const url = data.saved_shipping.slip_url
         if (url.startsWith('/uploads') && API_BASE_URL.includes('http')) {
@@ -523,7 +560,8 @@ onMounted(async () => {
                 <div class="hero-meta-divider"></div>
                 <div class="hero-meta-item">
                   <span class="hero-meta-label">ยอดรวม</span>
-                  <strong>฿{{ itemsTotal.toLocaleString() }}</strong>
+                  <strong v-if="isPaymentComplete">ชำระครบแล้ว</strong>
+                  <strong v-else>฿{{ totalPayable.toLocaleString() }}</strong>
                 </div>
                 <div class="hero-meta-divider"></div>
                 <div class="hero-meta-item">
@@ -576,7 +614,9 @@ onMounted(async () => {
           <div class="section-card form-panel">
             <div class="section-header section-header--stacked">
               <h3 class="section-title" style="display: flex; align-items: center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg> ข้อมูลจัดส่ง</h3>
-              <span class="section-caption">ตรวจสอบให้ครบก่อนส่ง</span>
+              <span class="section-caption">
+                {{ isShippingLocked ? 'แอดมินตรวจสอบสลิปแล้ว ไม่สามารถแก้ไขข้อมูลจัดส่งได้' : 'ตรวจสอบให้ครบก่อนส่ง' }}
+              </span>
             </div>
             <div class="order-info">
               <div class="field-group">
@@ -585,10 +625,10 @@ onMounted(async () => {
                   id="recipient-name"
                   v-model="shippingInfo.name"
                   placeholder="ระบุชื่อ-นามสกุล"
-                  :disabled="isReadyToShip"
+                  :disabled="isShippingLocked"
                 />
               </div>
-              
+
               <div class="field-group field-group--two-cols">
                 <div>
                   <label for="recipient-phone">โทร</label>
@@ -596,12 +636,12 @@ onMounted(async () => {
                     id="recipient-phone"
                     v-model="shippingInfo.phone"
                     placeholder="08x-xxx-xxxx"
-                    :disabled="isReadyToShip"
+                    :disabled="isShippingLocked"
                   />
                 </div>
                 <div>
                   <label for="shipping-carrier">บริษัทขนส่ง</label>
-                  <select id="shipping-carrier" v-model="shippingInfo.carrier" :disabled="isReadyToShip">
+                  <select id="shipping-carrier" v-model="shippingInfo.carrier" :disabled="isShippingLocked">
                     <option value="">-- เลือกบริษัทขนส่ง --</option>
                     <option value="Kerry">Kerry</option>
                     <option value="Flash">Flash</option>
@@ -617,7 +657,7 @@ onMounted(async () => {
                   id="shipping-notes"
                   v-model="shippingInfo.notes"
                   placeholder="เช่น ฝากไว้หน้าบ้าน"
-                  :disabled="isReadyToShip"
+                  :disabled="isShippingLocked"
                 />
               </div>
 
@@ -628,7 +668,7 @@ onMounted(async () => {
                   v-model="shippingInfo.address"
                   rows="4"
                   placeholder="บ้านเลขที่ หมู่ ซอย ถนน ตำบล อำเภอ จังหวัด รหัสไปรษณีย์"
-                  :disabled="isReadyToShip"
+                  :disabled="isShippingLocked"
                 ></textarea>
               </div>
             </div>
@@ -638,6 +678,7 @@ onMounted(async () => {
         <div class="payment-section">
           <div class="payment-sticky">
             <div class="section-card glass-card payment-panel">
+              <template v-if="!isPaymentComplete">
               <h3 class="section-title" style="display: flex; align-items: center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line></svg> วิธีการชำระเงิน</h3>
               <div class="payment-methods">
                 <div
@@ -685,7 +726,7 @@ onMounted(async () => {
                   accept="image/*"
                   @change="onFileChange"
                   class="hidden-input"
-                  :disabled="isPaidOrReady"
+                  :disabled="isShippingLocked"
                 />
                 <div v-if="!slipImageUrl" class="upload-label" @click="editSlipImage">
                   <div class="upload-prompt">
@@ -701,21 +742,37 @@ onMounted(async () => {
                     @click="viewSlipImage"
                     title="คลิกเพื่อดูรูปภาพขนาดเต็ม"
                   />
-                  <div v-if="!isPaidOrReady" class="edit-overlay" @click.stop="editSlipImage">แตะเพื่อเปลี่ยนรูปภาพ</div>
+                  <div v-if="!isShippingLocked" class="edit-overlay" @click.stop="editSlipImage">แตะเพื่อเปลี่ยนรูปภาพ</div>
                 </div>
+              </div>
+              </template>
+              <div v-else class="payment-complete-banner">
+                <strong>ชำระเงินเรียบร้อยแล้ว</strong>
+                <span>ออเดอร์นี้ได้รับการชำระเงินและดำเนินการจัดส่งแล้ว</span>
               </div>
             </div>
 
               <div class="section-card summary-card summary-card--wide summary-card--compact">
-              <div class="summary-header">
-                <span class="summary-label">ยอดรวม</span>
-                <strong class="summary-amount"
-                  >฿{{ Number(order.total_amount).toLocaleString() }}</strong
-                >
+              <div class="summary-row" style="display: flex; justify-content: space-between">
+                <span class="summary-label">ยอดรวมสินค้า</span>
+                <span class="summary-amount">฿{{ itemsTotal.toLocaleString() }}</span>
+              </div>
+              <div
+                v-if="shippingFee > 0 && !isPaymentComplete"
+                class="summary-row"
+                style="display: flex; justify-content: space-between; margin-top: 8px"
+              >
+                <span class="summary-label">ค่าส่ง</span>
+                <span class="summary-amount">฿{{ shippingFee.toLocaleString() }}</span>
+              </div>
+              <div class="summary-header" style="margin-top: 12px">
+                <span class="summary-label">{{ isPaymentComplete ? 'สถานะการชำระเงิน' : 'ยอดรวมที่ต้องชำระ' }}</span>
+                <strong v-if="isPaymentComplete" class="summary-amount summary-amount--paid">ชำระครบแล้ว</strong>
+                <strong v-else class="summary-amount">฿{{ totalPayable.toLocaleString() }}</strong>
               </div>
               <div class="summary-note">ชำระด้วยสลิปโอนเงิน แล้วแอดมินจะตรวจสอบให้ทันที</div>
               <hr class="divider" />
-              <button type="button" class="btn-checkout" @click="onPrimaryAction" :disabled="loading || isReadyToShip">
+              <button type="button" class="btn-checkout" @click="onPrimaryAction" :disabled="loading || isShippingLocked">
                 {{ primaryButtonLabel }}
               </button>
             </div>
@@ -1351,6 +1408,26 @@ onMounted(async () => {
 .payment-panel {
   padding: 1.2rem;
 }
+.payment-complete-banner {
+  display: grid;
+  gap: 0.35rem;
+  padding: 1.25rem;
+  border: 1px solid #b7e5d0;
+  border-radius: 14px;
+  background: #f0fdf4;
+  color: #047857;
+}
+.payment-complete-banner strong {
+  font-size: 1.05rem;
+}
+.payment-complete-banner span {
+  color: #527565;
+  font-size: 0.88rem;
+}
+.summary-amount--paid {
+  color: #059669;
+  font-size: 1.1rem;
+}
 .summary-card--wide {
   display: flex;
   flex-direction: column;
@@ -1423,11 +1500,11 @@ onMounted(async () => {
   font-size: 2rem;
   cursor: pointer;
 }
-.fade-enter-active, .fade-leave-active { 
-  transition: opacity 0.3s; 
+.fade-enter-active, .fade-leave-active {
+  transition: opacity 0.3s;
 }
-.fade-enter-from, .fade-leave-to { 
-  opacity: 0; 
+.fade-enter-from, .fade-leave-to {
+  opacity: 0;
 }
 
 @keyframes spin {

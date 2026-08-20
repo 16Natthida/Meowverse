@@ -145,7 +145,13 @@ export function usePreorderStore() {
     }
   }
 
-  async function addProductsToRound(roundId, productIds, quantities = [], roundPrices = []) {
+  async function addProductsToRound(
+    roundId,
+    productIds,
+    quantities = [],
+    roundPrices = [],
+    chinaShippingFeesThb = [],
+  ) {
     await requestJson(`/preorder-rounds/${roundId}/products`, {
       method: 'POST',
       body: JSON.stringify({
@@ -153,6 +159,9 @@ export function usePreorderStore() {
         quantities: quantities.map((quantity) => Number(quantity) || 0),
         roundPrices: roundPrices.map((price) =>
           price === '' || price == null ? null : Number(price),
+        ),
+        chinaShippingFeesThb: chinaShippingFeesThb.map((fee) =>
+          fee === '' || fee == null ? 0 : Number(fee),
         ),
       }),
     })
@@ -172,13 +181,23 @@ export function usePreorderStore() {
     })
   }
 
-  async function updateProductQuantityInRound(roundId, productId, quantity, roundPrice = null) {
+  async function updateProductQuantityInRound(
+    roundId,
+    productId,
+    quantity,
+    roundPrice = null,
+    chinaShippingFeeThb = null,
+  ) {
     const quantityPayload = quantity === null || quantity === '' ? null : Number(quantity)
     await requestJson(`/preorder-rounds/${roundId}/products/${productId}`, {
       method: 'PUT',
       body: JSON.stringify({
         quantity: quantityPayload,
         roundPrice: roundPrice === '' || roundPrice == null ? null : Number(roundPrice),
+        chinaShippingFeeThb:
+          chinaShippingFeeThb === '' || chinaShippingFeeThb == null
+            ? 0
+            : Number(chinaShippingFeeThb),
       }),
     })
 
@@ -193,11 +212,19 @@ export function usePreorderStore() {
     })
   }
 
-  async function updateProductPriceInRound(roundId, productId, price) {
+  async function updateProductPriceInRound(roundId, productId, price, chinaShippingFeeThb) {
     await requestJson(`/preorder-rounds/${roundId}/products/${productId}`, {
       method: 'PUT',
       body: JSON.stringify({
         price: price === '' || price == null ? null : Number(price),
+        ...(chinaShippingFeeThb !== undefined
+          ? {
+              chinaShippingFeeThb:
+                chinaShippingFeeThb === '' || chinaShippingFeeThb == null
+                  ? 0
+                  : Number(chinaShippingFeeThb),
+            }
+          : {}),
       }),
     })
 
@@ -206,6 +233,9 @@ export function usePreorderStore() {
       if (product) {
         product.roundPrice =
           price === '' || price == null ? Number(product.basePrice) : Number(price)
+        if (chinaShippingFeeThb !== undefined) {
+          product.chinaShippingFeeThb = Number(chinaShippingFeeThb) || 0
+        }
       }
     })
   }

@@ -5,6 +5,24 @@ import express from 'express'
 
 const router = express.Router()
 
+const SHIPPING_FEES = Object.freeze({
+  preorder: 65,
+  ready: 49,
+})
+
+function getShippingFee(items) {
+  const hasPreorder = items.some(isPreorderItem)
+
+  return hasPreorder ? SHIPPING_FEES.preorder : SHIPPING_FEES.ready
+}
+
+function isPreorderItem(item) {
+  const itemType = String(item.item_type || '').toLowerCase()
+  if (itemType === 'preorder' || item.preorder_round_id) return true
+
+  return Number(item.preorderEnabled) === 1 && Number(item.readyToShipEnabled) !== 1
+}
+
 let orderDetailsSupportsFlavor = null
 let orderDetailsSupportsItemType = null
 let orderDetailsSupportsPreorderRoundId = null
@@ -199,6 +217,7 @@ router.post('/checkout-preview', async (req, res) => {
          p.preorder_price AS preorderPrice,
          p.ready_to_ship_enabled AS readyToShipEnabled,
          p.preorder_enabled AS preorderEnabled,
+         COALESCE(prp.china_shipping_fee_thb, 0) AS china_shipping_fee_thb,
          COALESCE(
            NULLIF(c.round_price, 0),
            CASE
@@ -230,6 +249,7 @@ router.post('/checkout-preview', async (req, res) => {
        LEFT JOIN products p ON p.prod_id = c.prod_id
        LEFT JOIN preorder_round_products prp
          ON prp.round_id = c.preorder_round_id AND prp.prod_id = c.prod_id
+       LEFT JOIN preorder_rounds r ON r.round_id = c.preorder_round_id
        WHERE c.user_id = ? AND c.cart_id IN (${placeholders})
        ORDER BY c.cart_id`,
       [user_id, ...selectedCartIds],
@@ -271,14 +291,20 @@ router.post('/checkout-preview', async (req, res) => {
     }
 
     // ใช้ราคาจาก query (calculated price) แทนที่จาก frontend เพื่อหลีกเลี่ยง price=0
-    const totalAmount = cartItems.reduce(
+    const subtotalAmount = cartItems.reduce(
       (sum, item) => sum + (Number(item.price) || 0) * Number(item.qty || 0),
       0,
     )
     const hasPreorder = cartItems.some(
-      (item) => String(item.item_type || '').toLowerCase() === 'preorder' || item.preorder_round_id,
+      isPreorderItem,
     )
     const orderType = hasPreorder ? 'Preorder' : 'Ready'
+    const chinaShippingTotalThb = cartItems.reduce(
+      (sum, item) => sum + (Number(item.china_shipping_fee_thb) || 0) * Number(item.qty || 0),
+      0,
+    )
+    const shippingFee = getShippingFee(cartItems)
+    const totalAmount = subtotalAmount + (hasPreorder ? chinaShippingTotalThb : shippingFee)
 
     await connection.commit()
 
@@ -286,7 +312,10 @@ router.post('/checkout-preview', async (req, res) => {
       message: 'วาลิเดตออเดอร์สำเร็จ',
       cart_items: cartItems,
       order_type: orderType,
+      subtotal_amount: subtotalAmount,
+      shipping_fee: shippingFee,
       total_amount: totalAmount,
+      china_shipping_total_thb: chinaShippingTotalThb,
       item_count: cartItems.length,
     })
   } catch (err) {
@@ -350,6 +379,7 @@ router.post('/confirm-payment', async (req, res) => {
          p.preorder_price AS preorderPrice,
          p.ready_to_ship_enabled AS readyToShipEnabled,
          p.preorder_enabled AS preorderEnabled,
+         COALESCE(prp.china_shipping_fee_thb, 0) AS china_shipping_fee_thb,
          COALESCE(
            NULLIF(c.round_price, 0),
            CASE
@@ -381,6 +411,7 @@ router.post('/confirm-payment', async (req, res) => {
        LEFT JOIN products p ON p.prod_id = c.prod_id
        LEFT JOIN preorder_round_products prp
          ON prp.round_id = c.preorder_round_id AND prp.prod_id = c.prod_id
+       LEFT JOIN preorder_rounds r ON r.round_id = c.preorder_round_id
        WHERE c.user_id = ? AND c.cart_id IN (${placeholders})
        ORDER BY c.cart_id`,
       [user_id, ...selectedCartIds],
@@ -433,12 +464,16 @@ router.post('/confirm-payment', async (req, res) => {
     const mergedItems = Array.from(mergedMap.values())
 
     // ใช้ราคาจาก query (calculated price) ของรายการที่รวมแล้ว
-    const totalAmount = mergedItems.reduce(
+    const subtotalAmount = mergedItems.reduce(
       (sum, item) => sum + (Number(item.price) || 0) * Number(item.qty || 0),
       0,
     )
     const hasPreorder = mergedItems.some(
-      (item) => String(item.item_type || '').toLowerCase() === 'preorder' || item.preorder_round_id,
+      isPreorderItem,
+    )
+    const chinaShippingTotalThb = mergedItems.reduce(
+      (sum, item) => sum + (Number(item.china_shipping_fee_thb) || 0) * Number(item.qty || 0),
+      0,
     )
     // ถ้าเป็นการชำระรอบ 2 (import fee) ให้ตั้ง orderType = 'Pending_import'
     let orderType = hasPreorder ? 'Preorder' : 'Ready'
@@ -448,9 +483,22 @@ router.post('/confirm-payment', async (req, res) => {
       orderType = 'Pending_import'
     }
 
+    const shippingFee = getShippingFee(mergedItems)
+    const totalAmount = subtotalAmount + (hasPreorder ? chinaShippingTotalThb : shippingFee)
+
     const [orderResult] = await connection.query(
-      'INSERT INTO orders (user_id, total_amount, status, Order_type) VALUES (?, ?, ?, ?)',
-      [user_id, totalAmount, 'Pending', orderType],
+      `INSERT INTO orders
+         (user_id, total_amount, shipping_fee, status, Order_type,
+          china_shipping_total_thb)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        user_id,
+        totalAmount,
+        shippingFee,
+        'Pending',
+        orderType,
+        chinaShippingTotalThb,
+      ],
     )
 
     const orderId = orderResult.insertId
@@ -490,6 +538,9 @@ router.post('/confirm-payment', async (req, res) => {
         values.push(item.preorder_round_id || null)
       }
 
+      columns.push('china_shipping_fee_thb')
+      values.push(Number(item.china_shipping_fee_thb) || 0)
+
       await connection.query(
         `INSERT INTO order_details (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
         values,
@@ -524,6 +575,8 @@ router.post('/confirm-payment', async (req, res) => {
       message: 'สร้างออเดอร์สำเร็จ',
       order_id: orderId,
       order_type: orderType,
+      subtotal_amount: subtotalAmount,
+      shipping_fee: shippingFee,
       total_amount: totalAmount,
       item_count: mergedItems.length,
     })
@@ -769,7 +822,23 @@ router.get('/', async (req, res) => {
   try {
     const db = getDB(req)
     const [rows] = await db.query(
-      `SELECT order_id, user_id, total_amount, import_fee_total, status, deadline, Order_type, Order_date,
+      `SELECT order_id, user_id, total_amount, shipping_fee, import_fee_total,
+              china_shipping_total_thb, status, deadline, Order_type, Order_date,
+              (
+                SELECT COALESCE(sp.provider_name, s.Shipping_Carrier)
+                FROM shipping s
+                LEFT JOIN shipping_providers sp ON sp.provider_id = s.provider_id
+                WHERE s.order_id = orders.order_id
+                ORDER BY s.ship_id DESC
+                LIMIT 1
+              ) AS shipping_provider_name,
+              (
+                SELECT s.tracking_number
+                FROM shipping s
+                WHERE s.order_id = orders.order_id
+                ORDER BY s.ship_id DESC
+                LIMIT 1
+              ) AS tracking_number,
               COALESCE((
                 SELECT SUM(GREATEST(od_refund.qty - COALESCE(od_refund.received_qty, 0), 0) * od_refund.Price)
                 FROM order_details od_refund
@@ -795,6 +864,78 @@ router.get('/', async (req, res) => {
   }
 })
 
+// PATCH /api/orders/:order_id/confirm-receipt
+// ลูกค้ายืนยันว่าได้รับสินค้าแล้ว ระบบจะเปลี่ยนสถานะเป็น Delivered
+router.patch('/:order_id/confirm-receipt', async (req, res) => {
+  const { order_id } = req.params
+  const userId = Number(req.body?.user_id)
+
+  if (!userId) {
+    return res.status(400).json({ error: 'ไม่พบผู้ใช้ที่ยืนยันการรับสินค้า' })
+  }
+
+  const connection = await getDB(req).getConnection()
+  try {
+    await connection.beginTransaction()
+
+    const [rows] = await connection.query(
+      `SELECT o.order_id, o.user_id, o.status, s.ship_id
+       FROM orders o
+       LEFT JOIN shipping s ON s.order_id = o.order_id
+       WHERE o.order_id = ?
+       ORDER BY s.ship_id DESC
+       LIMIT 1`,
+      [order_id],
+    )
+
+    if (rows.length === 0) {
+      await connection.rollback()
+      return res.status(404).json({ error: 'ไม่พบออเดอร์ที่ระบุ' })
+    }
+
+    const order = rows[0]
+    if (Number(order.user_id) !== userId) {
+      await connection.rollback()
+      return res.status(403).json({ error: 'ไม่มีสิทธิ์ยืนยันออเดอร์นี้' })
+    }
+
+    if (String(order.status || '').trim().toLowerCase() !== 'shipped') {
+      await connection.rollback()
+      return res.status(409).json({ error: 'ออเดอร์นี้ยังไม่อยู่ในสถานะจัดส่งแล้ว' })
+    }
+
+    if (!order.ship_id) {
+      await connection.rollback()
+      return res.status(409).json({ error: 'ยังไม่พบข้อมูลการจัดส่งของออเดอร์นี้' })
+    }
+
+    await connection.query(
+      `UPDATE shipping
+       SET shipping_status = 'delivered',
+           delivered_at = COALESCE(delivered_at, NOW()),
+           customer_confirmed_at = NOW(),
+           customer_confirmed_by = ?
+       WHERE ship_id = ?`,
+      [userId, order.ship_id],
+    )
+    await connection.query(
+      `UPDATE orders
+       SET status = 'Delivered'
+       WHERE order_id = ? AND status = 'Shipped'`,
+      [order_id],
+    )
+
+    await connection.commit()
+    res.json({ success: true, order_id: Number(order_id), status: 'Delivered' })
+  } catch (err) {
+    await connection.rollback()
+    console.error('[PATCH /api/orders/:order_id/confirm-receipt]', err)
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการยืนยันการรับสินค้า' })
+  } finally {
+    connection.release()
+  }
+})
+
 router.get('/:order_id', async (req, res) => {
   const { order_id } = req.params
 
@@ -803,7 +944,8 @@ router.get('/:order_id', async (req, res) => {
     await maybeExpireOrder(db, order_id)
 
     const [orderRows] = await db.query(
-      `SELECT o.order_id, o.user_id, o.total_amount, o.status, o.deadline, o.Order_type, o.Order_date, o.import_fee_total, a.username,
+      `SELECT o.order_id, o.user_id, o.total_amount, o.shipping_fee, o.status, o.deadline, o.Order_type, o.Order_date, o.import_fee_total,
+              o.china_shipping_total_thb, a.username,
               (SELECT LOWER(pr.status)
                FROM preorder_rounds pr
                JOIN order_details od_round ON od_round.preorder_round_id = pr.round_id
@@ -811,10 +953,13 @@ router.get('/:order_id', async (req, res) => {
                ORDER BY pr.round_id DESC
                LIMIT 1) AS preorder_round_status,
               s.name AS shipping_name, s.phone AS shipping_phone, s.address AS shipping_address, s.notes AS shipping_notes, s.Shipping_Carrier,
+              s.provider_id, sp.provider_code, sp.provider_name, s.tracking_number, s.tracking_url,
+              s.shipping_status, s.shipped_at, s.delivered_at,
               o.split_parent_order_id
        FROM orders o
        LEFT JOIN accounts a ON o.user_id = a.user_id
        LEFT JOIN shipping s ON o.order_id = s.order_id
+       LEFT JOIN shipping_providers sp ON s.provider_id = sp.provider_id
        WHERE o.order_id = ?
        ORDER BY s.ship_id DESC LIMIT 1`,
       [order_id],
@@ -851,6 +996,14 @@ router.get('/:order_id', async (req, res) => {
       address: order.shipping_address || null,
       notes: order.shipping_notes || null,
       carrier: order.Shipping_Carrier || null,
+      provider_id: order.provider_id || null,
+      provider_code: order.provider_code || null,
+      provider_name: order.provider_name || null,
+      tracking_number: order.tracking_number || null,
+      tracking_url: order.tracking_url || null,
+      shipping_status: order.shipping_status || 'pending',
+      shipped_at: order.shipped_at || null,
+      delivered_at: order.delivered_at || null,
       // slip แยกตาม type ให้ frontend ใช้ตัดสินใจเอง
       slip_url: orderFeePayment?.slip_img || null, // สลิปรอบแรก (Order_fee)
       import_fee_slip_url: importFeePayment?.slip_img || null, // สลิปรอบค่านำเข้า
@@ -859,7 +1012,9 @@ router.get('/:order_id', async (req, res) => {
     }
 
     const [detailRows] = await db.query(
-      `SELECT od.detail_id, od.prod_id, od.flavor, od.Price AS unit_price, od.qty, od.received_qty, od.arrival_status, od.Import_fee AS import_fee, od.item_type, od.preorder_round_id, p.prod_name AS name, c.cat_name AS category_name,
+      `SELECT od.detail_id, od.prod_id, od.flavor, od.Price AS unit_price, od.qty, od.received_qty, od.arrival_status,
+       od.Import_fee AS import_fee, od.china_shipping_fee_thb,
+       od.item_type, od.preorder_round_id, p.prod_name AS name, c.cat_name AS category_name,
 COALESCE(
          (
            SELECT pi.image_url
@@ -964,7 +1119,9 @@ router.patch('/:order_id/import-fee', async (req, res) => {
       const isLast = index === detailRows.length - 1
       const perItemFee = isLast
         ? Math.max(Math.round((importFee - allocatedFee) * 100) / 100, 0)
-        : Math.round((importFee * (Math.max(Number(row.qty) || 0, 0) / (totalOrderedQty || 1))) * 100) / 100
+        : Math.round(
+            (importFee * (Math.max(Number(row.qty) || 0, 0) / (totalOrderedQty || 1))) * 100,
+          ) / 100
       allocatedFee += isLast ? 0 : perItemFee
       await connection.query('UPDATE order_details SET Import_fee = ? WHERE detail_id = ?', [
         perItemFee,

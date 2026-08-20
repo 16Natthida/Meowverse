@@ -101,6 +101,8 @@ function getStatusMessage() {
     wait_for_import_fee: 'รอค่านำเข้า - กรุณารอสักครู่',
     pending_import_fee: 'รอค่านำเข้า - กรุณารอสักครู่',
     ready_to_ship: 'พร้อมจัดส่ง - ใกล้ถึงมือคุณแล้ว',
+    shipped: 'จัดส่งแล้ว - ตรวจสอบเลขพัสดุได้ด้านล่าง',
+    delivered: 'นำจ่ายแล้ว - ขอบคุณที่ใช้บริการ',
     cancelled: 'ยกเลิกแล้ว',
     missing: 'สินค้าขาดบางรายการ',
   }
@@ -118,6 +120,8 @@ function getStatusLabel() {
     wait_for_import_fee: 'รอค่านำเข้า',
     pending_import_fee: 'รอค่านำเข้า',
     ready_to_ship: 'พร้อมจัดส่ง',
+    shipped: 'จัดส่งแล้ว',
+    delivered: 'นำจ่ายแล้ว',
     cancelled: 'ยกเลิกแล้ว',
     missing: 'สินค้าขาดบางรายการ',
   }
@@ -278,6 +282,29 @@ onMounted(() => {
             </div>
           </div>
         </div>
+
+        <section
+          v-if="
+            order.saved_shipping &&
+            (order.saved_shipping.provider_name ||
+              order.saved_shipping.carrier ||
+              order.saved_shipping.tracking_number)
+          "
+          class="shipping-card"
+        >
+          <h2 class="card-title">📦 ข้อมูลการจัดส่ง</h2>
+          <div class="shipping-grid">
+            <div>
+              <span class="shipping-label">บริษัทขนส่ง</span>
+              <strong>{{ order.saved_shipping.provider_name || order.saved_shipping.carrier || '-' }}</strong>
+            </div>
+            <div>
+              <span class="shipping-label">เลขพัสดุ</span>
+              <strong>{{ order.saved_shipping.tracking_number || 'รอแอดมินอัปเดต' }}</strong>
+            </div>
+          </div>
+          <p class="shipping-note">สามารถคัดลอกเลขพัสดุไปตรวจสอบกับเว็บไซต์ของบริษัทขนส่งได้</p>
+        </section>
 
         <!-- Action Button -->
         <button class="btn-back-home" @click="goBack"><span>←</span> กลับไปรายการออเดอร์</button>
@@ -563,6 +590,44 @@ onMounted(() => {
 .status--pending_import_fee {
   background: linear-gradient(135deg, #fce7f3, #fbcfe8);
   color: #831843;
+}
+.status--shipped {
+  background: linear-gradient(135deg, #dbeafe, #bfdbfe);
+  color: #1d4ed8;
+}
+.status--delivered {
+  background: linear-gradient(135deg, #d1fae5, #a7f3d0);
+  color: #047857;
+}
+.shipping-card {
+  margin-top: 1rem;
+  padding: 1.25rem;
+  border: 1px solid #d9c9f1;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #fff, #faf6ff);
+  box-shadow: var(--shadow-sm);
+}
+.shipping-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+.shipping-grid > div {
+  display: grid;
+  gap: 0.25rem;
+}
+.shipping-label {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+.shipping-grid strong {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.shipping-note {
+  margin: 1rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.84rem;
 }
 
 .header-info {
@@ -932,6 +997,10 @@ onMounted(() => {
 
   .header-card {
     padding: 1.5rem;
+  }
+
+  .shipping-grid {
+    grid-template-columns: 1fr;
   }
 
   .order-id {

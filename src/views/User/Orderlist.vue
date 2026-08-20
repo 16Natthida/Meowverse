@@ -111,6 +111,55 @@ onUnmounted(() => {
 const orders = ref([])
 const loading = ref(true)
 const error = ref(null)
+const copiedTrackingOrderId = ref(null)
+const confirmingReceiptOrderId = ref(null)
+
+async function copyTrackingNumber(order) {
+  const trackingNumber = String(order.tracking_number || '').trim()
+  if (!trackingNumber) return
+
+  try {
+    await navigator.clipboard.writeText(trackingNumber)
+    copiedTrackingOrderId.value = order.order_id
+    window.setTimeout(() => {
+      if (copiedTrackingOrderId.value === order.order_id) copiedTrackingOrderId.value = null
+    }, 1800)
+  } catch {
+    // กรณีเบราว์เซอร์ไม่อนุญาต Clipboard API ให้ผู้ใช้คัดลอกเองจากกล่องข้อความแทน
+    window.prompt('คัดลอกเลขพัสดุ', trackingNumber)
+  }
+}
+
+async function confirmReceipt(order) {
+  if (String(order.status || '').trim().toLowerCase() !== 'shipped') return
+
+  const confirmed = window.confirm(
+    'ยืนยันว่าได้รับสินค้าเรียบร้อยแล้วใช่ไหม?\nหลังจากยืนยัน สถานะออเดอร์จะเปลี่ยนเป็นนำจ่ายแล้ว',
+  )
+  if (!confirmed) return
+
+  const userId = currentUser.value?.id ?? currentUser.value?.user_id
+  if (!userId) {
+    window.alert('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่')
+    return
+  }
+
+  try {
+    confirmingReceiptOrderId.value = order.order_id
+    const res = await fetch(`${API_BASE_URL}/orders/${order.order_id}/confirm-receipt`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId }),
+    })
+    const data = await res.json().catch(() => null)
+    if (!res.ok) throw new Error(data?.error || 'ยืนยันการรับสินค้าไม่สำเร็จ')
+    await fetchOrders()
+  } catch (err) {
+    window.alert(err.message || 'ยืนยันการรับสินค้าไม่สำเร็จ')
+  } finally {
+    confirmingReceiptOrderId.value = null
+  }
+}
 
 // ── STATUS CONFIG ──
 const statusConfig = {
@@ -122,6 +171,7 @@ const statusConfig = {
   Pending_import_fee: { label: 'รอชำระค่านำเข้า', color: '#7c3aed', bg: '#efe7fc' },
   Ready_to_Ship: { label: 'พร้อมจัดส่ง', color: '#0891b2', bg: '#e5f6f9' },
   Shipped: { label: 'ดำเนินการส่ง', color: '#0891b2', bg: '#e5f6f9' },
+  Delivered: { label: 'ได้รับสินค้าแล้ว', color: '#16a34a', bg: '#e9f9ef' },
   Completed: { label: 'จัดส่งสำเร็จ', color: '#16a34a', bg: '#e9f9ef' },
   Cancelled: { label: 'ยกเลิกแล้ว', color: '#ef4444', bg: '#fdeded' },
   Missing: { label: 'สินค้าขาด', color: '#ef4444', bg: '#fdeded' },
@@ -320,7 +370,7 @@ function getProgressStep(order) {
   const hasPaidImportFee = normalized === 'paid' && Number(order?.import_fee_total) > 0
   const cancelledStates = ['cancelled', 'invalid slip', 'invalid_slip', 'invalid import slip', 'invalid_import_slip']
   if (cancelledStates.includes(normalized)) return 0
-  if (normalized === 'completed') return 5
+  if (['delivered', 'completed'].includes(normalized)) return 5
   if (['shipped', 'ready_to_ship'].includes(normalized)) return 4
   // Paid after the second (import-fee) payment means the order is ready to
   // move into the preparation/shipping stage (the gear icon).
@@ -593,6 +643,38 @@ onMounted(() => {
                 <span class="status-value" :style="{ color: getStatus(order.status).color }">
                   {{ getStatus(order.status).label }}
                 </span>
+              </div>
+              <div
+                v-if="
+                  order.tracking_number ||
+                  order.shipping_provider_name ||
+                  String(order.status || '').trim().toLowerCase() === 'shipped'
+                "
+                class="tracking-summary"
+                @click.stop
+              >
+                <span v-if="order.shipping_provider_name">
+                  ขนส่ง: <strong>{{ order.shipping_provider_name }}</strong>
+                </span>
+                <span v-if="order.tracking_number" class="tracking-summary__number">
+                  เลขพัสดุ: <strong>{{ order.tracking_number }}</strong>
+                  <button
+                    type="button"
+                    class="tracking-copy-btn"
+                    @click.stop="copyTrackingNumber(order)"
+                  >
+                    {{ copiedTrackingOrderId === order.order_id ? 'คัดลอกแล้ว' : 'คัดลอก' }}
+                  </button>
+                </span>
+                <button
+                  v-if="String(order.status || '').trim().toLowerCase() === 'shipped'"
+                  type="button"
+                  class="tracking-confirm-btn"
+                  :disabled="confirmingReceiptOrderId === order.order_id"
+                  @click.stop="confirmReceipt(order)"
+                >
+                  {{ confirmingReceiptOrderId === order.order_id ? 'กำลังบันทึก...' : 'ได้รับสินค้าแล้ว' }}
+                </button>
               </div>
             </div>
 
@@ -1392,6 +1474,58 @@ onMounted(() => {
 .status-value {
   font-size: 0.9rem;
   font-weight: 800;
+}
+.tracking-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  width: 100%;
+  margin-top: 0.15rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid #e8dcf8;
+  border-radius: 10px;
+  background: #fbf8ff;
+  color: #6e5b91;
+  font-size: 0.82rem;
+}
+.tracking-summary strong {
+  color: #432f61;
+  letter-spacing: 0.02em;
+}
+.tracking-summary__number {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.tracking-copy-btn {
+  border: 1px solid #a77adb;
+  border-radius: 7px;
+  padding: 0.2rem 0.55rem;
+  background: #fff;
+  color: #7446a8;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.tracking-copy-btn:hover {
+  background: #f0e5ff;
+}
+.tracking-confirm-btn {
+  border: 1px solid #10b981;
+  border-radius: 7px;
+  padding: 0.2rem 0.65rem;
+  background: #ecfdf5;
+  color: #047857;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+.tracking-confirm-btn:hover:not(:disabled) {
+  background: #d1fae5;
+}
+.tracking-confirm-btn:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 /* ── ITEMS ── */

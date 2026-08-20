@@ -210,6 +210,10 @@
                       formatPrice(product.roundPrice ?? product.basePrice)
                     }}</span>
                   </div>
+                  <div class="price-section china-shipping-summary">
+                    <span class="price-label">ค่าส่งจีน:</span>
+                    <span class="price">{{ Number(product.chinaShippingFeeThb || 0).toFixed(2) }} บาท/ชิ้น</span>
+                  </div>
                   <button class="btn-detail" @click="openProductDetailModal(product)">
                     แก้ไขรายละเอียด
                   </button>
@@ -302,6 +306,18 @@
                       class="price-input-field"
                     />
                   </div>
+                  <div class="price-input">
+                    <label>ค่าส่งจีนต่อชิ้น (บาท):</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      :value="selectedProductChinaShippingFeesThb[product.id] ?? 0"
+                      @input="updateSelectedProductChinaShippingFee(product.id, $event.target.value)"
+                      class="price-input-field"
+                    />
+                    <small>ไม่มีค่าส่งจีนให้กรอก 0</small>
+                  </div>
                 </div>
                 <div class="product-meta">
                   <span class="sku">SKU: {{ product.sku || '-' }}</span>
@@ -369,10 +385,22 @@
                   class="price-input-field"
                 />
               </div>
+              <div class="price-detail-edit">
+                <label>ค่าส่งจีนต่อชิ้น (บาท):</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  :value="productChinaShippingFeeChanges[selectedProduct.id] ?? selectedProduct.chinaShippingFeeThb ?? 0"
+                  @input="updateProductChinaShippingFee(selectedProduct.id, $event.target.value)"
+                  class="price-input-field"
+                />
+                <small>ไม่มีค่าส่งจีนให้กรอก 0</small>
+              </div>
               <button
                 class="btn-save-detail"
                 @click="saveProductPrice(selectedProduct.id)"
-                :disabled="!hasPriceChanged(selectedProduct.id)"
+                :disabled="!hasProductDetailChanged(selectedProduct.id)"
               >
                 บันทึกราคาพรีออเดอร์
               </button>
@@ -399,7 +427,9 @@ const searchQuery = ref('')
 const editingRound = ref(null)
 const selectedProductIds = ref([])
 const selectedProductRoundPrices = reactive({})
+const selectedProductChinaShippingFeesThb = reactive({})
 const productPriceChanges = reactive({})
+const productChinaShippingFeeChanges = reactive({})
 const showProductDetailModal = ref(false)
 const selectedProduct = ref(null)
 
@@ -450,6 +480,8 @@ function normalizeProduct(product) {
     basePrice: product.basePrice ?? product.base_price,
     preorderPrice: product.preorderPrice ?? product.preorder_price,
     roundPrice: product.roundPrice ?? product.round_price,
+    chinaShippingFeeThb:
+      Number(product.chinaShippingFeeThb ?? product.china_shipping_fee_thb) || 0,
     quantityAvailable:
       product.quantityAvailable ?? product.quantity_available ?? product.stock_qty,
     imageUrls: product.imageUrls ?? (product.image_url ? [product.image_url] : []),
@@ -570,6 +602,9 @@ function openAddProductsModal() {
   Object.keys(selectedProductRoundPrices).forEach((key) => {
     delete selectedProductRoundPrices[key]
   })
+  Object.keys(selectedProductChinaShippingFeesThb).forEach((key) => {
+    delete selectedProductChinaShippingFeesThb[key]
+  })
   showAddProductsModal.value = true
 }
 
@@ -578,6 +613,9 @@ function closeAddProductsModal() {
   selectedProductIds.value = []
   Object.keys(selectedProductRoundPrices).forEach((key) => {
     delete selectedProductRoundPrices[key]
+  })
+  Object.keys(selectedProductChinaShippingFeesThb).forEach((key) => {
+    delete selectedProductChinaShippingFeesThb[key]
   })
 }
 
@@ -591,6 +629,9 @@ function closeProductDetailModal() {
   selectedProduct.value = null
   Object.keys(productPriceChanges).forEach((key) => {
     delete productPriceChanges[key]
+  })
+  Object.keys(productChinaShippingFeeChanges).forEach((key) => {
+    delete productChinaShippingFeeChanges[key]
   })
 }
 
@@ -618,9 +659,11 @@ function toggleProductSelection(product) {
   if (index > -1) {
     selectedProductIds.value.splice(index, 1)
     delete selectedProductRoundPrices[productId]
+    delete selectedProductChinaShippingFeesThb[productId]
   } else {
     selectedProductIds.value.push(productId)
     selectedProductRoundPrices[productId] = getSuggestedRoundPrice(product)
+    selectedProductChinaShippingFeesThb[productId] = 0
   }
 }
 
@@ -632,6 +675,15 @@ function updateSelectedProductRoundPrice(productId, price) {
 
   if (selectedProductIds.value.includes(productId)) {
     selectedProductRoundPrices[productId] = value
+  }
+}
+
+function updateSelectedProductChinaShippingFee(productId, fee) {
+  const value = Number(fee)
+  if (Number.isNaN(value) || value < 0) return
+
+  if (selectedProductIds.value.includes(productId)) {
+    selectedProductChinaShippingFeesThb[productId] = value
   }
 }
 
@@ -653,19 +705,29 @@ function updateProductPrice(productId, price) {
   }
 }
 
+function updateProductChinaShippingFee(productId, fee) {
+  const value = Number(fee)
+  if (Number.isNaN(value) || value < 0) return
+  productChinaShippingFeeChanges[productId] = value
+}
+
 async function saveProductPrice(productId) {
   try {
     if (!currentRound.value) return
     const raw = Object.prototype.hasOwnProperty.call(productPriceChanges, productId)
       ? productPriceChanges[productId]
       : currentRound.value.products.find((p) => String(p.id) === String(productId))?.roundPrice
+    const chinaFee = Object.prototype.hasOwnProperty.call(productChinaShippingFeeChanges, productId)
+      ? productChinaShippingFeeChanges[productId]
+      : currentRound.value.products.find((p) => String(p.id) === String(productId))?.chinaShippingFeeThb || 0
 
-    await preorderStore.updateProductPriceInRound(currentRound.value.id, productId, raw)
+    await preorderStore.updateProductPriceInRound(currentRound.value.id, productId, raw, chinaFee)
     await preorderStore.fetchRoundDetail(currentRound.value.id)
     selectedProduct.value =
       currentRound.value.products.find((product) => String(product.id) === String(productId)) ||
       selectedProduct.value
     delete productPriceChanges[productId]
+    delete productChinaShippingFeeChanges[productId]
   } catch (err) {
     alert('การบันทึกราคาพรีออเดอร์ล้มเหลว: ' + err.message)
   }
@@ -680,6 +742,10 @@ function hasPriceChanged(productId) {
     : product.roundPrice
   const right = product.roundPrice
   return Number(left) !== Number(right)
+}
+
+function hasProductDetailChanged(productId) {
+  return hasPriceChanged(productId) || Object.prototype.hasOwnProperty.call(productChinaShippingFeeChanges, productId)
 }
 
 async function saveRound() {
@@ -714,11 +780,15 @@ async function confirmAddProducts() {
         const product = filteredAvailableProducts.value.find((p) => String(p.id) === String(id))
         return getSuggestedRoundPrice(product)
       })
+      const chinaShippingFeesThb = selectedProductIds.value.map(
+        (id) => selectedProductChinaShippingFeesThb[id] ?? 0,
+      )
       await preorderStore.addProductsToRound(
         currentRound.value.id,
         selectedProductIds.value,
         quantities,
         roundPrices,
+        chinaShippingFeesThb,
       )
       closeAddProductsModal()
     }

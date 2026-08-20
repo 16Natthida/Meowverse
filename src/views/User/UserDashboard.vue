@@ -213,7 +213,7 @@ const fetchProducts = async () => {
   try {
     loading.value = true
     error.value = null
-    const res = await fetch(`${API_BASE_URL}/products`)
+    const res = await fetch(`${API_BASE_URL}/products/public`)
     if (!res.ok) throw new Error('Failed to fetch products')
     const data = await res.json()
     const arr = Array.isArray(data) ? data : (data.data ?? data.products ?? [])
@@ -243,6 +243,7 @@ const fetchProducts = async () => {
       price: p.basePrice ?? p.price ?? 0,
       // For preorder items prefer the round-specific price (p.price comes from preorder_round_products subquery)
       preorderPrice: p.price ?? p.preorderPrice ?? p.preorder_price ?? p.basePrice ?? 0,
+      chinaShippingFeeThb: Number(p.chinaShippingFeeThb ?? p.china_shipping_fee_thb) || 0,
       image: p.imageUrls?.[0] ?? p.image_url?.[0] ?? p.imageUrl ?? p.image ?? null,
       categoryId: p.categoryId != null ? Number(p.categoryId) : null,
       categoryName: p.categoryName ?? '',
@@ -557,6 +558,10 @@ function getProductPrice(product) {
     return product.preorderPrice ?? product.price
   }
   return product.price
+}
+
+function getChinaShippingFee(product) {
+  return Number(product?.chinaShippingFeeThb ?? product?.china_shipping_fee_thb ?? 0) || 0
 }
 
 function getTotalStock(product) {
@@ -1247,6 +1252,24 @@ onMounted(async () => {
 
               <div class="detail-price-band">
                 ฿{{ Number(getProductPrice(selectedProduct)).toLocaleString() }}
+              </div>
+
+              <div
+                v-if="getEffectiveItemType(selectedProduct) === 'preorder'"
+                :class="[
+                  'china-shipping-notice',
+                  { 'china-shipping-notice--free': getChinaShippingFee(selectedProduct) <= 0 },
+                ]"
+              >
+                <span class="china-shipping-notice__title">ค่าส่งภายในประเทศจีน</span>
+                <strong v-if="getChinaShippingFee(selectedProduct) > 0">
+                  {{ getChinaShippingFee(selectedProduct).toLocaleString() }} บาท/ชิ้น
+                </strong>
+                <strong v-else>ไม่มีค่าส่งจีน</strong>
+                <small v-if="getChinaShippingFee(selectedProduct) > 0">
+                  รวมในยอดชำระค่าสินค้ารอบแรกของพรีออเดอร์
+                  ({{ (getChinaShippingFee(selectedProduct) * detailQty).toLocaleString() }} บาทตามจำนวน)
+                </small>
               </div>
 
               <div v-if="selectedProduct.flavors?.length" class="detail-flavor-section">
@@ -2519,6 +2542,44 @@ onMounted(async () => {
 
 .detail-flavor-section {
   margin-bottom: 0.85rem;
+}
+
+.china-shipping-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: -0.2rem 0 0.95rem;
+  padding: 0.72rem 0.82rem;
+  border: 1px solid #f2c27d;
+  border-radius: 10px;
+  background: #fff8ed;
+  color: #7a4b18;
+}
+
+.china-shipping-notice__title {
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.china-shipping-notice strong {
+  color: #d86b13;
+  font-size: 0.96rem;
+}
+
+.china-shipping-notice small {
+  color: #9a744b;
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.china-shipping-notice--free {
+  border-color: #b9e5ca;
+  background: #f1fff6;
+  color: #167542;
+}
+
+.china-shipping-notice--free strong {
+  color: #167542;
 }
 
 .detail-option-label {

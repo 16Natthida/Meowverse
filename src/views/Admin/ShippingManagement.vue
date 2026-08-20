@@ -8,15 +8,74 @@ const loading = ref(false)
 const error = ref('')
 const searchQuery = ref('')
 const filterType = ref('all')
+const providers = ref([])
+const drafts = ref({})
+const savingOrderId = ref(null)
 
-// ดึงข้อมูลออเดอร์ที่สถานะเป็น 'Paid' หรือ 'Ready_to_Ship'
+function getCurrentUser() {
+  const raw = localStorage.getItem('meowverse-user') || sessionStorage.getItem('meowverse-user')
+  try {
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function authHeaders(extra = {}) {
+  const user = getCurrentUser()
+  return {
+    ...extra,
+    'x-user-role': String(user?.role || '').toLowerCase(),
+    'x-user-id': String(user?.user_id || user?.id || ''),
+  }
+}
+
+const activeProviders = computed(() =>
+  providers.value.filter((provider) => Number(provider.is_active) === 1),
+)
+
+async function fetchProviders() {
+  const res = await fetch(`${API_BASE}/admin/shipping-providers`, { headers: authHeaders() })
+  if (!res.ok) throw new Error('โหลดรายชื่อบริษัทขนส่งไม่สำเร็จ')
+  providers.value = await res.json()
+}
+
+function normalizeCarrier(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9ก-๙]/g, '')
+}
+
+function findProviderId(order) {
+  const carrier = normalizeCarrier(order.Shipping_Carrier || order.provider_name)
+  if (!carrier) return ''
+
+  const matched = providers.value.find((provider) => {
+    const names = [provider.provider_code, provider.provider_name].map(normalizeCarrier)
+    return names.some((name) => name && (name === carrier || name.includes(carrier) || carrier.includes(name)))
+  })
+  return matched?.provider_id || ''
+}
+
+// ดึงข้อมูลออเดอร์ที่รอจัดส่งหรือจัดส่งแล้ว
 async function fetchShippingOrders() {
   loading.value = true
   error.value = ''
   try {
-    const res = await fetch(`${API_BASE}/admin/shipping-orders`)
-    if (!res.ok) throw new Error('โหลดข้อมูลการจัดส่งไม่สำเร็จ')
-    orders.value = await res.json()
+    const [ordersRes] = await Promise.all([
+      fetch(`${API_BASE}/admin/shipping-orders`, { headers: authHeaders() }),
+      fetchProviders(),
+    ])
+    if (!ordersRes.ok) throw new Error('โหลดข้อมูลการจัดส่งไม่สำเร็จ')
+    orders.value = await ordersRes.json()
+    orders.value.forEach((order) => {
+      drafts.value[order.order_id] = {
+        provider_id: order.provider_id || findProviderId(order),
+        tracking_number: order.tracking_number || '',
+        shipping_status: order.shipping_status || 'shipped',
+      }
+    })
   } catch (err) {
     error.value = err.message
   } finally {
@@ -24,25 +83,57 @@ async function fetchShippingOrders() {
   }
 }
 
-// ฟังก์ชันเปลี่ยนสถานะเป็น Ready_to_Ship
-async function updateToReady(orderId) {
-  if (!confirm(`ยืนยันการเปลี่ยนสถานะออเดอร์ #${orderId} เป็นพร้อมส่ง?`)) return
+function getDraft(order) {
+  if (!drafts.value[order.order_id]) {
+    drafts.value[order.order_id] = {
+      provider_id: order.provider_id || findProviderId(order),
+      tracking_number: order.tracking_number || '',
+      shipping_status: order.shipping_status || 'shipped',
+    }
+  }
+  return drafts.value[order.order_id]
+}
+
+async function saveShipment(order) {
+  const draft = getDraft(order)
+  if (!draft.provider_id || !draft.tracking_number.trim()) {
+    alert('กรุณาเลือกบริษัทขนส่งและกรอกเลขพัสดุ')
+    return
+  }
+
+  savingOrderId.value = order.order_id
 
   try {
-    const res = await fetch(`${API_BASE}/admin/orders/${orderId}/status`, {
-      method: 'PATCH', // หรือ PUT ตามที่ Backend กำหนด
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'Ready_to_Ship' })
+    const res = await fetch(`${API_BASE}/admin/orders/${order.order_id}/shipment`, {
+      method: 'PATCH',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        provider_id: Number(draft.provider_id),
+        tracking_number: draft.tracking_number.trim(),
+        shipping_status: draft.shipping_status || 'shipped',
+      }),
     })
 
-    if (!res.ok) throw new Error('ไม่สามารถอัปเดตสถานะได้')
-    
-    alert('อัปเดตสถานะเรียบร้อยแล้ว')
-    // ดึงข้อมูลใหม่เพื่อให้รายการที่อัปเดตแล้วหายไปจากหน้า 'เตรียมจัดส่ง' (ถ้า API กรองเฉพาะสถานะ Paid/Ready)
-    await fetchShippingOrders() 
+    const body = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(body.error || 'ไม่สามารถบันทึกข้อมูลการจัดส่งได้')
+
+    alert('บันทึกข้อมูลการจัดส่งเรียบร้อยแล้ว')
+    await fetchShippingOrders()
   } catch (err) {
     alert(err.message)
+  } finally {
+    savingOrderId.value = null
   }
+}
+
+function statusLabel(status) {
+  const labels = {
+    Paid: 'ชำระเงินแล้ว',
+    Ready_to_Ship: 'พร้อมจัดส่ง',
+    Shipped: 'จัดส่งแล้ว',
+    Delivered: 'นำจ่ายแล้ว',
+  }
+  return labels[status] || status
 }
 
 // ฟังก์ชันจัดรูปแบบที่อยู่จาก SQL (แปลง \n เป็น <br>)
@@ -110,7 +201,7 @@ onMounted(fetchShippingOrders)
               <th>ผู้รับ</th>
               <th>รายการสินค้า</th>
               <th>ข้อมูลการจัดส่ง</th>
-              <th>ขนส่ง</th>
+              <th>บริษัทขนส่ง / เลขพัสดุ</th>
               <th>ยอดรวม</th>
               <th>จัดการ</th>
             </tr>
@@ -129,8 +220,17 @@ onMounted(fetchShippingOrders)
               </td>
 
               <td>
-                <span :class="['status', order.status === 'Ready_to_Ship' ? 'status--ready' : 'status--paid']">
-                  {{ order.status === 'Ready_to_Ship' ? 'พร้อมจัดส่ง' : 'ชำระเงินแล้ว' }}
+                <span
+                  :class="[
+                    'status',
+                    order.status === 'Ready_to_Ship'
+                      ? 'status--ready'
+                      : order.status === 'Shipped'
+                        ? 'status--shipped'
+                        : 'status--paid',
+                  ]"
+                >
+                  {{ statusLabel(order.status) }}
                 </span>
               </td>
 
@@ -159,10 +259,26 @@ onMounted(fetchShippingOrders)
               </td>
 
               <td>
-                <span class="carrier-badge" v-if="order.Shipping_Carrier">
-                  {{ order.Shipping_Carrier }}
-                </span>
-                <span v-else class="no-data">ยังไม่ระบุ</span>
+                <div class="shipment-editor">
+                  <select v-model="getDraft(order).provider_id">
+                    <option value="">-- เลือกบริษัทขนส่ง --</option>
+                    <option
+                      v-for="provider in activeProviders"
+                      :key="provider.provider_id"
+                      :value="provider.provider_id"
+                    >
+                      {{ provider.provider_name }}
+                    </option>
+                  </select>
+                  <input
+                    v-model="getDraft(order).tracking_number"
+                    placeholder="เลขพัสดุ"
+                  />
+                  <select v-model="getDraft(order).shipping_status">
+                    <option value="shipped">จัดส่งแล้ว</option>
+                    <option value="delivered">นำจ่ายแล้ว</option>
+                  </select>
+                </div>
               </td>
 
               <td class="price-text">
@@ -170,16 +286,14 @@ onMounted(fetchShippingOrders)
               </td>
 
               <td>
-                <button 
-                  v-if="order.status !== 'Ready_to_Ship'"
-                  class="btn-action btn-action--ready" 
-                  @click="updateToReady(order.order_id)"
+                <button
+                  class="btn-action btn-action--ready"
+                  :disabled="savingOrderId === order.order_id"
+                  @click="saveShipment(order)"
                 >
-                  📦 พร้อมจัดส่ง
+                  {{ savingOrderId === order.order_id ? 'กำลังบันทึก...' : 'บันทึกการจัดส่ง' }}
                 </button>
-                <span v-else style="color: #10b981; font-weight: bold; font-size: 0.8rem;">
-                  ✅ ดำเนินการแล้ว
-                </span>
+                <small class="shipment-status">{{ statusLabel(order.status) }}</small>
               </td>
             </tr>
           </tbody>
@@ -287,6 +401,11 @@ td { padding: 1rem; border-bottom: 1px solid #f3e8ff; font-size: 0.9rem; vertica
   color: #059669; 
   border: 1px solid #10b981;
 }
+.status--shipped {
+  background: #eff6ff;
+  color: #2563eb;
+  border: 1px solid #60a5fa;
+}
 
 
 .status {
@@ -321,6 +440,25 @@ td { padding: 1rem; border-bottom: 1px solid #f3e8ff; font-size: 0.9rem; vertica
   padding: 0.6rem 0.9rem;
   background: #faf5ff;
   color: #432f61;
+}
+.shipment-editor input,
+.shipment-editor select {
+  min-width: 0;
+  border: 1px solid #e5d5f3;
+  border-radius: 10px;
+  padding: 0.55rem 0.65rem;
+  background: #fff;
+  color: var(--text-main);
+}
+.shipment-editor {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 170px;
+}
+.shipment-status {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--text-muted);
 }
 .notes-text {
   margin: 0.55rem 0 0;

@@ -36,6 +36,8 @@ const DEFAULT_BANNER_IMAGE_URL = '/images/cat.jpg'
 const DEFAULT_BRAND_LOGO_URL = ''
 const DEFAULT_THEME_PRIMARY = '#b673ee'
 const DEFAULT_THEME_ACCENT = '#ff93b8'
+const PREORDER_SHIPPING_FEE = 65
+const READY_SHIPPING_FEE = 49
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -243,11 +245,13 @@ async function createPreorderOrdersForClosedRound(connection, roundId) {
          NULLIF(p.preorder_price, 0),
          NULLIF(p.base_price, 0)
        ) AS price,
+       COALESCE(prp.china_shipping_fee_thb, 0) AS china_shipping_fee_thb,
        p.prod_name AS name
      FROM cart c
      LEFT JOIN products p ON p.prod_id = c.prod_id
      LEFT JOIN preorder_round_products prp
        ON prp.round_id = c.preorder_round_id AND prp.prod_id = c.prod_id
+     LEFT JOIN preorder_rounds r ON r.round_id = c.preorder_round_id
      WHERE c.item_type = 'preorder'
        AND c.preorder_round_id = ?
      ORDER BY c.user_id, c.cart_id`,
@@ -268,23 +272,41 @@ async function createPreorderOrdersForClosedRound(connection, roundId) {
 
   for (const [userId, items] of byUser.entries()) {
     try {
-      const totalAmount = items.reduce(
+      const subtotalAmount = items.reduce(
         (sum, item) => sum + (Number(item.price) || 0) * Number(item.qty || 0),
         0,
       )
+      const chinaShippingTotalThb = items.reduce(
+        (sum, item) => sum + (Number(item.china_shipping_fee_thb) || 0) * Number(item.qty || 0),
+        0,
+      )
+      const shippingFee = PREORDER_SHIPPING_FEE
+      // Round 1 collects the product price plus China domestic shipping.
+      // The Thai flat-rate shipping fee remains reserved for round 2.
+      const totalAmount = subtotalAmount + chinaShippingTotalThb
 
       const deadline = new Date(Date.now() + PREORDER_PAYMENT_WINDOW_MS)
       const [orderResult] = await connection.query(
-        `INSERT INTO orders (user_id, total_amount, status, Order_type, deadline) VALUES (?, ?, 'Pending', 'Preorder', ?)`,
-        [userId, totalAmount, deadline],
+        `INSERT INTO orders
+           (user_id, total_amount, shipping_fee, status, Order_type, deadline,
+            china_shipping_total_thb)
+         VALUES (?, ?, ?, 'Pending', 'Preorder', ?, ?)`,
+        [
+          userId,
+          totalAmount,
+          shippingFee,
+          deadline,
+          chinaShippingTotalThb,
+        ],
       )
       const orderId = orderResult.insertId
 
       for (const item of items) {
         await connection.query(
           `INSERT INTO order_details
-             (order_id, prod_id, flavor, Price, qty, received_qty, arrival_status, Import_fee, item_type, preorder_round_id)
-           VALUES (?, ?, ?, ?, ?, 0, 'Pending', 0, 'preorder', ?)`,
+             (order_id, prod_id, flavor, Price, qty, received_qty, arrival_status, Import_fee,
+              item_type, preorder_round_id, china_shipping_fee_thb)
+           VALUES (?, ?, ?, ?, ?, 0, 'Pending', 0, 'preorder', ?, ?)`,
           [
             orderId,
             item.prod_id,
@@ -292,6 +314,7 @@ async function createPreorderOrdersForClosedRound(connection, roundId) {
             item.price,
             item.qty,
             item.preorder_round_id,
+            Number(item.china_shipping_fee_thb) || 0,
           ],
         )
 
@@ -784,6 +807,7 @@ function mapProductRow(row, imageUrlMap) {
     flavorStock: flavorStockMap,
     basePrice: Number(row.basePrice) || 0,
     preorderPrice: Number(row.preorderPrice) || 0,
+    chinaShippingFeeThb: Number(row.chinaShippingFeeThb) || 0,
     price: Number(row.price ?? row.basePrice) || 0,
     preorderRoundId: row.preorderRoundId ? Number(row.preorderRoundId) : null,
     description: row.description || '',
@@ -915,6 +939,17 @@ async function queryProductsByIds(productIds, connection = pool) {
           ORDER BY r.start_date DESC, r.round_id DESC
           LIMIT 1
         ) AS price,
+        (
+          SELECT prp.china_shipping_fee_thb
+          FROM preorder_round_products prp
+          JOIN preorder_rounds r ON r.round_id = prp.round_id
+          WHERE prp.prod_id = p.prod_id
+            AND LOWER(r.status) IN ('active', 'open', 'scheduled')
+            AND r.start_date <= NOW()
+            AND r.end_date >= NOW()
+          ORDER BY r.start_date DESC, r.round_id DESC
+          LIMIT 1
+        ) AS chinaShippingFeeThb,
         (
           SELECT prp.round_id
           FROM preorder_round_products prp
@@ -1190,6 +1225,21 @@ async function ensureAdminSchema() {
   `)
 
   await pool.query(`
+    ALTER TABLE preorder_round_products
+    ADD COLUMN IF NOT EXISTS china_shipping_fee_thb DECIMAL(10,2) NOT NULL DEFAULT 0.00
+  `)
+
+  await pool.query(`
+    ALTER TABLE orders
+    ADD COLUMN IF NOT EXISTS china_shipping_total_thb DECIMAL(10,2) NOT NULL DEFAULT 0.00
+  `)
+
+  await pool.query(`
+    ALTER TABLE order_details
+    ADD COLUMN IF NOT EXISTS china_shipping_fee_thb DECIMAL(10,2) NOT NULL DEFAULT 0.00
+  `)
+
+  await pool.query(`
     ALTER TABLE cart
     ADD COLUMN IF NOT EXISTS item_type VARCHAR(20) DEFAULT NULL
   `)
@@ -1251,6 +1301,27 @@ async function ensureAdminSchema() {
 
   await pool.query(`
     ALTER TABLE orders
+    ADD COLUMN IF NOT EXISTS shipping_fee DECIMAL(10,2) NOT NULL DEFAULT 0
+  `)
+
+  // Import_fee is stored as the allocated line total after quantity-based splitting.
+  // Rebuild round-two totals so older orders use the same source of truth.
+  await pool.query(`
+    UPDATE orders o
+    SET import_fee_total = (
+      SELECT COALESCE(
+        SUM(COALESCE(od.Import_fee, 0)),
+        0
+      )
+      FROM order_details od
+      WHERE od.order_id = o.order_id
+        AND od.item_type = 'preorder'
+    )
+    WHERE LOWER(o.Order_type) = 'preorder'
+  `)
+
+  await pool.query(`
+    ALTER TABLE orders
     ADD COLUMN IF NOT EXISTS split_parent_order_id INT NULL
   `)
 
@@ -1265,6 +1336,8 @@ async function ensureAdminSchema() {
       'Pending_import_fee',
       'Import_slip_submitted',
       'Ready_to_Ship',
+      'Shipped',
+      'Delivered',
       'Partially_Received',
       'Missing',
       'Delayed',
@@ -1821,6 +1894,39 @@ app.get('/api/products/public', async (req, res) => {
         p.stock_qty AS stock,
         p.base_price AS basePrice,
         p.preorder_price AS preorderPrice,
+        (
+          SELECT prp.round_price
+          FROM preorder_round_products prp
+          JOIN preorder_rounds r ON r.round_id = prp.round_id
+          WHERE prp.prod_id = p.prod_id
+            AND LOWER(r.status) IN ('active', 'open', 'scheduled')
+            AND r.start_date <= NOW()
+            AND r.end_date >= NOW()
+          ORDER BY r.start_date DESC, r.round_id DESC
+          LIMIT 1
+        ) AS price,
+        (
+          SELECT prp.round_id
+          FROM preorder_round_products prp
+          JOIN preorder_rounds r ON r.round_id = prp.round_id
+          WHERE prp.prod_id = p.prod_id
+            AND LOWER(r.status) IN ('active', 'open', 'scheduled')
+            AND r.start_date <= NOW()
+            AND r.end_date >= NOW()
+          ORDER BY r.start_date DESC, r.round_id DESC
+          LIMIT 1
+        ) AS preorderRoundId,
+        COALESCE((
+          SELECT prp.china_shipping_fee_thb
+          FROM preorder_round_products prp
+          JOIN preorder_rounds r ON r.round_id = prp.round_id
+          WHERE prp.prod_id = p.prod_id
+            AND LOWER(r.status) IN ('active', 'open', 'scheduled')
+            AND r.start_date <= NOW()
+            AND r.end_date >= NOW()
+          ORDER BY r.end_date DESC, r.round_id DESC
+          LIMIT 1
+        ), 0) AS chinaShippingFeeThb,
         p.preorder_enabled AS preorderEnabled,
         p.ready_to_ship_enabled AS readyToShipEnabled
       FROM products p
@@ -1871,6 +1977,9 @@ app.get('/api/products/public', async (req, res) => {
       stock: Number(row.stock) || 0,
       basePrice: Number(row.basePrice) || 0,
       preorderPrice: Number(row.preorderPrice) || 0,
+      price: Number(row.price ?? row.basePrice) || 0,
+      preorderRoundId: row.preorderRoundId ? Number(row.preorderRoundId) : null,
+      chinaShippingFeeThb: Number(row.chinaShippingFeeThb) || 0,
       imageUrls: imageUrlMap.get(row.id) || [],
       preorderEnabled: Boolean(row.preorderEnabled),
       readyToShipEnabled: Boolean(row.readyToShipEnabled),
@@ -1975,6 +2084,17 @@ app.get('/api/products/preorder', async (req, res) => {
         p.stock_qty AS stock,
         p.base_price AS basePrice,
         p.preorder_price AS preorderPrice,
+        COALESCE((
+          SELECT prp.china_shipping_fee_thb
+          FROM preorder_round_products prp
+          JOIN preorder_rounds r ON r.round_id = prp.round_id
+          WHERE prp.prod_id = p.prod_id
+            AND LOWER(r.status) IN ('active', 'open', 'scheduled')
+            AND r.start_date <= NOW()
+            AND r.end_date >= NOW()
+          ORDER BY r.end_date DESC, r.round_id DESC
+          LIMIT 1
+        ), 0) AS chinaShippingFeeThb,
         p.preorder_enabled AS preorderEnabled,
         p.ready_to_ship_enabled AS readyToShipEnabled
       FROM products p
@@ -2025,6 +2145,7 @@ app.get('/api/products/preorder', async (req, res) => {
       stock: Number(row.stock) || 0,
       basePrice: Number(row.basePrice) || 0,
       preorderPrice: Number(row.preorderPrice) || 0,
+      chinaShippingFeeThb: Number(row.chinaShippingFeeThb) || 0,
       imageUrls: imageUrlMap.get(row.id) || [],
       preorderEnabled: Boolean(row.preorderEnabled),
       readyToShipEnabled: Boolean(row.readyToShipEnabled),
@@ -2051,6 +2172,7 @@ app.get('/api/products/preorder', async (req, res) => {
         p.base_price AS basePrice,
         p.preorder_price AS preorderPrice,
         COALESCE(prp.round_price, p.base_price) AS price,
+        prp.china_shipping_fee_thb AS chinaShippingFeeThb,
         p.preorder_enabled AS preorderEnabled,
         p.ready_to_ship_enabled AS readyToShipEnabled
       FROM preorder_round_products prp
@@ -2103,6 +2225,7 @@ app.get('/api/products/preorder', async (req, res) => {
       basePrice: Number(row.basePrice) || 0,
       preorderPrice: Number(row.preorderPrice) || 0,
       price: Number(row.price) || Number(row.basePrice) || 0,
+      chinaShippingFeeThb: Number(row.chinaShippingFeeThb) || 0,
       imageUrls: imageUrlMap.get(row.id) || [],
       preorderEnabled: Boolean(row.preorderEnabled),
       readyToShipEnabled: Boolean(row.readyToShipEnabled),
@@ -2356,10 +2479,12 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
         COALESCE(prp.quantity_sold, 0) AS quantitySold,
         (prp.quantity_available - COALESCE(prp.quantity_sold, 0)) AS quantityRemaining,
         prp.round_price AS roundPrice,
+        prp.china_shipping_fee_thb AS chinaShippingFeeThb,
         p.preorder_enabled AS preorderEnabled,
         p.ready_to_ship_enabled AS readyToShipEnabled
       FROM preorder_round_products prp
       JOIN products p ON p.prod_id = prp.prod_id
+      JOIN preorder_rounds r ON r.round_id = prp.round_id
       LEFT JOIN categories c ON c.cat_id = p.cat_id
       WHERE prp.round_id = ?
       ORDER BY p.prod_id DESC
@@ -2378,10 +2503,12 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
         0 AS quantitySold,
         prp.quantity_available AS quantityRemaining,
         prp.round_price AS roundPrice,
+        prp.china_shipping_fee_thb AS chinaShippingFeeThb,
         p.preorder_enabled AS preorderEnabled,
         p.ready_to_ship_enabled AS readyToShipEnabled
       FROM preorder_round_products prp
       JOIN products p ON p.prod_id = prp.prod_id
+      JOIN preorder_rounds r ON r.round_id = prp.round_id
       LEFT JOIN categories c ON c.cat_id = p.cat_id
       WHERE prp.round_id = ?
       ORDER BY p.prod_id DESC
@@ -2423,6 +2550,7 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
       quantitySold: Number(row.quantitySold) || 0,
       quantityRemaining: Number(row.quantityRemaining) || 0,
       roundPrice: row.roundPrice ? Number(row.roundPrice) : Number(row.basePrice) || 0,
+      chinaShippingFeeThb: Number(row.chinaShippingFeeThb) || 0,
       imageUrls: imageUrlMap.get(row.id) || [],
       preorderEnabled: Boolean(row.preorderEnabled),
       readyToShipEnabled: Boolean(row.readyToShipEnabled),
@@ -2592,7 +2720,7 @@ app.delete('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (r
 // Add product to preorder round
 app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, async (req, res) => {
   const roundId = Number(req.params.id)
-  const { productIds, quantities, roundPrices } = req.body || {}
+  const { productIds, quantities, roundPrices, chinaShippingFeesThb } = req.body || {}
 
   if (!Array.isArray(productIds) || productIds.length === 0) {
     res.status(400).json({ message: 'productIds array is required' })
@@ -2641,18 +2769,29 @@ app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, a
         roundPrices && roundPrices[index] !== undefined && roundPrices[index] !== null
           ? Number(roundPrices[index])
           : (preorderPriceMap.get(String(pid)) ?? productPriceMap.get(String(pid)) ?? 0)
+      const chinaShippingFeeValue =
+        chinaShippingFeesThb && chinaShippingFeesThb[index] !== undefined && chinaShippingFeesThb[index] !== null
+          ? Number(chinaShippingFeesThb[index])
+          : 0
+
+      if (!Number.isFinite(chinaShippingFeeValue) || chinaShippingFeeValue < 0) {
+        res.status(400).json({ message: 'chinaShippingFeeThb must be a non-negative number' })
+        return
+      }
 
       await pool.query(
         `
-        INSERT INTO preorder_round_products (round_id, prod_id, quantity_available, round_price)
-        SELECT ?, ?, ?, ?
+        INSERT INTO preorder_round_products
+          (round_id, prod_id, quantity_available, round_price, china_shipping_fee_thb)
+        SELECT ?, ?, ?, ?, ?
         FROM preorder_rounds
         WHERE round_id = ?
         ON DUPLICATE KEY UPDATE
           quantity_available = VALUES(quantity_available),
-          round_price = COALESCE(VALUES(round_price), round_price)
+          round_price = COALESCE(VALUES(round_price), round_price),
+          china_shipping_fee_thb = VALUES(china_shipping_fee_thb)
       `,
-        [resolvedRoundId, Number(pid), quantityValue, roundPriceValue, resolvedRoundId],
+        [resolvedRoundId, Number(pid), quantityValue, roundPriceValue, chinaShippingFeeValue, resolvedRoundId],
       )
     }
 
@@ -2701,10 +2840,11 @@ app.put(
   async (req, res) => {
     const roundId = Number(req.params.id)
     const productId = Number(req.params.productId)
-    const { quantity, price } = req.body || {}
+    const { quantity, price, roundPrice, chinaShippingFeeThb } = req.body || {}
+    const resolvedPrice = roundPrice !== undefined ? roundPrice : price
 
-    if (quantity === undefined && price === undefined) {
-      res.status(400).json({ message: 'quantity and/or price must be provided' })
+    if (quantity === undefined && resolvedPrice === undefined && chinaShippingFeeThb === undefined) {
+      res.status(400).json({ message: 'quantity, price, or chinaShippingFeeThb must be provided' })
       return
     }
 
@@ -2713,8 +2853,13 @@ app.put(
       return
     }
 
-    if (price !== undefined && price !== null && Number(price) < 0) {
+    if (resolvedPrice !== undefined && resolvedPrice !== null && Number(resolvedPrice) < 0) {
       res.status(400).json({ message: 'price must be null or a non-negative number' })
+      return
+    }
+
+    if (chinaShippingFeeThb !== undefined && chinaShippingFeeThb !== null && Number(chinaShippingFeeThb) < 0) {
+      res.status(400).json({ message: 'chinaShippingFeeThb must be null or a non-negative number' })
       return
     }
 
@@ -2727,9 +2872,14 @@ app.put(
         values.push(quantity === null ? null : Number(quantity))
       }
 
-      if (price !== undefined) {
+      if (resolvedPrice !== undefined) {
         updateFields.push('round_price = ?')
-        values.push(price === null ? null : Number(price))
+        values.push(resolvedPrice === null ? null : Number(resolvedPrice))
+      }
+
+      if (chinaShippingFeeThb !== undefined) {
+        updateFields.push('china_shipping_fee_thb = ?')
+        values.push(chinaShippingFeeThb === null ? 0 : Number(chinaShippingFeeThb))
       }
 
       const [result] = await pool.query(
@@ -2939,7 +3089,7 @@ app.put(
         const key = String(item.key || `${item.prod_id}|${String(item.flavor || '').trim()}`)
           .trim()
           .toLowerCase()
-        const feeValue = Number(item.import_fee) || 0
+        const feeValue = Math.max(Number(item.import_fee) || 0, 0)
         feeByKey.set(key, Number.isNaN(feeValue) ? 0 : feeValue)
       }
 
@@ -2958,8 +3108,7 @@ app.put(
         [roundId],
       )
 
-      // คำนวณจำนวนที่สั่งรวมต่อ variant key (prod_id|flavor)
-      // ค่านำเข้าที่แอดมินกรอกเป็นยอดรวมของสินค้านั้นทั้งรอบ
+      // Admin-entered import fees are totals for each product/flavor/status key.
       const totalOrderedQtyByKey = {}
       for (const row of detailRows) {
         const status = getImportFeeDisplayStatus(row)
@@ -2993,16 +3142,13 @@ app.put(
 
         for (const row of rows) {
           const orderedQty = Math.max(Number(row.qty) || 0, 0)
-          const isEligible = true
           let detailImportFee = 0
 
           orderTotals[row.order_id] =
             (orderTotals[row.order_id] || 0) - Number(row.current_import_fee || 0)
 
-          if (isEligible && totalOrderedQty > 0) {
-            // แบ่งจากจำนวนที่สั่งทั้งหมด ไม่ใช่จำนวนที่รับจริง
+          if (totalOrderedQty > 0) {
             detailImportFee = importFeeTotalForKey * (orderedQty / totalOrderedQty)
-            // ปัดเศษและเก็บเศษสตางค์ไว้ที่รายการสุดท้ายที่ได้รับครบ
             const isLastEligible = eligibleRows[eligibleRows.length - 1] === row
             if (!isLastEligible) {
               detailImportFee = Math.round(detailImportFee * 100) / 100
@@ -3010,8 +3156,11 @@ app.put(
             }
           }
 
-          if (isEligible && eligibleRows[eligibleRows.length - 1] === row) {
-            detailImportFee = Math.max(Math.round((importFeeTotalForKey - allocatedFee) * 100) / 100, 0)
+          if (eligibleRows[eligibleRows.length - 1] === row) {
+            detailImportFee = Math.max(
+              Math.round((importFeeTotalForKey - allocatedFee) * 100) / 100,
+              0,
+            )
           }
 
           await connection.query('UPDATE order_details SET Import_fee = ? WHERE detail_id = ?', [
@@ -3025,7 +3174,8 @@ app.put(
 
       // Keep the legacy round-level fee column equal to all status segments combined.
       const [roundProductFees] = await connection.query(
-        `SELECT prod_id, COALESCE(SUM(Import_fee), 0) AS import_fee
+        `SELECT prod_id,
+                COALESCE(SUM(Import_fee), 0) AS import_fee
          FROM order_details
          WHERE preorder_round_id = ? AND item_type = 'preorder'
          GROUP BY prod_id`,
@@ -3113,7 +3263,7 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
 
     // 1. ตรวจสอบข้อมูล Order เดิมเพื่อยอดเงินและประเภท พร้อมสถานะ
     const [orderRows] = await connection.query(
-      `SELECT total_amount, import_fee_total, Order_type, status,
+      `SELECT total_amount, shipping_fee, import_fee_total, Order_type, status,
               EXISTS(
                 SELECT 1
                 FROM order_details od_round
@@ -3131,6 +3281,15 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     }
 
     const orderData = orderRows[0]
+    const normalizedOrderType = String(orderData.Order_type || '').trim().toLowerCase()
+    const effectiveShippingFee =
+      Number(orderData.shipping_fee) > 0
+        ? Number(orderData.shipping_fee)
+        : normalizedOrderType === 'ready'
+          ? READY_SHIPPING_FEE
+          : ['preorder', 'pending_import'].includes(normalizedOrderType)
+            ? PREORDER_SHIPPING_FEE
+            : 0
     const importFeeStatuses = [
       'Wait_for_Import_Fee',
       'Pending_import_fee',
@@ -3156,11 +3315,12 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     let paymentType, paymentAmount
     if (orderData.Order_type === 'Ready') {
       paymentType = 'Ready pay'
-      paymentAmount = orderData.total_amount
+      paymentAmount = Number(orderData.total_amount) + (Number(orderData.shipping_fee) > 0 ? 0 : effectiveShippingFee)
     } else if (isPreorderImportFeeRound) {
       // Round 2: user is paying the import fee
       paymentType = 'Import_Fee'
-      paymentAmount = Number(orderData.import_fee_total) || 0
+      paymentAmount =
+        (Number(orderData.import_fee_total) || 0) + effectiveShippingFee
     } else if (orderData.Order_type === 'Preorder') {
       // Round 1: user is paying the initial order amount
       paymentType = 'Order_fee'
@@ -3168,9 +3328,16 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     } else if (orderData.Order_type === 'Pending_import') {
       // กรณี retry รอบ 2
       paymentType = 'Import_Fee'
-      paymentAmount = Number(orderData.import_fee_total) || 0
+      paymentAmount =
+        (Number(orderData.import_fee_total) || 0) + effectiveShippingFee
     } else {
       return res.status(400).json({ error: 'ไม่รองรับประเภทออเดอร์นี้' })
+    }
+    if (effectiveShippingFee > 0 && Number(orderData.shipping_fee) <= 0) {
+      await connection.query('UPDATE orders SET shipping_fee = ? WHERE order_id = ?', [
+        effectiveShippingFee,
+        order_id,
+      ])
     }
     await connection.query(
       `INSERT INTO payment (order_id, type, amount, slip_img, Slip_date, status, payment_method)
@@ -3188,16 +3355,20 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     }
 
     // 3. บันทึกที่อยู่ลงตาราง shipping
+    const safeShippingCarrier = ['preorder', 'pending_import'].includes(normalizedOrderType)
+      ? null
+      : shipping_carrier || null
+
     await connection.query(
-        `INSERT INTO shipping (order_id, name, phone, address, notes, Shipping_Carrier) VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          order_id,
-          shipping_name || null,
-          shipping_phone || null,
-          shipping_address || null,
-          notes || null,
-          shipping_carrier || null,
-        ],
+      `INSERT INTO shipping (order_id, name, phone, address, notes, Shipping_Carrier) VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        order_id,
+        shipping_name || null,
+        shipping_phone || null,
+        shipping_address || null,
+        notes || null,
+        safeShippingCarrier,
+      ],
     )
 
     // 4-8. เฉพาะรอบแรกเท่านั้น (orderData.status !== 'Wait_for_Import_Fee' && orderData.status !== 'Pending_import_fee')
@@ -3276,7 +3447,7 @@ app.post('/api/orders/:order_id/shipping', async (req, res) => {
     await connection.beginTransaction()
 
     const [orderRows] = await connection.query(
-      'SELECT order_id, status, import_fee_total FROM orders WHERE order_id = ?',
+      'SELECT order_id, status, import_fee_total, Order_type FROM orders WHERE order_id = ?',
       [order_id],
     )
     const shippingLockedStatuses = [
@@ -3284,6 +3455,8 @@ app.post('/api/orders/:order_id/shipping', async (req, res) => {
       'Import_slip_submitted',
       'Paid',
       'Ready_to_Ship',
+      'Shipped',
+      'Delivered',
       'Cancelled',
     ]
     const shippingOrder = orderRows[0]
@@ -3298,6 +3471,11 @@ app.post('/api/orders/:order_id/shipping', async (req, res) => {
       throw new Error('ไม่พบข้อมูลออเดอร์')
     }
 
+    const normalizedOrderType = String(shippingOrder?.Order_type || '').trim().toLowerCase()
+    const safeShippingCarrier = ['preorder', 'pending_import'].includes(normalizedOrderType)
+      ? null
+      : shipping_carrier || null
+
     await connection.query(
       `INSERT INTO shipping (order_id, name, phone, address, notes, Shipping_Carrier)
        VALUES (?, ?, ?, ?, ?, ?)`,
@@ -3307,7 +3485,7 @@ app.post('/api/orders/:order_id/shipping', async (req, res) => {
         shipping_phone || null,
         shipping_address || null,
         notes || null,
-        shipping_carrier || null,
+          safeShippingCarrier,
       ],
     )
 
@@ -4049,6 +4227,8 @@ app.post(
         `SELECT
            od.order_id,
            MAX(o.status) AS current_status,
+           MAX(COALESCE(o.shipping_fee, 0)) AS shipping_fee,
+           MAX(CASE WHEN LOWER(o.Order_type) = 'ready' THEN 1 ELSE 0 END) AS is_ready_order,
            COALESCE(SUM(od.qty * od.Price), 0) AS ordered_amount,
            COALESCE(SUM(COALESCE(od.received_qty, 0) * od.Price), 0) AS received_amount,
            COALESCE(SUM((od.qty - COALESCE(od.received_qty, 0)) * od.Price), 0) AS refund_amount,
@@ -4067,7 +4247,11 @@ app.post(
         await connection.query(
           'UPDATE orders SET total_amount = ? WHERE order_id = ?',
           [
-            Math.max(Number(row.ordered_amount) - Number(row.refund_amount) + 0, 0),
+            Math.max(
+              Number(row.ordered_amount) - Number(row.refund_amount) +
+                (Number(row.is_ready_order) === 1 ? Number(row.shipping_fee || 0) : 0),
+              0,
+            ),
             row.order_id,
           ],
         )
@@ -4412,7 +4596,9 @@ app.patch(
       const [detailRows] = await connection.query(
         `SELECT od.detail_id, od.order_id, od.qty AS ordered_qty, COALESCE(od.received_qty, 0) AS received_qty,
                 od.Price AS unit_price, COALESCE(od.arrival_status, 'Pending') AS arrival_status,
-                o.status AS order_status
+                o.status AS order_status,
+                o.shipping_fee AS shipping_fee,
+                CASE WHEN LOWER(o.Order_type) = 'ready' THEN 1 ELSE 0 END AS is_ready_order
          FROM order_details od
          JOIN orders o ON o.order_id = od.order_id
          WHERE od.detail_id = ?
@@ -4503,7 +4689,11 @@ app.patch(
       )
 
       await connection.query(`UPDATE orders SET total_amount = ?, status = ? WHERE order_id = ?`, [
-        Math.max(orderedAmount - refundAmount, 0),
+        Math.max(
+          orderedAmount - refundAmount +
+            (Number(detail.is_ready_order) === 1 ? Number(detail.shipping_fee || 0) : 0),
+          0,
+        ),
         newStatus,
         orderId,
       ])

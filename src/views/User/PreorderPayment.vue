@@ -95,6 +95,19 @@ const importFeeTotal = computed(() => {
   return itemTotal > 0 ? itemTotal : orderTotal
 })
 
+const itemsSubtotal = computed(() =>
+  Number(
+    order.value?.items?.reduce(
+      (sum, item) => sum + Number(item.price || item.Price || item.unit_price || 0) * Number(item.qty || 0),
+      0,
+    ) || 0,
+  ),
+)
+
+const chinaShippingTotalThb = computed(() =>
+  Number(order.value?.china_shipping_total_thb || 0),
+)
+
 const IMPORT_FEE_PAYMENT_STATUSES = [
   'wait for import fee',
   'pending import fee',
@@ -109,11 +122,17 @@ const normalizedOrderStatus = computed(() =>
     .replace(/_/g, ' '),
 )
 
+const isPreorderOrder = computed(
+  () => String(order.value?.Order_type || '').trim().toLowerCase() === 'preorder',
+)
+
+const assignedShipping = computed(() => order.value?.saved_shipping || {})
+
 // รอบ 2 ต้องยึดทั้งสถานะและยอดค่านำเข้า เพื่อรองรับออเดอร์เก่าที่สถานะเคยถูกบันทึกเป็นค่าว่าง
 const isImportFeePaymentStage = computed(() => {
   const status = normalizedOrderStatus.value
   if (IMPORT_FEE_PAYMENT_STATUSES.includes(status)) return true
-  return importFeeTotal.value > 0 && !['paid', 'ready to ship'].includes(status)
+  return importFeeTotal.value > 0 && !['paid', 'ready to ship', 'shipped', 'delivered'].includes(status)
 })
 
 // แสดงกล่องข้อมูลจัดส่งเมื่อเข้าสู่สเตจค่านำเข้า รวมถึงสถานะหลังจากนั้นทั้งหมดด้วย
@@ -142,31 +161,51 @@ const isShippingLocked = computed(() => {
     'import slip submitted',
     'paid',
     'ready to ship',
+    'shipped',
+    'delivered',
     'cancelled',
   ].includes(status)
 })
 
 // ล็อกทั้งหน้าเฉพาะเมื่อออเดอร์จบหรือยกเลิกแล้ว รอบค่านำเข้ายังต้องแนบสลิปได้
 const isReadOnlyStage = computed(() =>
-  ['paid', 'ready to ship', 'cancelled', 'missing'].includes(normalizedOrderStatus.value),
+  ['paid', 'ready to ship', 'shipped', 'delivered', 'cancelled', 'missing'].includes(
+    normalizedOrderStatus.value,
+  ),
 )
 
 // ✅ ซ่อนปุ่มขอเลื่อนกำหนดชำระเงิน และสกัดการเลือกช่องทางการโอนเมื่อออเดอร์จ่ายเสร็จสมบูรณ์/จัดส่งแล้ว
 const isFullyPaid = computed(() =>
-  ['ready to ship', 'slip submitted'].includes(normalizedOrderStatus.value),
+  ['paid', 'ready to ship', 'shipped', 'delivered', 'slip submitted'].includes(
+    normalizedOrderStatus.value,
+  ),
 )
 
 // ✅ ปรับเงื่อนไข Amount Due ถ้ายืนยันชำระครบ (Paid หรือ Ready to Ship) ให้แสดงยอดรวม 2 รอบ
 const amountDue = computed(() => {
+  if (isFullyPaid.value) return 0
+
   const status = normalizedOrderStatus.value
+  const orderType = String(order.value?.Order_type || '').trim().toLowerCase()
+  const shippingFee =
+    Number(order.value?.shipping_fee || 0) ||
+    (['preorder', 'pending_import'].includes(orderType) ? 65 : 0)
 
   if (['paid', 'ready to ship'].includes(status)) {
-    return Number(order.value?.total_amount || 0) + Number(order.value?.import_fee_total || 0)
+    return Number(order.value?.total_amount || 0) + Number(order.value?.import_fee_total || 0) + shippingFee
   }
 
   return isImportFeePaymentStage.value
-    ? Number(order.value?.import_fee_total || 0)
+    ? Number(order.value?.import_fee_total || 0) + shippingFee
     : Number(order.value?.total_amount || 0)
+})
+
+const shippingFee = computed(() => {
+  const storedFee = Number(order.value?.shipping_fee || 0)
+  if (storedFee > 0) return storedFee
+
+  const orderType = String(order.value?.Order_type || '').trim().toLowerCase()
+  return ['preorder', 'pending_import'].includes(orderType) ? 65 : 0
 })
 
 const readyItems = computed(
@@ -190,6 +229,16 @@ const shippingInfo = ref({
   carrier: '',
 })
 
+// ตัวอย่างกฎกติกาที่ลูกค้าต้องอ่านและยอมรับก่อนยืนยันการชำระเงิน
+const storeTerms = [
+  'สินค้าพรีออเดอร์อาจใช้เวลาจัดส่งตามกำหนดการของร้านและผู้ผลิต',
+  'กำหนดการจัดส่งอาจเปลี่ยนแปลงได้ หากเกิดความล่าช้าจากขนส่งหรือปัจจัยภายนอก',
+  'ค่านำเข้า (ถ้ามี) จะแจ้งให้ชำระเพิ่มเติมในรอบที่ 2 หลังสินค้าถึงไทย',
+  'กรุณาตรวจสอบชื่อ ที่อยู่ เบอร์โทรศัพท์ และรายละเอียดสินค้าให้ถูกต้องก่อนยืนยัน',
+  'เมื่อยืนยันคำสั่งซื้อแล้ว การยกเลิกหรือเปลี่ยนแปลงรายการจะเป็นไปตามเงื่อนไขของร้าน',
+]
+const termsAccepted = ref(false)
+
 const totalItemQuantity = computed(() =>
   Number(
     order.value?.items?.reduce((sum, item) => sum + Number(item.qty || 0), 0) || 0,
@@ -205,27 +254,30 @@ function groupOrderItems(items) {
     if (!prodId) continue
 
     const flavor = String(item.flavor || item.Flavor || '').trim()
-    const key = prodId
+    const key = `${prodId}|${flavor}`
 
     if (!grouped[key]) {
       grouped[key] = {
         ...item,
-        groupKey: `prod:${prodId}`,
+        groupKey: `prod:${prodId}|${flavor}`,
         qty: 0,
         prod_id: prodId,
         flavorSet: new Set(),
         flavor: flavor || null,
+        import_fee_total: 0,
       }
     }
 
     grouped[key].qty += Number(item.qty || 0)
-    grouped[key].import_fee = Number(item.import_fee || item.Import_fee || grouped[key].import_fee || 0)
+    const itemImportFee = Number(item.import_fee || item.Import_fee || 0)
+    grouped[key].import_fee_total += itemImportFee
     grouped[key].price = Number(item.price || item.Price || item.unit_price || grouped[key].price || 0)
     if (flavor) grouped[key].flavorSet.add(flavor)
   }
 
   return Object.values(grouped).map((item) => ({
     ...item,
+    import_fee: item.import_fee_total,
     flavor: item.flavorSet && item.flavorSet.size > 0 ? Array.from(item.flavorSet).join(', ') : item.flavor,
   }))
 }
@@ -292,7 +344,7 @@ const orderStatusDisplay = computed(() => {
       ),
     },
     paid: {
-      label: 'จ่ายเงินสำเร็จ รอแอดมินเรียกเก็บค่าจัดส่งในLINE',
+      label: 'จ่ายเงินสำเร็จ รอแอดมินตรวจสอบและจัดส่ง',
       color: '#10b981',
       icon: getIcon(
         '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>',
@@ -352,6 +404,20 @@ const orderStatusDisplay = computed(() => {
       color: '#10b981',
       icon: getIcon(
         '<rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle>',
+      ),
+    },
+    shipped: {
+      label: 'จัดส่งแล้ว',
+      color: '#2563eb',
+      icon: getIcon(
+        '<rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle>',
+      ),
+    },
+    delivered: {
+      label: 'นำจ่ายแล้ว',
+      color: '#047857',
+      icon: getIcon(
+        '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>',
       ),
     },
     cancelled: {
@@ -590,6 +656,7 @@ const fetchOrder = async () => {
         order_id: null,
         items: pendingData.items,
         total_amount: pendingData.total_amount,
+        shipping_fee: pendingData.shipping_fee,
         Order_type: 'Preorder',
         user_id: pendingData.user_id,
         preorder_round_status:
@@ -676,6 +743,11 @@ const confirmPayment = async () => {
     return
   }
 
+  if (!termsAccepted.value) {
+    showNotice('กรุณาอ่านและยอมรับกฎกติกาของร้านก่อนยืนยันการชำระเงิน', 'error')
+    return
+  }
+
   // แปลงสถานะเพื่อเช็กเงื่อนไขให้ง่ายขึ้น
   const currentStatus = String(order.value?.status || '')
     .trim()
@@ -706,7 +778,7 @@ const confirmPayment = async () => {
       !shippingInfo.value.name ||
       !shippingInfo.value.phone ||
       !shippingInfo.value.address ||
-      !shippingInfo.value.carrier
+      (!shippingInfo.value.carrier && !isPreorderOrder.value)
     ) {
       showNotice(
         'กรุณากรอกข้อมูลจัดส่ง ชื่อ เบอร์โทร บริษัทขนส่ง และที่อยู่ให้ครบถ้วนก่อนส่งประวัติข้อมูล',
@@ -974,7 +1046,9 @@ onMounted(async () => {
                   <span class="hero-meta-label">
                     {{ isImportFeePaymentStage ? 'ค่านำเข้าแจ้งแล้ว' : 'ยอดรวม' }}
                   </span>
-                  <strong>฿{{ amountDue.toLocaleString() }}</strong>
+                  <strong>
+                    ฿{{ (isImportFeePaymentStage ? importFeeTotal : amountDue).toLocaleString() }}
+                  </strong>
                 </div>
                 <div class="hero-meta-divider"></div>
                 <div class="hero-meta-item">
@@ -1317,7 +1391,11 @@ onMounted(async () => {
             </div>
           </div>
 
-          <div v-if="isImportFeeStage && !isWaitingForImportFee" class="section-card form-panel">
+          <div
+            v-if="isImportFeeStage && !isWaitingForImportFee"
+            class="section-card form-panel"
+            :class="{ 'form-panel--locked': isShippingLocked }"
+          >
             <div class="section-header section-header--stacked">
               <h3 class="section-title" style="display: flex; align-items: center">
                 <svg
@@ -1365,7 +1443,15 @@ onMounted(async () => {
                     :disabled="isShippingLocked"
                   />
                 </div>
-                <div>
+                <div v-if="isPreorderOrder" class="preorder-carrier-note">
+                  <label>บริษัทขนส่ง</label>
+                  <strong>{{ assignedShipping.provider_name || assignedShipping.carrier || 'ร้านเป็นผู้เลือกให้' }}</strong>
+                  <small v-if="assignedShipping.tracking_number">
+                    เลขพัสดุ: {{ assignedShipping.tracking_number }}
+                  </small>
+                  <small v-else>ทางร้านจะเลือกบริษัทขนส่งที่มีค่าจัดส่งเหมาะสมให้ภายหลัง</small>
+                </div>
+                <div v-else>
                   <label for="shipping-carrier">บริษัทขนส่ง</label>
                   <select
                     id="shipping-carrier"
@@ -1669,7 +1755,7 @@ onMounted(async () => {
             </div>
 
             <div
-              v-else-if="!isCancelled && !isWaitingForImportFee"
+              v-else-if="!isCancelled && !isWaitingForImportFee && !isFullyPaid"
               class="section-card glass-card payment-panel"
             >
               <h3 class="section-title" style="display: flex; align-items: center">
@@ -1872,7 +1958,28 @@ onMounted(async () => {
               >
                 <div v-if="!isImportFeePaymentStage" style="display: flex; justify-content: space-between">
                   <span>ยอดรวมสินค้า</span>
-                  <span>฿{{ Number(order.total_amount).toLocaleString() }}</span>
+                  <span>฿{{ itemsSubtotal.toLocaleString() }}</span>
+                </div>
+                <div
+                  v-if="!isImportFeePaymentStage && chinaShippingTotalThb > 0"
+                  style="display: flex; justify-content: space-between"
+                >
+                  <span>ค่าส่งภายในประเทศจีน</span>
+                  <span>฿{{ chinaShippingTotalThb.toLocaleString() }}</span>
+                </div>
+                <div
+                  v-if="isImportFeePaymentStage && importFeeTotal > 0"
+                  style="display: flex; justify-content: space-between"
+                >
+                  <span>ค่านำเข้ารอบ 2</span>
+                  <span>฿{{ importFeeTotal.toLocaleString() }}</span>
+                </div>
+                <div
+                  v-if="isImportFeePaymentStage && shippingFee > 0"
+                  style="display: flex; justify-content: space-between"
+                >
+                  <span>ค่าส่งภายในไทย</span>
+                  <span>฿{{ shippingFee.toLocaleString() }}</span>
                 </div>
                 <div
                   style="display: flex; justify-content: space-between"
@@ -1936,19 +2043,46 @@ onMounted(async () => {
               />
 
               <div class="summary-header">
-                <span class="summary-label">ยอดรวม</span>
-                <strong class="summary-amount"> ฿{{ amountDue.toLocaleString() }} </strong>
+                <span class="summary-label">{{ isFullyPaid ? 'สถานะการชำระเงิน' : 'ยอดที่ต้องชำระ' }}</span>
+                <strong v-if="isFullyPaid" class="summary-amount summary-amount--paid">ชำระครบแล้ว</strong>
+                <strong v-else class="summary-amount"> ฿{{ amountDue.toLocaleString() }} </strong>
               </div>
-              <div class="summary-note">
-                สามารถกดบันทึกเพื่ออัปเดตข้อมูลจัดส่งใหม่เข้าสู่ฐานข้อมูลได้
-              </div>
-              <hr class="divider" />
+               <div class="summary-note">
+                 สามารถกดบันทึกเพื่ออัปเดตข้อมูลจัดส่งใหม่เข้าสู่ฐานข้อมูลได้
+               </div>
+               <hr class="divider" />
 
-              <button
-                class="btn-checkout"
-                @click="confirmPayment"
-                :disabled="loading || isReadOnlyStage || isRoundOpen"
-              >
+               <div class="terms-box">
+                 <div class="terms-box__heading">
+                   <span class="terms-box__icon" aria-hidden="true">!</span>
+                   <div>
+                     <h3>กฎกติกาและเงื่อนไขของร้าน</h3>
+                     <p>กรุณาอ่านรายละเอียดก่อนยืนยันคำสั่งซื้อ</p>
+                   </div>
+                 </div>
+                 <ol class="terms-list">
+                   <li v-for="term in storeTerms" :key="term">{{ term }}</li>
+                 </ol>
+                 <label
+                   class="terms-consent"
+                   :class="{ 'terms-consent--checked': termsAccepted }"
+                 >
+                   <input
+                     v-model="termsAccepted"
+                     type="checkbox"
+                     :disabled="isReadOnlyStage || isRoundOpen"
+                   />
+                   <span>ฉันได้อ่านและยอมรับกฎกติกาและเงื่อนไขของร้านแล้ว</span>
+                 </label>
+               </div>
+
+               <hr class="divider" />
+
+               <button
+                 class="btn-checkout"
+                 @click="confirmPayment"
+                 :disabled="loading || isReadOnlyStage || isRoundOpen || !termsAccepted"
+               >
                 {{
                   loading
                     ? 'กำลังประมวลผล...'
@@ -2089,6 +2223,18 @@ onMounted(async () => {
 }
 .form-panel {
   margin-top: 1rem;
+}
+.form-panel--locked {
+  border-color: #d8c9ed;
+  background: #fbf9ff;
+}
+.form-panel--locked input:disabled,
+.form-panel--locked textarea:disabled,
+.form-panel--locked select:disabled {
+  background: #f2eef8;
+  color: #75668c;
+  cursor: not-allowed;
+  opacity: 0.82;
 }
 .hero-card {
   padding: 1.45rem;
@@ -2437,6 +2583,25 @@ onMounted(async () => {
   grid-template-columns: 1fr 1fr;
   gap: 0.8rem;
 }
+.preorder-carrier-note {
+  display: grid;
+  align-content: start;
+  gap: 0.25rem;
+  min-height: 100%;
+  padding: 0.85rem 0.95rem;
+  border: 1.5px dashed #d8c6f2;
+  border-radius: 12px;
+  background: #faf7ff;
+}
+.preorder-carrier-note strong {
+  color: #6f50a0;
+  font-size: 0.88rem;
+}
+.preorder-carrier-note small {
+  color: #7d6e9a;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
 .field-group label,
 .form-label {
   font-size: 0.84rem;
@@ -2503,10 +2668,87 @@ onMounted(async () => {
   line-height: 1;
   color: #6f50a0;
 }
+.summary-amount--paid {
+  color: #059669;
+  font-size: 1.1rem;
+}
 .summary-note {
   color: #7d6e9a;
   font-size: 0.86rem;
   line-height: 1.5;
+}
+.terms-box {
+  display: grid;
+  gap: 0.8rem;
+  padding: 1rem;
+  border: 1px solid #e5d8f8;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #fcfaff 0%, #f7f1ff 100%);
+}
+.terms-box__heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+}
+.terms-box__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #6f50a0;
+  color: #fff;
+  font-weight: 900;
+}
+.terms-box h3 {
+  margin: 0;
+  color: #35235b;
+  font-size: 0.95rem;
+}
+.terms-box__heading p {
+  margin: 0.2rem 0 0;
+  color: #7d6e9a;
+  font-size: 0.78rem;
+}
+.terms-list {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding-left: 1.35rem;
+  color: #594878;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+.terms-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.75rem 0.8rem;
+  border: 1px solid #d8c6f2;
+  border-radius: 12px;
+  background: #fff;
+  color: #4b376e;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.45;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+.terms-consent:hover {
+  border-color: #a78bfa;
+}
+.terms-consent--checked {
+  border-color: #7c63d8;
+  background: #f0e6ff;
+}
+.terms-consent input {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  margin: 1px 0 0;
+  accent-color: #6f50a0;
 }
 .section-pill {
   display: inline-flex;
