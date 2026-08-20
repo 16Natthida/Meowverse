@@ -51,6 +51,10 @@ const pageTitle = computed(() => {
     return 'รอบนำเข้าสินค้า'
   }
 
+  if (route.path === '/admin/preorder-statistics') {
+    return 'สถิติพรีออเดอร์ย้อนหลัง'
+  }
+
   if (route.path === '/admin/postpones') {
     return 'คำขอเลื่อนการชำระเงิน'
   }
@@ -335,6 +339,7 @@ onUnmounted(() => {
           <RouterLink to="/admin/products">สินค้า</RouterLink>
           <RouterLink to="/admin/slips">จัดการสลิป</RouterLink>
           <RouterLink to="/admin/preorder-rounds">รอบนำเข้าสินค้า</RouterLink>
+          <RouterLink to="/admin/preorder-statistics">สถิติพรีออเดอร์ย้อนหลัง</RouterLink>
           <RouterLink to="/admin/postpones">คำขอเลื่อนการชำระเงิน</RouterLink>
           <RouterLink to="/admin/inventory-intake">รับสินค้าเข้า</RouterLink>
           <RouterLink to="/admin/missing-items">สินค้าตกหล่น / ขาด</RouterLink>

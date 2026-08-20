@@ -5065,6 +5065,165 @@ app.get('/api/admin/order-item-summary', authenticateToken, requireAdmin, async 
 })
 
 // ─────────────────────────────────────────────
+// GET /api/admin/preorder-statistics
+// สรุปจำนวนและยอดขายสินค้าแยกตามรอบพรีออเดอร์ย้อนหลัง
+app.get(
+  '/api/admin/preorder-statistics',
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const includeCancelled = String(req.query.includeCancelled || '').toLowerCase() === 'true'
+      const roundId = Number(req.query.roundId)
+      const productId = Number(req.query.productId)
+      const search = String(req.query.search || '').trim()
+
+      const conditions = ['od.preorder_round_id IS NOT NULL', 'od.qty > 0']
+      const params = []
+
+      if (!includeCancelled) {
+        conditions.push("LOWER(COALESCE(o.status, '')) <> 'cancelled'")
+      }
+
+      if (Number.isInteger(roundId) && roundId > 0) {
+        conditions.push('od.preorder_round_id = ?')
+        params.push(roundId)
+      }
+
+      if (Number.isInteger(productId) && productId > 0) {
+        conditions.push('od.prod_id = ?')
+        params.push(productId)
+      }
+
+      if (search) {
+        conditions.push('(p.sku LIKE ? OR p.prod_name LIKE ?)')
+        const searchPattern = `%${search}%`
+        params.push(searchPattern, searchPattern)
+      }
+
+      const whereClause = conditions.join(' AND ')
+      const detailQuery = `
+        SELECT
+          od.preorder_round_id AS round_id,
+          pr.round_name,
+          pr.status AS round_status,
+          pr.start_date,
+          pr.end_date,
+          od.prod_id,
+          p.sku,
+          p.prod_name AS product_name,
+          COUNT(DISTINCT od.order_id) AS order_count,
+          SUM(od.qty) AS total_qty,
+          COALESCE(SUM(COALESCE(od.Price, 0) * od.qty), 0) AS total_amount,
+          CASE
+            WHEN SUM(od.qty) > 0
+              THEN COALESCE(SUM(COALESCE(od.Price, 0) * od.qty), 0) / SUM(od.qty)
+            ELSE 0
+          END AS average_unit_price,
+          COUNT(DISTINCT NULLIF(TRIM(COALESCE(od.flavor, '')), '')) AS flavor_count
+        FROM order_details od
+        INNER JOIN orders o ON o.order_id = od.order_id
+        LEFT JOIN products p ON p.prod_id = od.prod_id
+        LEFT JOIN preorder_rounds pr ON pr.round_id = od.preorder_round_id
+        WHERE ${whereClause}
+        GROUP BY
+          od.preorder_round_id,
+          pr.round_name,
+          pr.status,
+          pr.start_date,
+          pr.end_date,
+          od.prod_id,
+          p.sku,
+          p.prod_name
+        ORDER BY od.preorder_round_id DESC, total_amount DESC, od.prod_id ASC
+      `
+
+      const summaryQuery = `
+        SELECT
+          COUNT(DISTINCT od.order_id) AS order_count,
+          COUNT(DISTINCT od.prod_id) AS product_count,
+          COUNT(DISTINCT od.preorder_round_id) AS round_count,
+          COALESCE(SUM(od.qty), 0) AS total_qty,
+          COALESCE(SUM(COALESCE(od.Price, 0) * od.qty), 0) AS total_amount
+        FROM order_details od
+        INNER JOIN orders o ON o.order_id = od.order_id
+        LEFT JOIN products p ON p.prod_id = od.prod_id
+        WHERE ${whereClause}
+      `
+
+      const [rows] = await pool.query(detailQuery, params)
+      const [summaryRows] = await pool.query(summaryQuery, params)
+      const summary = summaryRows[0] || {}
+
+      const history = rows.map((row) => ({
+        round_id: Number(row.round_id) || null,
+        round_name: row.round_name || `รอบ #${row.round_id}`,
+        round_status: row.round_status || 'unknown',
+        start_date: row.start_date || null,
+        end_date: row.end_date || null,
+        prod_id: Number(row.prod_id) || null,
+        sku: row.sku || '',
+        product_name: row.product_name || `สินค้า #${row.prod_id}`,
+        order_count: Number(row.order_count) || 0,
+        total_qty: Number(row.total_qty) || 0,
+        total_amount: Number(row.total_amount) || 0,
+        average_unit_price: Number(row.average_unit_price) || 0,
+        flavor_count: Number(row.flavor_count) || 0,
+      }))
+
+      const productMap = new Map()
+      const roundMap = new Map()
+
+      for (const row of history) {
+        const productKey = String(row.prod_id)
+        const productSummary = productMap.get(productKey) || {
+          prod_id: row.prod_id,
+          sku: row.sku,
+          product_name: row.product_name,
+          round_count: 0,
+          total_qty: 0,
+          total_amount: 0,
+        }
+        productSummary.round_count += 1
+        productSummary.total_qty += row.total_qty
+        productSummary.total_amount += row.total_amount
+        productMap.set(productKey, productSummary)
+
+        const roundKey = String(row.round_id)
+        const roundSummary = roundMap.get(roundKey) || {
+          round_id: row.round_id,
+          round_name: row.round_name,
+          round_status: row.round_status,
+          start_date: row.start_date,
+          end_date: row.end_date,
+          product_count: 0,
+          total_qty: 0,
+          total_amount: 0,
+        }
+        roundSummary.product_count += 1
+        roundSummary.total_qty += row.total_qty
+        roundSummary.total_amount += row.total_amount
+        roundMap.set(roundKey, roundSummary)
+      }
+
+      res.json({
+        summary: {
+          order_count: Number(summary.order_count) || 0,
+          product_count: Number(summary.product_count) || 0,
+          round_count: Number(summary.round_count) || 0,
+          total_qty: Number(summary.total_qty) || 0,
+          total_amount: Number(summary.total_amount) || 0,
+        },
+        history,
+        products: [...productMap.values()].sort((a, b) => b.total_qty - a.total_qty),
+        rounds: [...roundMap.values()].sort((a, b) => Number(b.round_id) - Number(a.round_id)),
+      })
+    } catch (error) {
+      res.status(500).json({ error: error.message })
+    }
+  },
+)
+
 // GET /api/admin/users
 // ดึงรายชื่อ users ทั้งหมด
 // ─────────────────────────────────────────────
