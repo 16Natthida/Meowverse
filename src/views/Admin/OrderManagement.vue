@@ -177,6 +177,7 @@ const aggregatedProductSales = computed(() => {
         name: r.name,
         category_name: r.category_name,
         item_type: itemType,
+        image_url: r.image_url,
         // keep a representative unit_price (first seen)
         unit_price: r.unit_price,
         sold_qty: Number(r.sold_qty || 0),
@@ -187,6 +188,9 @@ const aggregatedProductSales = computed(() => {
     }
     existing.sold_qty += Number(r.sold_qty || 0)
     existing.total_amount += Number(r.total_amount || 0)
+    if (!existing.image_url && r.image_url) {
+      existing.image_url = r.image_url
+    }
     existing.details.push(r)
   }
 
@@ -620,6 +624,7 @@ onMounted(() => {
         <table class="summary-table">
           <thead>
             <tr>
+              <th class="image-col">รูปภาพ</th>
               <th>สินค้า</th>
               <th>ประเภท</th>
               <th>ราคาต่อชิ้น</th>
@@ -632,6 +637,16 @@ onMounted(() => {
               v-for="item in filteredProductSales"
               :key="`prod-${item.prod_id}-${item.item_type}`"
             >
+              <td class="image-col">
+                <img
+                  v-if="item.image_url"
+                  :src="item.image_url"
+                  :alt="item.name"
+                  class="summary-thumb"
+                  loading="lazy"
+                />
+                <div v-else class="summary-thumb summary-thumb--placeholder">ไม่มีรูป</div>
+              </td>
               <td>
                 <strong>{{ item.name }}</strong>
                 <p v-if="item.category_name">{{ item.category_name }}</p>
@@ -816,6 +831,16 @@ onMounted(() => {
                 :key="item.detail_ids?.join('-') || item.detail_id"
                 class="item-row"
               >
+                <div class="item-thumb-cell">
+                  <img
+                    v-if="item.image"
+                    :src="item.image"
+                    :alt="item.name"
+                    class="item-thumb"
+                    loading="lazy"
+                  />
+                  <div v-else class="item-thumb item-thumb--placeholder">ไม่มีรูป</div>
+                </div>
                 <div>
                   <strong>{{ getItemLabel(item) }}</strong>
                   <p v-if="item.category_name">{{ item.category_name }}</p>
@@ -1466,6 +1491,30 @@ onMounted(() => {
   font-size: 0.82rem;
 }
 
+.image-col {
+  width: 64px;
+}
+
+.summary-thumb {
+  display: block;
+  width: 52px;
+  height: 52px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid #ede4fb;
+  background: #f8f5ff;
+}
+
+.summary-thumb--placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #a996c9;
+  font-size: 0.62rem;
+  text-align: center;
+  line-height: 1.2;
+}
+
 .items-list {
   display: grid;
   gap: 0.65rem;
@@ -1474,11 +1523,36 @@ onMounted(() => {
 .item-row {
   display: grid;
   gap: 0.5rem;
-  grid-template-columns: 1.5fr 0.8fr 0.5fr 0.8fr 0.7fr;
+  grid-template-columns: 56px 1.5fr 0.8fr 0.5fr 0.8fr 0.7fr;
   align-items: center;
   padding: 0.85rem;
   border: 1px solid #ede4fb;
   border-radius: 14px;
+}
+
+.item-thumb-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.item-thumb {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid #ede4fb;
+  background: #f8f5ff;
+}
+
+.item-thumb--placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #a996c9;
+  font-size: 0.6rem;
+  text-align: center;
+  line-height: 1.15;
 }
 
 .item-row p {
@@ -1499,7 +1573,11 @@ onMounted(() => {
   }
 
   .item-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: 56px 1fr;
+  }
+
+  .item-thumb-cell {
+    grid-row: span 4;
   }
 
   .order-filter-search {

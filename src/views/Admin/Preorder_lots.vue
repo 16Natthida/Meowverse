@@ -54,6 +54,7 @@
                 }}
               </button>
               <button class="btn-action" @click="setRoundScheduled(round)">ตามเวลา</button>
+              <button class="btn-action" @click="openDuplicateRoundModal(round)">คัดลอก</button>
               <button class="btn-action danger" @click="deleteRound(round.id)">ลบ</button>
             </td>
           </tr>
@@ -409,6 +410,94 @@
         </div>
       </div>
     </div>
+
+    <!-- Duplicate Round Modal -->
+    <div
+      v-if="showDuplicateModal && roundToDuplicate"
+      class="modal-overlay"
+      @click.self="closeDuplicateRoundModal"
+    >
+      <div class="modal">
+        <div class="modal-header">
+          <h2>คัดลอกรอบนำเข้าสินค้า</h2>
+          <button class="close-btn" @click="closeDuplicateRoundModal">×</button>
+        </div>
+
+        <div class="modal-body">
+          <form @submit.prevent="confirmDuplicateRound">
+            <p class="duplicate-hint">
+              จะสร้างรอบใหม่โดยคัดลอกสินค้าทั้งหมด{{
+                roundToDuplicate.products?.length
+                  ? ` (${roundToDuplicate.products.length} รายการ)`
+                  : ''
+              }}
+              พร้อมราคาและค่าส่งจีนจากรอบ "{{ roundToDuplicate.name }}" มาไว้ในรอบใหม่
+              คุณสามารถแก้ไขรายละเอียด วันที่ และสถานะของรอบใหม่ได้ตามต้องการ
+            </p>
+
+            <div class="form-group">
+              <label for="duplicate-round-name">ชื่อรอบ *</label>
+              <input
+                id="duplicate-round-name"
+                v-model="duplicateForm.name"
+                type="text"
+                required
+                placeholder="เช่น MOKO มีนาคม 2026"
+              />
+            </div>
+
+            <div class="form-group">
+              <label for="duplicate-round-description">รายละเอียด</label>
+              <textarea
+                id="duplicate-round-description"
+                v-model="duplicateForm.description"
+                rows="3"
+                placeholder="เช่น สินค้านำเข้าล็อตเดือนเมษายน"
+              ></textarea>
+            </div>
+
+            <div class="form-group">
+              <label for="duplicate-round-start-date">วันเปิด *</label>
+              <input
+                id="duplicate-round-start-date"
+                v-model="duplicateForm.startDate"
+                type="datetime-local"
+                required
+              />
+            </div>
+
+            <div class="form-group">
+              <label for="duplicate-round-end-date">วันปิด *</label>
+              <input
+                id="duplicate-round-end-date"
+                v-model="duplicateForm.endDate"
+                type="datetime-local"
+                required
+              />
+            </div>
+
+            <div class="form-group">
+              <label for="duplicate-round-status">สถานะ</label>
+              <select id="duplicate-round-status" v-model="duplicateForm.status">
+                <option value="active">เปิด</option>
+                <option value="closed">ปิด</option>
+                <option value="archived">เก็บถาวร</option>
+                <option value="scheduled">เปิดปิดตามเวลาที่กำหนด</option>
+              </select>
+            </div>
+
+            <div class="form-actions">
+              <button type="button" class="btn-cancel" @click="closeDuplicateRoundModal">
+                ยกเลิก
+              </button>
+              <button type="submit" class="btn-submit" :disabled="isDuplicating">
+                {{ isDuplicating ? 'กำลังสร้าง...' : 'สร้าง' }}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -432,6 +521,10 @@ const productPriceChanges = reactive({})
 const productChinaShippingFeeChanges = reactive({})
 const showProductDetailModal = ref(false)
 const selectedProduct = ref(null)
+const showDuplicateModal = ref(false)
+const roundToDuplicate = ref(null)
+const isDuplicating = ref(false)
+const duplicateForm = ref({ name: '', description: '', startDate: '', endDate: '', status: 'active' })
 
 const roundForm = ref({
   name: '',
@@ -633,6 +726,73 @@ function closeProductDetailModal() {
   Object.keys(productChinaShippingFeeChanges).forEach((key) => {
     delete productChinaShippingFeeChanges[key]
   })
+}
+
+async function openDuplicateRoundModal(round) {
+  try {
+    // ดึงรายละเอียดรอบให้ครบ (รวมสินค้าในรอบ) เพราะรายการในตารางหลักไม่มีสินค้าติดมาด้วย
+    const detail = await preorderStore.fetchRoundDetail(round.id)
+    const normalized = normalizeRound(detail)
+    roundToDuplicate.value = normalized
+    const normalizedStatus = String(normalized.status || '').toLowerCase()
+    duplicateForm.value = {
+      name: `${normalized.name} (คัดลอก)`,
+      description: normalized.description || '',
+      startDate: formatDateForInput(normalized.startDate),
+      endDate: formatDateForInput(normalized.endDate),
+      status: ['active', 'open'].includes(normalizedStatus) ? 'active' : normalizedStatus || 'active',
+    }
+    showDuplicateModal.value = true
+  } catch (error) {
+    alert('เกิดข้อผิดพลาด: ' + error.message)
+  }
+}
+
+function closeDuplicateRoundModal() {
+  showDuplicateModal.value = false
+  roundToDuplicate.value = null
+  duplicateForm.value = { name: '', description: '', startDate: '', endDate: '', status: 'active' }
+}
+
+async function confirmDuplicateRound() {
+  const source = roundToDuplicate.value
+  const name = String(duplicateForm.value.name || '').trim()
+
+  if (!source || !name) {
+    return
+  }
+
+  isDuplicating.value = true
+
+  try {
+    // 1) สร้างรอบใหม่ ตามรายละเอียด/วันที่/สถานะที่กรอกใน modal (prefill มาจากรอบต้นฉบับ แต่แก้ไขได้)
+    const newRound = await preorderStore.createRound({
+      name,
+      description: duplicateForm.value.description || '',
+      startDate: duplicateForm.value.startDate,
+      endDate: duplicateForm.value.endDate,
+      status: duplicateForm.value.status || 'active',
+    })
+
+    // 2) คัดลอกสินค้าทั้งหมดในรอบเดิม (พร้อมราคาพรีออเดอร์ ค่าส่งจีน และจำนวน) ไปยังรอบใหม่
+    const products = source.products || []
+    if (products.length > 0) {
+      await preorderStore.addProductsToRound(
+        newRound.id,
+        products.map((product) => product.id),
+        products.map((product) => Number(product.quantityAvailable) || 0),
+        products.map((product) => Number(product.roundPrice) || 0),
+        products.map((product) => Number(product.chinaShippingFeeThb) || 0),
+      )
+    }
+
+    closeDuplicateRoundModal()
+    await preorderStore.fetchRounds()
+  } catch (error) {
+    alert('เกิดข้อผิดพลาดในการคัดลอกรอบ: ' + error.message)
+  } finally {
+    isDuplicating.value = false
+  }
 }
 
 function getSuggestedRoundPrice(product) {
@@ -1079,6 +1239,17 @@ onMounted(async () => {
 
 .form-group {
   margin-bottom: 16px;
+}
+
+.duplicate-hint {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  background: #f5f0fb;
+  border: 1px solid #e4d6f7;
+  border-radius: 8px;
+  color: #6b4f8f;
+  font-size: 13.5px;
+  line-height: 1.5;
 }
 
 .form-group label {

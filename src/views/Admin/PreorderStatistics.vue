@@ -132,32 +132,34 @@ onMounted(() => loadReport({ preserveOptions: false }))
 </script>
 
 <template>
-  <main class="preorder-statistics-page">
-    <header class="page-hero">
-      <div>
-        <p class="eyebrow">ADMIN / PREORDER HISTORY</p>
-        <h1>สถิติสินค้าพรีออเดอร์ย้อนหลัง</h1>
-        <p class="hero-description">
-          ตรวจสอบว่าสินค้าแต่ละรหัสถูกสั่งในรอบใดบ้าง จำนวนกี่ชิ้น และมียอดรวมเท่าไร
-        </p>
+  <div class="preorder-statistics-page">
+
+    <!-- ── Hero ── -->
+    <section class="hero-panel">
+      <div class="hero-copy">
+        <p class="eyebrow">Admin · Preorder</p>
+        <h2>📊 สถิติสินค้าพรีออเดอร์ย้อนหลัง</h2>
+        <p>ตรวจสอบว่าสินค้าแต่ละรหัสถูกสั่งในรอบใดบ้าง จำนวนกี่ชิ้น และมียอดรวมเท่าไร</p>
       </div>
       <div class="hero-actions">
-        <button class="button button--ghost" type="button" @click="router.push('/admin/preorder-rounds')">
-          กลับไปรอบพรีออเดอร์
+        <button class="ghost-btn" type="button" @click="router.push('/admin/preorder-rounds')">
+          ← กลับไปรอบพรีออเดอร์
         </button>
-        <button class="button button--primary" type="button" :disabled="loading" @click="loadReport()">
-          {{ loading ? 'กำลังโหลด...' : 'รีเฟรชข้อมูล' }}
+        <button class="hero-btn--primary" type="button" :disabled="loading" @click="loadReport()">
+          {{ loading ? '⏳ กำลังโหลด...' : '🔄 รีเฟรชข้อมูล' }}
         </button>
       </div>
-    </header>
+    </section>
 
-    <section class="filter-card">
+    <!-- ── Filter Panel ── -->
+    <section class="panel filter-card">
       <div class="filter-grid">
         <label class="field">
           <span>ค้นหารหัสหรือชื่อสินค้า</span>
           <input
             v-model="searchQuery"
             type="search"
+            class="search-input"
             placeholder="เช่น A-001 หรือชื่อสินค้า"
             @keyup.enter="loadReport()"
           />
@@ -165,7 +167,7 @@ onMounted(() => loadReport({ preserveOptions: false }))
 
         <label class="field">
           <span>เลือกรอบพรีออเดอร์</span>
-          <select v-model="selectedRoundId">
+          <select v-model="selectedRoundId" class="filter-select">
             <option value="">ทุกรอบ</option>
             <option v-for="round in roundOptions" :key="round.round_id" :value="round.round_id">
               {{ round.round_name }}
@@ -175,7 +177,7 @@ onMounted(() => loadReport({ preserveOptions: false }))
 
         <label class="field">
           <span>เลือกสินค้า</span>
-          <select v-model="selectedProductId">
+          <select v-model="selectedProductId" class="filter-select">
             <option value="">ทุกสินค้า</option>
             <option v-for="product in productOptions" :key="product.prod_id" :value="product.prod_id">
               {{ product.sku || `รหัส #${product.prod_id}` }} - {{ product.product_name }}
@@ -190,8 +192,8 @@ onMounted(() => loadReport({ preserveOptions: false }))
           รวมออเดอร์ที่ยกเลิก
         </label>
         <div class="filter-buttons">
-          <button class="button button--ghost" type="button" @click="clearFilters">ล้างตัวกรอง</button>
-          <button class="button button--primary" type="button" :disabled="loading" @click="loadReport()">
+          <button class="ghost-btn" type="button" @click="clearFilters">ล้างตัวกรอง</button>
+          <button class="hero-btn--primary" type="button" :disabled="loading" @click="loadReport()">
             ค้นหาสถิติ
           </button>
         </div>
@@ -199,49 +201,61 @@ onMounted(() => loadReport({ preserveOptions: false }))
       <p class="filter-note">ค่าเริ่มต้นไม่นับออเดอร์ที่มีสถานะยกเลิก เพื่อให้ยอดขายไม่ถูกนับซ้ำ</p>
     </section>
 
-    <div v-if="error" class="state-box state-box--error">{{ error }}</div>
-    <div v-else-if="loading" class="state-box">กำลังโหลดสถิติพรีออเดอร์...</div>
+    <!-- Loading -->
+    <div v-if="loading" class="loading-wrap">
+      <div class="loader"></div>
+      <p>กำลังโหลดสถิติพรีออเดอร์...</p>
+    </div>
+
+    <!-- Error -->
+    <div v-else-if="error" class="empty-state empty-state--error">
+      <p class="error-title">⚠️ เกิดข้อผิดพลาด</p>
+      <p>{{ error }}</p>
+    </div>
 
     <template v-else>
-      <section class="kpi-grid">
-        <article class="kpi-card">
-          <span>จำนวนชิ้นรวม</span>
-          <strong>{{ formatNumber(summary.total_qty) }}</strong>
-          <small>จากข้อมูลพรีออเดอร์ที่เลือก</small>
-        </article>
-        <article class="kpi-card">
-          <span>ยอดรวมสินค้า</span>
-          <strong>{{ formatMoney(summary.total_amount) }}</strong>
-          <small>คำนวณจากราคาในออเดอร์ × จำนวน</small>
-        </article>
-        <article class="kpi-card">
-          <span>จำนวนรอบ</span>
-          <strong>{{ formatNumber(summary.round_count) }}</strong>
-          <small>รอบที่มีรายการสั่งซื้อ</small>
-        </article>
-        <article class="kpi-card">
-          <span>จำนวนออเดอร์</span>
-          <strong>{{ formatNumber(summary.order_count) }}</strong>
-          <small>ออเดอร์ที่ไม่ซ้ำกัน</small>
-        </article>
-      </section>
+      <!-- ── KPI Grid ── -->
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <p class="kpi-label">จำนวนชิ้นรวม</p>
+          <p class="kpi-value">{{ formatNumber(summary.total_qty) }}</p>
+          <p class="kpi-note">จากข้อมูลพรีออเดอร์ที่เลือก</p>
+        </div>
+        <div class="kpi-card">
+          <p class="kpi-label">ยอดรวมสินค้า</p>
+          <p class="kpi-value">{{ formatMoney(summary.total_amount) }}</p>
+          <p class="kpi-note">คำนวณจากราคาในออเดอร์ × จำนวน</p>
+        </div>
+        <div class="kpi-card">
+          <p class="kpi-label">จำนวนรอบ</p>
+          <p class="kpi-value">{{ formatNumber(summary.round_count) }}</p>
+          <p class="kpi-note">รอบที่มีรายการสั่งซื้อ</p>
+        </div>
+        <div class="kpi-card">
+          <p class="kpi-label">จำนวนออเดอร์</p>
+          <p class="kpi-value">{{ formatNumber(summary.order_count) }}</p>
+          <p class="kpi-note">ออเดอร์ที่ไม่ซ้ำกัน</p>
+        </div>
+      </div>
 
-      <section class="panel">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">PRODUCT HISTORY</p>
-            <h2>ประวัติแยกตามสินค้าและรอบ</h2>
+      <!-- ── Product History Panel ── -->
+      <section class="panel table-panel">
+        <header class="panel-head">
+          <div class="panel-head__title">
+            <p class="eyebrow">Product History</p>
+            <h3>🧾 ประวัติแยกตามสินค้าและรอบ</h3>
           </div>
           <span class="result-count">{{ history.length }} รายการ</span>
-        </div>
+        </header>
 
         <div v-if="history.length === 0" class="empty-state">
           ยังไม่มีข้อมูลสถิติพรีออเดอร์ตามตัวกรองนี้
         </div>
-        <div v-else class="table-wrap">
-          <table class="data-table">
+        <div v-else class="table-scroll">
+          <table>
             <thead>
               <tr>
+                <th>รูปภาพ</th>
                 <th>รหัสสินค้า</th>
                 <th>ชื่อสินค้า</th>
                 <th>รอบ</th>
@@ -254,16 +268,26 @@ onMounted(() => loadReport({ preserveOptions: false }))
             </thead>
             <tbody>
               <tr v-for="row in history" :key="`${row.round_id}-${row.prod_id}`">
+                <td class="image-cell">
+                  <img
+                    v-if="row.image_url"
+                    :src="row.image_url"
+                    :alt="row.product_name"
+                    class="product-thumb"
+                    loading="lazy"
+                  />
+                  <div v-else class="product-thumb product-thumb--placeholder">ไม่มีรูป</div>
+                </td>
                 <td><strong>{{ row.sku || `#${row.prod_id}` }}</strong></td>
                 <td>
-                  <strong>{{ row.product_name }}</strong>
-                  <small v-if="row.flavor_count">{{ formatNumber(row.flavor_count) }} รสชาติ/ตัวเลือก</small>
+                  <p class="cell-title">{{ row.product_name }}</p>
+                  <small v-if="row.flavor_count" class="text-muted">{{ formatNumber(row.flavor_count) }} รสชาติ/ตัวเลือก</small>
                 </td>
                 <td>
-                  <strong>{{ row.round_name }}</strong>
+                  <p class="cell-title">{{ row.round_name }}</p>
                   <span :class="statusClass(row.round_status)">{{ statusLabel(row.round_status) }}</span>
                 </td>
-                <td>{{ formatDate(row.start_date) }} - {{ formatDate(row.end_date) }}</td>
+                <td class="text-muted">{{ formatDate(row.start_date) }} - {{ formatDate(row.end_date) }}</td>
                 <td class="number-cell">{{ formatNumber(row.order_count) }}</td>
                 <td class="number-cell"><strong>{{ formatNumber(row.total_qty) }} ชิ้น</strong></td>
                 <td class="number-cell">{{ formatMoney(row.average_unit_price) }}</td>
@@ -274,18 +298,19 @@ onMounted(() => loadReport({ preserveOptions: false }))
         </div>
       </section>
 
-      <section class="panel">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">ROUND HISTORY</p>
-            <h2>สรุปข้อมูลย้อนหลังรายรอบ</h2>
+      <!-- ── Round History Panel ── -->
+      <section class="panel table-panel">
+        <header class="panel-head">
+          <div class="panel-head__title">
+            <p class="eyebrow">Round History</p>
+            <h3>📦 สรุปข้อมูลย้อนหลังรายรอบ</h3>
           </div>
           <span class="result-count">{{ roundSummaries.length }} รอบ</span>
-        </div>
+        </header>
 
         <div v-if="roundSummaries.length === 0" class="empty-state">ยังไม่มีข้อมูลรายรอบ</div>
-        <div v-else class="table-wrap">
-          <table class="data-table">
+        <div v-else class="table-scroll">
+          <table>
             <thead>
               <tr>
                 <th>รอบ</th>
@@ -300,13 +325,13 @@ onMounted(() => loadReport({ preserveOptions: false }))
             <tbody>
               <tr v-for="round in roundSummaries" :key="round.round_id">
                 <td><strong>{{ round.round_name }}</strong></td>
-                <td>{{ formatDate(round.start_date) }} - {{ formatDate(round.end_date) }}</td>
+                <td class="text-muted">{{ formatDate(round.start_date) }} - {{ formatDate(round.end_date) }}</td>
                 <td><span :class="statusClass(round.round_status)">{{ statusLabel(round.round_status) }}</span></td>
                 <td class="number-cell">{{ formatNumber(round.product_count) }} รายการ</td>
                 <td class="number-cell"><strong>{{ formatNumber(round.total_qty) }} ชิ้น</strong></td>
                 <td class="number-cell amount-cell">{{ formatMoney(round.total_amount) }}</td>
                 <td class="number-cell">
-                  <button class="link-button" type="button" @click="showRound(round.round_id)">ดูรอบนี้</button>
+                  <button class="link-button" type="button" @click="showRound(round.round_id)">ดูรอบนี้ →</button>
                 </td>
               </tr>
             </tbody>
@@ -314,125 +339,232 @@ onMounted(() => loadReport({ preserveOptions: false }))
         </div>
       </section>
     </template>
-  </main>
+  </div>
 </template>
 
 <style scoped>
 .preorder-statistics-page {
-  min-height: 100vh;
-  padding: 32px clamp(18px, 4vw, 64px) 64px;
-  color: #1f2937;
-  background: #f7f8fc;
+  --panel-bg: rgba(255, 255, 255, 0.88);
+  --panel-border: #e8dcf3;
+  --text-main: #432f61;
+  --text-muted: #7a6a96;
+  --grape: #a66de6;
+  --pink: #ff93b8;
+  max-width: 1440px;
+  margin: 2rem auto;
+  padding: 0 1rem 2rem;
+  display: grid;
+  gap: 1.2rem;
+  font-family: 'Kanit', sans-serif;
+  color: var(--text-main);
 }
 
-.page-hero,
-.panel-heading,
+h2, h3, p { margin-top: 0; }
+
+/* ── Hero ── */
+.hero-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem;
+  border-radius: 20px;
+  border: 1px solid var(--panel-border);
+  background: radial-gradient(circle at right top, rgba(255, 147, 184, 0.18), transparent),
+    var(--panel-bg);
+}
+.eyebrow {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--grape);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 0 0 0.3rem;
+}
+.hero-copy h2 {
+  color: var(--text-main);
+  font-weight: 900;
+  margin: 0 0 0.3rem;
+  font-size: 1.6rem;
+}
+.hero-copy p {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  margin: 0;
+}
+.hero-actions, .filter-buttons { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+
+.ghost-btn {
+  background: #faf5ff;
+  color: #4b3280;
+  border: 1px solid #d8c6f2;
+  border-radius: 12px;
+  padding: 0.7rem 1.2rem;
+  font-weight: 700;
+  font: inherit;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(166, 109, 230, 0.1);
+  transition: background 0.2s, box-shadow 0.2s;
+}
+.ghost-btn:hover { background: #f0e4fc; box-shadow: 0 4px 12px rgba(166, 109, 230, 0.18); }
+.hero-btn--primary {
+  color: #fff;
+  background: linear-gradient(135deg, #b673ee, #ff93b8);
+  border: none;
+  padding: 0.7rem 1.5rem;
+  border-radius: 12px;
+  font-weight: 700;
+  font: inherit;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.15s;
+}
+.hero-btn--primary:hover:not(:disabled) { opacity: 0.88; }
+.hero-btn--primary:disabled { cursor: wait; opacity: 0.6; }
+
+/* ── Panel ── */
+.panel {
+  border-radius: 20px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+  padding: 1.5rem;
+}
+.panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+.panel-head__title h3 {
+  color: var(--text-main);
+  font-weight: 800;
+  margin: 0 0 0.25rem;
+}
+.result-count { color: var(--text-muted); font-size: 0.85rem; }
+
+/* ── Filters ── */
+.filter-grid { display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 1rem; }
+.field { display: flex; flex-direction: column; gap: 0.4rem; color: #5f4d85; font-size: 0.85rem; font-weight: 700; }
+.field input, .field select {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #ddd6fe;
+  border-radius: 12px;
+  padding: 0.6rem 0.9rem;
+  color: var(--text-main);
+  background: #faf5ff;
+  font: inherit;
+}
+.field input:focus, .field select:focus { outline: none; border-color: var(--grape); box-shadow: 0 0 0 3px rgba(166, 109, 230, 0.15); }
 .filter-actions {
+  margin-top: 1.1rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  flex-wrap: wrap;
+  gap: 0.75rem;
 }
+.checkbox-label { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 0.88rem; font-weight: 500; }
+.checkbox-label input { width: 16px; height: 16px; accent-color: var(--grape); }
+.filter-note { margin: 0.9rem 0 0; color: var(--text-muted); font-size: 0.8rem; }
 
-.page-hero {
-  max-width: 1440px;
-  margin: 0 auto 24px;
-  padding: 28px 32px;
-  color: #fff;
-  border-radius: 24px;
-  background: linear-gradient(135deg, #312e81, #7c3aed);
-  box-shadow: 0 18px 40px rgba(49, 46, 129, 0.18);
-}
-
-.eyebrow {
-  margin: 0 0 8px;
-  color: #7c3aed;
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.page-hero .eyebrow { color: #ddd6fe; }
-h1, h2, p { margin-top: 0; }
-h1 { margin-bottom: 8px; font-size: clamp(1.55rem, 3vw, 2.2rem); }
-h2 { margin-bottom: 0; font-size: 1.25rem; }
-.hero-description { margin: 0; color: #ede9fe; }
-.hero-actions, .filter-buttons { display: flex; flex-wrap: wrap; gap: 10px; }
-
-.button {
-  border: 0;
-  border-radius: 10px;
-  padding: 10px 16px;
-  font: inherit;
-  font-weight: 700;
-  cursor: pointer;
-  transition: transform 0.15s ease, opacity 0.15s ease;
-}
-.button:hover:not(:disabled) { transform: translateY(-1px); }
-.button:disabled { cursor: wait; opacity: 0.6; }
-.button--primary { color: #fff; background: #6d28d9; }
-.page-hero .button--primary { background: #fff; color: #5b21b6; }
-.button--ghost { color: #4b5563; background: #fff; border: 1px solid #e5e7eb; }
-.page-hero .button--ghost { color: #fff; background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.3); }
-
-.filter-card,
-.panel,
-.state-box {
-  max-width: 1440px;
-  margin: 0 auto 24px;
-  padding: 24px;
-  border: 1px solid #e5e7eb;
+/* ── KPI Grid ── */
+.kpi-grid { display: grid; gap: 1rem; grid-template-columns: repeat(4, 1fr); }
+.kpi-card {
   border-radius: 18px;
-  background: #fff;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+  padding: 1.2rem 1.4rem;
 }
-.filter-grid { display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 16px; }
-.field { display: flex; flex-direction: column; gap: 7px; color: #4b5563; font-size: 0.85rem; font-weight: 700; }
-.field input, .field select { width: 100%; box-sizing: border-box; border: 1px solid #d1d5db; border-radius: 9px; padding: 11px 12px; color: #111827; background: #fff; font: inherit; }
-.field input:focus, .field select:focus { outline: 2px solid #c4b5fd; border-color: #7c3aed; }
-.filter-actions { margin-top: 18px; }
-.checkbox-label { display: flex; align-items: center; gap: 8px; color: #4b5563; font-size: 0.9rem; }
-.checkbox-label input { width: 16px; height: 16px; accent-color: #6d28d9; }
-.filter-note { margin: 14px 0 0; color: #6b7280; font-size: 0.8rem; }
+.kpi-label { font-size: 0.83rem; color: var(--text-muted); font-weight: 600; margin: 0 0 0.4rem; }
+.kpi-value { font-size: 1.9rem; color: var(--text-main); font-weight: 900; margin: 0 0 0.25rem; }
+.kpi-note { color: #9ca3af; font-size: 0.78rem; margin: 0; }
 
-.kpi-grid { max-width: 1440px; margin: 0 auto 24px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
-.kpi-card { padding: 20px; border: 1px solid #e5e7eb; border-radius: 16px; background: #fff; }
-.kpi-card span { display: block; color: #6b7280; font-size: 0.85rem; font-weight: 700; }
-.kpi-card strong { display: block; margin: 10px 0 4px; color: #312e81; font-size: 1.65rem; }
-.kpi-card small { color: #9ca3af; }
-.panel-heading { margin-bottom: 18px; }
-.result-count { color: #6b7280; font-size: 0.85rem; }
-.table-wrap { overflow-x: auto; }
-.data-table { width: 100%; min-width: 940px; border-collapse: collapse; font-size: 0.88rem; }
-.data-table th { padding: 12px; color: #6b7280; border-bottom: 1px solid #e5e7eb; background: #f9fafb; text-align: left; white-space: nowrap; }
-.data-table td { padding: 14px 12px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
-.data-table tbody tr:hover { background: #fafafa; }
-.data-table td small { display: block; margin-top: 4px; color: #9ca3af; }
+/* ── Table ── */
+.table-scroll { overflow-x: auto; }
+table { width: 100%; min-width: 940px; border-collapse: collapse; }
+th {
+  text-align: left;
+  padding: 0.9rem 1rem;
+  color: #826ea1;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 2px solid #f3e8ff;
+  white-space: nowrap;
+}
+td { padding: 1rem; border-bottom: 1px solid #f3e8ff; font-size: 0.9rem; vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: #fdfaff; }
 .number-cell { text-align: right !important; white-space: nowrap; }
-.amount-cell { color: #6d28d9; font-weight: 800; }
-.status-badge { display: inline-block; margin-top: 5px; padding: 3px 8px; border-radius: 999px; color: #6b7280; background: #f3f4f6; font-size: 0.72rem; }
-.status-badge--active { color: #047857; background: #d1fae5; }
-.status-badge--closed { color: #1d4ed8; background: #dbeafe; }
-.status-badge--archived { color: #6b21a8; background: #f3e8ff; }
-.link-button { padding: 0; border: 0; color: #6d28d9; background: transparent; font: inherit; font-weight: 700; cursor: pointer; }
-.link-button:hover { text-decoration: underline; }
-.empty-state, .state-box { color: #6b7280; text-align: center; }
-.state-box--error { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }
+.cell-title { margin: 0 0 0.2rem; font-weight: 700; color: var(--text-main); }
+.text-muted { color: var(--text-muted); font-size: 0.85rem; }
 
+.image-cell { width: 64px; }
+.product-thumb {
+  display: block;
+  width: 52px;
+  height: 52px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--panel-border);
+  background: #f6f0fb;
+}
+.product-thumb--placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #b6a8cc;
+  font-size: 0.65rem;
+  text-align: center;
+  line-height: 1.2;
+}
+.amount-cell { color: var(--grape); font-weight: 800; }
+
+/* ── Round status badges ── */
+.status-badge { display: inline-block; margin-top: 5px; padding: 0.25rem 0.8rem; border-radius: 999px; color: var(--text-muted); background: #f3e8ff; font-size: 0.72rem; font-weight: 700; }
+.status-badge--active { color: #16a34a; background: #ecfdf5; }
+.status-badge--closed { color: #4b3280; background: #f3e8ff; }
+.status-badge--archived { color: #b45309; background: #fffbeb; }
+
+.link-button { padding: 0; border: 0; color: var(--grape); background: transparent; font: inherit; font-weight: 700; cursor: pointer; }
+.link-button:hover { text-decoration: underline; }
+
+/* ── States ── */
+.loading-wrap { text-align: center; padding: 3rem; color: var(--text-muted); }
+.loader {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: 4px solid rgba(166, 109, 230, 0.18);
+  border-top-color: var(--grape);
+  animation: spin 0.9s linear infinite;
+  margin: 0 auto 0.85rem;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.empty-state { text-align: center; padding: 3rem; color: #6b7280; }
+.empty-state--error { color: #b91c1c; }
+.error-title { font-weight: 800; margin-bottom: 0.25rem; }
+
+/* ── Responsive ── */
 @media (max-width: 900px) {
-  .page-hero, .filter-actions { align-items: flex-start; flex-direction: column; }
+  .hero-panel, .filter-actions { align-items: flex-start; flex-direction: column; }
   .hero-actions { width: 100%; }
   .filter-grid { grid-template-columns: 1fr; }
   .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .panel-head { flex-direction: column; }
 }
 
 @media (max-width: 520px) {
-  .preorder-statistics-page { padding: 16px 12px 40px; }
-  .page-hero, .filter-card, .panel { padding: 18px; border-radius: 14px; }
-  .kpi-grid { gap: 10px; }
-  .kpi-card { padding: 14px; }
-  .kpi-card strong { font-size: 1.25rem; }
-  .hero-actions .button, .filter-buttons .button { flex: 1; }
+  .preorder-statistics-page { padding: 0 0.6rem 2.5rem; margin-top: 1rem; }
+  .hero-panel, .panel { padding: 1.1rem; border-radius: 16px; }
+  .kpi-grid { gap: 0.6rem; }
+  .kpi-card { padding: 0.9rem; }
+  .kpi-value { font-size: 1.25rem; }
+  .hero-actions .ghost-btn, .hero-actions .hero-btn--primary,
+  .filter-buttons .ghost-btn, .filter-buttons .hero-btn--primary { flex: 1; }
 }
 </style>

@@ -1892,6 +1892,7 @@ app.get('/api/products/public', async (req, res) => {
         p.cat_id AS categoryId,
         c.cat_name AS categoryName,
         p.stock_qty AS stock,
+        p.flavor_stock AS flavorStock,
         p.base_price AS basePrice,
         p.preorder_price AS preorderPrice,
         (
@@ -1975,6 +1976,7 @@ app.get('/api/products/public', async (req, res) => {
       categoryId: row.categoryId,
       categoryName: row.categoryName || '',
       stock: Number(row.stock) || 0,
+      flavorStock: parseFlavorStockMap(row.flavorStock),
       basePrice: Number(row.basePrice) || 0,
       preorderPrice: Number(row.preorderPrice) || 0,
       price: Number(row.price ?? row.basePrice) || 0,
@@ -2005,6 +2007,7 @@ app.get('/api/products/ready-to-ship', async (req, res) => {
         p.cat_id AS categoryId,
         c.cat_name AS categoryName,
         p.stock_qty AS stock,
+        p.flavor_stock AS flavorStock,
         p.base_price AS basePrice,
         p.preorder_price AS preorderPrice,
         p.preorder_enabled AS preorderEnabled,
@@ -2055,6 +2058,7 @@ app.get('/api/products/ready-to-ship', async (req, res) => {
       categoryId: row.categoryId,
       categoryName: row.categoryName || '',
       stock: Number(row.stock) || 0,
+      flavorStock: parseFlavorStockMap(row.flavorStock),
       basePrice: Number(row.basePrice) || 0,
       preorderPrice: Number(row.preorderPrice) || 0,
       imageUrls: imageUrlMap.get(row.id) || [],
@@ -2082,6 +2086,7 @@ app.get('/api/products/preorder', async (req, res) => {
         p.cat_id AS categoryId,
         c.cat_name AS categoryName,
         p.stock_qty AS stock,
+        p.flavor_stock AS flavorStock,
         p.base_price AS basePrice,
         p.preorder_price AS preorderPrice,
         COALESCE((
@@ -2143,6 +2148,7 @@ app.get('/api/products/preorder', async (req, res) => {
       categoryId: row.categoryId,
       categoryName: row.categoryName || '',
       stock: Number(row.stock) || 0,
+      flavorStock: parseFlavorStockMap(row.flavorStock),
       basePrice: Number(row.basePrice) || 0,
       preorderPrice: Number(row.preorderPrice) || 0,
       chinaShippingFeeThb: Number(row.chinaShippingFeeThb) || 0,
@@ -2169,6 +2175,7 @@ app.get('/api/products/preorder', async (req, res) => {
         p.cat_id AS categoryId,
         c.cat_name AS categoryName,
         p.stock_qty AS stock,
+        p.flavor_stock AS flavorStock,
         p.base_price AS basePrice,
         p.preorder_price AS preorderPrice,
         COALESCE(prp.round_price, p.base_price) AS price,
@@ -2222,6 +2229,7 @@ app.get('/api/products/preorder', async (req, res) => {
       categoryId: row.categoryId,
       categoryName: row.categoryName || '',
       stock: Number(row.stock) || 0,
+      flavorStock: parseFlavorStockMap(row.flavorStock),
       basePrice: Number(row.basePrice) || 0,
       preorderPrice: Number(row.preorderPrice) || 0,
       price: Number(row.price) || Number(row.basePrice) || 0,
@@ -5045,12 +5053,56 @@ app.get('/api/admin/order-item-summary', authenticateToken, requireAdmin, async 
        ORDER BY sold_qty DESC, name ASC, od.flavor ASC, item_type ASC, unit_price ASC`,
     )
 
+    // ดึงรูปภาพของสินค้าที่เกี่ยวข้องทั้งหมดแยกต่างหาก แล้วค่อยจับคู่ใน JS
+    // (หลีกเลี่ยงปัญหา correlated subquery กับบาง MySQL/MariaDB config)
+    const relevantProdIds = [...new Set(rows.map((row) => row.prod_id).filter((id) => id != null))]
+
+    const imageByFlavorMap = new Map() // key: `${prod_id}::${flavor}` -> url
+    const imageByProdMap = new Map() // key: prod_id -> first url (fallback)
+
+    if (relevantProdIds.length > 0) {
+      const [imageRows] = await pool.query(
+        `
+        SELECT prod_id, flavor, image_url
+        FROM product_images
+        WHERE prod_id IN (?)
+        ORDER BY sort_order ASC, img_id ASC
+        `,
+        [relevantProdIds],
+      )
+
+      for (const imgRow of imageRows) {
+        if (!imageByProdMap.has(imgRow.prod_id)) {
+          imageByProdMap.set(imgRow.prod_id, imgRow.image_url)
+        }
+        const flavorKey = String(imgRow.flavor || '').trim()
+        if (flavorKey) {
+          const combinedKey = `${imgRow.prod_id}::${flavorKey}`
+          if (!imageByFlavorMap.has(combinedKey)) {
+            imageByFlavorMap.set(combinedKey, imgRow.image_url)
+          }
+        }
+      }
+    }
+
+    function resolveRowImage(row) {
+      const flavorKey = String(row.flavor || '').trim()
+      if (flavorKey) {
+        const combinedKey = `${row.prod_id}::${flavorKey}`
+        if (imageByFlavorMap.has(combinedKey)) {
+          return imageByFlavorMap.get(combinedKey)
+        }
+      }
+      return imageByProdMap.get(row.prod_id) || ''
+    }
+
     res.json(
       rows.map((row) => ({
         prod_id: Number(row.prod_id) || null,
         name: row.name || '-',
         category_name: row.category_name || '',
         flavor: row.flavor || '',
+        image_url: resolveRowImage(row),
         item_type: row.item_type || '',
         unit_price: Number(row.unit_price) || 0,
         sold_qty: Number(row.sold_qty) || 0,
@@ -5112,6 +5164,13 @@ app.get(
           od.prod_id,
           p.sku,
           p.prod_name AS product_name,
+          (
+            SELECT pi.image_url
+            FROM product_images pi
+            WHERE pi.prod_id = od.prod_id
+            ORDER BY pi.sort_order ASC, pi.img_id ASC
+            LIMIT 1
+          ) AS image_url,
           COUNT(DISTINCT od.order_id) AS order_count,
           SUM(od.qty) AS total_qty,
           COALESCE(SUM(COALESCE(od.Price, 0) * od.qty), 0) AS total_amount,
@@ -5164,6 +5223,7 @@ app.get(
         prod_id: Number(row.prod_id) || null,
         sku: row.sku || '',
         product_name: row.product_name || `สินค้า #${row.prod_id}`,
+        image_url: row.image_url || '',
         order_count: Number(row.order_count) || 0,
         total_qty: Number(row.total_qty) || 0,
         total_amount: Number(row.total_amount) || 0,
