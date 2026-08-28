@@ -191,4 +191,37 @@ onMounted(() => {
 .qr-actions { display:flex; gap:0.5rem }
 .btn-small { padding:0.4rem 0.75rem; border-radius:8px; background:#f3e5f5; border:1px solid #b788ea; color:#6f50a0 }
 .btn-small.danger { background:#fff4f6; border:1px solid #f5b5c1; color:#c2415c }
+
+/* ── Responsive (page had no @media at all) ── */
+@media (max-width: 640px) {
+  .qr-page { padding: 1rem; }
+  .qr-item {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .qr-thumb {
+    width: 64px;
+    height: 64px;
+  }
+  .qr-info {
+    flex: 1 1 100%;
+    min-width: 0;
+    order: 2;
+  }
+  .qr-actions {
+    flex-wrap: wrap;
+    width: 100%;
+    order: 3;
+  }
+  .btn-small {
+    flex: 1;
+    text-align: center;
+  }
+  .form-row.actions {
+    flex-direction: column;
+  }
+  .form-row.actions .btn {
+    width: 100%;
+  }
+}
 </style>

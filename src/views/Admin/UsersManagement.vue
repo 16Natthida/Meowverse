@@ -458,12 +458,15 @@ onMounted(() => {
   background: white;
   border-radius: 16px;
   border: 1px solid #eadff5;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
   box-shadow: 0 4px 12px rgba(111, 80, 160, 0.08);
 }
 
 .users-table {
   width: 100%;
+  min-width: 760px;
   border-collapse: collapse;
 }
 

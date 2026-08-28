@@ -486,8 +486,8 @@ onMounted(() => {
 }
 
 /* ── Table ── */
-.table-scroll { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; }
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table { width: 100%; min-width: 960px; border-collapse: collapse; }
 th {
   text-align: left;
   padding: 0.9rem 1rem;

@@ -468,4 +468,55 @@ td { padding: 1rem; border-bottom: 1px solid #f3e8ff; font-size: 0.9rem; vertica
   overflow-wrap: anywhere;
 }
 .loading-wrap { text-align: center; padding: 3rem; color: var(--text-muted); }
+
+/* ── Table horizontal scroll on small screens (was missing) ── */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.table-scroll table {
+  min-width: 900px;
+}
+
+/* ── Responsive breakpoints (page had none) ── */
+@media (max-width: 900px) {
+  .panel {
+    padding: 1rem;
+  }
+  .panel-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+  .filter-panel {
+    width: 100%;
+  }
+  .filter-select {
+    flex: 1;
+    min-width: 0;
+  }
+  .recipient-info {
+    max-width: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .shipping-page {
+    gap: 0.9rem;
+  }
+  .panel {
+    padding: 0.85rem;
+    border-radius: 14px;
+  }
+  th,
+  td {
+    padding: 0.7rem;
+  }
+  .shipment-editor {
+    min-width: 140px;
+  }
+  .btn-action {
+    width: 100%;
+  }
+}
 </style>

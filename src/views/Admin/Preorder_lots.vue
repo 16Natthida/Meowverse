@@ -13,7 +13,8 @@
         <p>ยังไม่มีรอบนำเข้าสินค้าที่สร้าง กรุณาสร้างรอบนำเข้าใหม่</p>
       </div>
 
-      <table v-else class="preorder-table">
+      <div v-else class="table-scroll-wrap">
+      <table class="preorder-table">
         <thead>
           <tr>
             <th>ชื่อรอบ</th>
@@ -60,6 +61,7 @@
           </tr>
         </tbody>
       </table>
+      </div>
     </div>
 
     <div v-else class="loading">
@@ -1072,8 +1074,14 @@ onMounted(async () => {
   color: #999;
 }
 
+.table-scroll-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .preorder-table {
   width: 100%;
+  min-width: 720px;
   border-collapse: collapse;
 }
 
@@ -1858,8 +1866,13 @@ onMounted(async () => {
     padding: 10px;
   }
 
+  .preorder-header .btn-add-round {
+    width: 100%;
+  }
+
   .preorder-table {
     font-size: 13px;
+    min-width: 640px;
   }
 
   .preorder-table th,

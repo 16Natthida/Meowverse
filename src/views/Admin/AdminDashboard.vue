@@ -528,9 +528,89 @@ onMounted(() => {
   font-weight: 600;
 }
 
+/* Table needs to scroll horizontally instead of being clipped */
+.table-container {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.custom-table {
+  min-width: 560px;
+}
+
 @media (max-width: 1024px) {
   .dashboard-row {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ── Full layout was missing any mobile handling (fixed 260px sidebar
+   pushed the page off-screen because .admin-layout has overflow: hidden) ── */
+@media (max-width: 900px) {
+  .admin-layout {
+    flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
+  .sidebar {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+  }
+
+  .sidebar-header {
+    padding: 0.85rem 1rem;
+    border-bottom: none;
+    border-right: 1px solid #f1f1f1;
+    flex-shrink: 0;
+  }
+
+  .sidebar-menu {
+    display: flex;
+    gap: 0.4rem;
+    padding: 0.75rem;
+    overflow-x: auto;
+  }
+
+  .menu-btn {
+    width: auto;
+    white-space: nowrap;
+    margin-bottom: 0;
+  }
+
+  .group-label {
+    display: none;
+  }
+
+  .logout-btn {
+    margin: 0.75rem;
+    flex-shrink: 0;
+  }
+
+  .main-body {
+    overflow: visible;
+  }
+
+  .top-nav {
+    height: auto;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    padding: 1rem;
+  }
+
+  .search-bar {
+    order: 3;
+    width: 100%;
+  }
+  .search-bar input {
+    width: 100%;
+  }
+
+  .scroll-content {
+    padding: 1.25rem;
+    overflow-y: visible;
   }
 }
 </style>

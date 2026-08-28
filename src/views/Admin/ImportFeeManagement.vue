@@ -602,6 +602,7 @@ async function saveImportFees() {
 }
 .table-wrap {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 .status-group + .status-group {
   border-top: 1px solid #ede9f8;
@@ -625,6 +626,7 @@ async function saveImportFees() {
 }
 .fee-table {
   width: 100%;
+  min-width: 620px;
   border-collapse: collapse;
 }
 .fee-table thead tr {
@@ -861,6 +863,43 @@ async function saveImportFees() {
 .fade-leave-to {
   opacity: 0;
   transform: translateY(4px);
+}
+
+/* ── Responsive (page had no @media at all) ── */
+@media (max-width: 720px) {
+  .import-fee-page {
+    padding: 1rem;
+  }
+  .page-header {
+    align-items: flex-start;
+  }
+  .select-row {
+    flex-wrap: wrap;
+  }
+  .select-wrap {
+    max-width: none;
+    flex: 1 1 100%;
+  }
+  .table-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+    padding: 1rem;
+  }
+  .status-group-header {
+    padding: 0.7rem 1rem;
+  }
+  .fee-table th,
+  .fee-table td {
+    padding: 0.6rem 0.85rem;
+  }
+  .actions {
+    padding: 1rem;
+  }
+  .btn-save {
+    width: 100%;
+    justify-content: center;
+  }
 }
 </style>
 // End of file

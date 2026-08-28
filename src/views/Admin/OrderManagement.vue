@@ -1330,11 +1330,14 @@ onMounted(() => {
 }
 
 .table-scroll {
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 .orders-table {
   width: 100%;
+  min-width: 880px;
   border-collapse: collapse;
 }
 
@@ -1463,11 +1466,14 @@ onMounted(() => {
 }
 
 .summary-table-wrap {
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 .summary-table {
   width: 100%;
+  min-width: 640px;
   border-collapse: collapse;
 }
 

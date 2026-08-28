@@ -526,10 +526,12 @@ onUnmounted(() => {
 
 .table-wrap {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .data-table {
   width: 100%;
+  min-width: 820px;
   border-collapse: collapse;
   font-size: 0.9rem;
 }
@@ -682,5 +684,33 @@ onUnmounted(() => {
 .status-paid {
   background: #dbeafe;
   color: #1e40af;
+}
+
+/* ── Responsive (page had no @media at all) ── */
+@media (max-width: 720px) {
+  .missing-items-page {
+    padding: 1rem;
+    gap: 1rem;
+  }
+  .hero-panel {
+    padding: 1.25rem;
+  }
+  .hero-copy h1 {
+    font-size: 1.4rem;
+  }
+  .panel {
+    padding: 1rem;
+  }
+  .panel-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  .ghost-btn {
+    width: 100%;
+  }
+  .action-buttons {
+    flex-direction: column;
+  }
 }
 </style>
