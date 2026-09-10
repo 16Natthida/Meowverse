@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
+import { printOrder } from '../../utils/printOrder'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api'
 
@@ -73,7 +74,6 @@ async function fetchShippingOrders() {
       drafts.value[order.order_id] = {
         provider_id: order.provider_id || findProviderId(order),
         tracking_number: order.tracking_number || '',
-        shipping_status: order.shipping_status || 'shipped',
       }
     })
   } catch (err) {
@@ -88,7 +88,6 @@ function getDraft(order) {
     drafts.value[order.order_id] = {
       provider_id: order.provider_id || findProviderId(order),
       tracking_number: order.tracking_number || '',
-      shipping_status: order.shipping_status || 'shipped',
     }
   }
   return drafts.value[order.order_id]
@@ -110,7 +109,7 @@ async function saveShipment(order) {
       body: JSON.stringify({
         provider_id: Number(draft.provider_id),
         tracking_number: draft.tracking_number.trim(),
-        shipping_status: draft.shipping_status || 'shipped',
+        shipping_status: 'shipped',
       }),
     })
 
@@ -124,6 +123,10 @@ async function saveShipment(order) {
   } finally {
     savingOrderId.value = null
   }
+}
+
+function printShippingOrder(order) {
+  printOrder(order)
 }
 
 function statusLabel(status) {
@@ -276,18 +279,6 @@ onMounted(fetchShippingOrders)
                     v-model="getDraft(order).tracking_number"
                     placeholder="เลขพัสดุ"
                   />
-                  <select
-                    v-model="getDraft(order).shipping_status"
-                    :class="[
-                      'status-select',
-                      getDraft(order).shipping_status === 'delivered'
-                        ? 'status-select--delivered'
-                        : 'status-select--shipped',
-                    ]"
-                  >
-                    <option value="shipped">จัดส่งแล้ว</option>
-                    <option value="delivered">นำจ่ายแล้ว</option>
-                  </select>
                 </div>
               </td>
 
@@ -301,7 +292,14 @@ onMounted(fetchShippingOrders)
                   :disabled="savingOrderId === order.order_id"
                   @click="saveShipment(order)"
                 >
-                  {{ savingOrderId === order.order_id ? 'กำลังบันทึก...' : 'บันทึกการจัดส่ง' }}
+                  {{ savingOrderId === order.order_id ? 'กำลังบันทึก...' : 'บันทึกและจัดส่ง' }}
+                </button>
+                <button
+                  type="button"
+                  class="btn-print-order"
+                  @click="printShippingOrder(order)"
+                >
+                  พิมพ์ใบออเดอร์
                 </button>
                 <small class="shipment-status">{{ statusLabel(order.status) }}</small>
               </td>
@@ -432,6 +430,23 @@ td { padding: 1rem; border-bottom: 1px solid #f3e8ff; font-size: 0.9rem; vertica
   background: #10b981;
   color: white;
 }
+
+.btn-print-order {
+  margin-top: 0.45rem;
+  background: #fff;
+  border: 1px solid var(--grape);
+  color: var(--grape);
+  padding: 6px 12px;
+  border-radius: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.btn-print-order:hover {
+  background: var(--grape);
+  color: #fff;
+}
 .recipient-info {
   display: grid;
   gap: 0.25rem;
@@ -469,20 +484,6 @@ td { padding: 1rem; border-bottom: 1px solid #f3e8ff; font-size: 0.9rem; vertica
   display: grid;
   gap: 0.45rem;
   min-width: 170px;
-}
-.status-select {
-  font-weight: 700;
-  cursor: pointer;
-}
-.status-select--shipped {
-  background: #ecfdf5;
-  color: #059669;
-  border: 1px solid #10b981;
-}
-.status-select--delivered {
-  background: #eff6ff;
-  color: #2563eb;
-  border: 1px solid #60a5fa;
 }
 .shipment-status {
   display: block;
@@ -547,5 +548,95 @@ td { padding: 1rem; border-bottom: 1px solid #f3e8ff; font-size: 0.9rem; vertica
   .btn-action {
     width: 100%;
   }
+}
+
+@media (max-width: 600px) {
+  .table-scroll {
+    overflow: visible;
+  }
+
+  .table-scroll > table,
+  .table-scroll > table thead,
+  .table-scroll > table tbody,
+  .table-scroll > table tr,
+  .table-scroll > table td {
+    display: block;
+    width: 100%;
+  }
+
+  .table-scroll > table thead {
+    display: none;
+  }
+
+  .table-scroll > table tr {
+    margin-bottom: 0.9rem;
+    padding: 0.8rem;
+    border: 1px solid #eadcf6;
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 5px 16px rgba(84, 54, 113, 0.06);
+  }
+
+  .table-scroll > table td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.7rem;
+    padding: 0.45rem 0;
+    border: 0;
+    text-align: right;
+  }
+
+  .table-scroll > table td::before {
+    flex: 0 0 auto;
+    color: #8a789f;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-align: left;
+  }
+
+  .table-scroll > table td:nth-child(1)::before { content: 'ออเดอร์'; }
+  .table-scroll > table td:nth-child(2)::before { content: 'ประเภท'; }
+  .table-scroll > table td:nth-child(3)::before { content: 'สถานะ'; }
+  .table-scroll > table td:nth-child(4)::before { content: 'ผู้รับ'; }
+  .table-scroll > table td:nth-child(5)::before { content: 'สินค้า'; }
+  .table-scroll > table td:nth-child(6)::before { content: 'ที่อยู่'; }
+  .table-scroll > table td:nth-child(7)::before { content: 'ขนส่ง'; }
+  .table-scroll > table td:nth-child(8)::before { content: 'ยอดรวม'; }
+  .table-scroll > table td:nth-child(9)::before { content: 'จัดการ'; }
+
+  .shipment-editor {
+    display: grid;
+    width: min(100%, 220px);
+    min-width: 0;
+    gap: 0.45rem;
+  }
+
+  .shipment-editor select,
+  .shipment-editor input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .table-scroll > table td:last-child {
+    display: block;
+    padding-top: 0.7rem;
+  }
+
+  .table-scroll > table td:last-child::before {
+    display: none;
+  }
+
+  .table-scroll > table td:last-child button {
+    width: 100%;
+  }
+}
+@media (max-width: 600px) {
+  .table-scroll > table { min-width: 0; table-layout: fixed; }
+  .table-scroll > table td { min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
+  .table-scroll > table td::before { max-width: 40%; }
+  .table-scroll > table td > * { min-width: 0; max-width: 58%; overflow-wrap: anywhere; }
+  .table-scroll > table td:last-child > *,
+  .shipment-editor, .recipient-info, .item-list, .address-cell, .address-text, .notes-block { max-width: 100%; }
 }
 </style>

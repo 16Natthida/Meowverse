@@ -624,4 +624,81 @@ tr:last-child td { border-bottom: none; }
 @media (max-width: 600px) {
   .search-input { width: 100%; }
 }
+
+@media (max-width: 600px) {
+  .table-scroll {
+    overflow: visible;
+  }
+
+  .table-scroll > table,
+  .table-scroll > table thead,
+  .table-scroll > table tbody,
+  .table-scroll > table tr,
+  .table-scroll > table td {
+    display: block;
+    width: 100%;
+  }
+
+  .table-scroll > table thead {
+    display: none;
+  }
+
+  .table-scroll > table tr {
+    margin-bottom: 0.8rem;
+    padding: 0.8rem;
+    border: 1px solid #eadcf6;
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 5px 16px rgba(84, 54, 113, 0.06);
+  }
+
+  .table-scroll > table td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.7rem;
+    padding: 0.45rem 0;
+    border: 0;
+    text-align: right;
+  }
+
+  .table-scroll > table td::before {
+    flex: 0 0 auto;
+    color: #8a789f;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-align: left;
+  }
+
+  .table-scroll > table td:nth-child(1)::before { content: 'รหัสคำขอ'; }
+  .table-scroll > table td:nth-child(2)::before { content: 'ออเดอร์'; }
+  .table-scroll > table td:nth-child(3)::before { content: 'ยอดรวม'; }
+  .table-scroll > table td:nth-child(4)::before { content: 'สถานะออเดอร์'; }
+  .table-scroll > table td:nth-child(5)::before { content: 'วันใหม่'; }
+  .table-scroll > table td:nth-child(6)::before { content: 'เหตุผล'; }
+  .table-scroll > table td:nth-child(7)::before { content: 'เบอร์ติดต่อ'; }
+  .table-scroll > table td:nth-child(8)::before { content: 'สถานะคำขอ'; }
+  .table-scroll > table td:nth-child(9)::before { content: 'ดำเนินการ'; }
+
+  .table-scroll > table td:last-child {
+    display: block;
+    padding-top: 0.7rem;
+  }
+
+  .table-scroll > table td:last-child::before {
+    display: none;
+  }
+
+  .table-scroll > table td:last-child .action-btns,
+  .table-scroll > table td:last-child button {
+    width: 100%;
+  }
+}
+@media (max-width: 600px) {
+  .table-scroll > table { min-width: 0; table-layout: fixed; }
+  .table-scroll > table td { min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
+  .table-scroll > table td::before { max-width: 40%; }
+  .table-scroll > table td > * { min-width: 0; max-width: 58%; overflow-wrap: anywhere; }
+  .table-scroll > table td:last-child > *, .reason-cell { max-width: 100%; }
+}
 </style>

@@ -231,6 +231,12 @@ const router = createRouter({
       meta: { requiresAuth: true, roles: ['admin'] },
     },
     {
+      path: '/admin/shipping-providers',
+      name: 'admin-shipping-providers',
+      component: () => import('../views/Admin/ShippingProvidersManagement.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
       path: '/admin/postpones',
       name: 'admin-postpones',
       component: () => import('../views/Admin/PostponeRequests.vue'),

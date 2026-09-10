@@ -110,7 +110,9 @@ function goBack() {
   router.push('/dashboard')
 }
 
-onMounted(fetchProfile)
+onMounted(async () => {
+  await fetchProfile()
+})
 </script>
 
 <template>

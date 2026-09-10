@@ -6,27 +6,7 @@ const latestProducts = ref([])
 const dashboardData = ref(null)
 const isLoading = ref(false)
 const error = ref('')
-const activeRange = ref('stock')
 let refreshTimerId = null
-
-const chartModes = {
-  stock: {
-    label: 'สต็อกต่อหมวด',
-    chartKey: 'byCategoryStock',
-  },
-  value: {
-    label: 'มูลค่าสต็อก',
-    chartKey: 'byCategoryValue',
-  },
-  low: {
-    label: 'สินค้าเสี่ยง',
-    chartKey: 'byCategoryLowStock',
-  },
-  orders: {
-    label: 'ยอดขายรายคำสั่งซื้อ',
-    chartKey: 'byRecentOrders',
-  },
-}
 
 const kpi = computed(() => {
   return (
@@ -51,31 +31,47 @@ const thresholds = computed(() => {
   )
 })
 
-const selectedChart = computed(() => {
-  const mode = chartModes[activeRange.value] || chartModes.stock
-  const rows = dashboardData.value?.charts?.[mode.chartKey] || []
+const chartColors = ['#a66de6', '#ff93b8', '#42c9a1', '#ffb45e', '#6ea8e6', '#d58be8']
 
-  return {
-    label: mode.label,
-    rows,
+function buildDonutChart(rows) {
+  const normalizedRows = rows
+    .map((row) => ({ label: row.label || '-', value: Number(row.value) || 0 }))
+    .filter((row) => row.value > 0)
+  const total = normalizedRows.reduce((sum, row) => sum + row.value, 0)
+
+  if (!total) {
+    return { total: 0, rows: [], gradient: '#f0e7fa' }
   }
-})
 
-const maxChartValue = computed(() => {
-  const values = selectedChart.value.rows.map((row) => Number(row.value) || 0)
-  return Math.max(...values, 1)
-})
-
-const chartBars = computed(() => {
-  return selectedChart.value.rows.map((row) => {
-    const value = Number(row.value) || 0
+  let cursor = 0
+  const chartRows = normalizedRows.map((row, index) => {
+    const percent = (row.value / total) * 100
+    const start = cursor
+    cursor += percent
     return {
-      label: row.label,
-      value,
-      height: (value / maxChartValue.value) * 100,
+      ...row,
+      percent,
+      start,
+      color: chartColors[index % chartColors.length],
     }
   })
-})
+
+  const segments = chartRows.map((row) => `${row.color} ${row.start}% ${row.start + row.percent}%`)
+
+  return {
+    total,
+    rows: chartRows,
+    gradient: `conic-gradient(${segments.join(', ')})`,
+  }
+}
+
+const stockChart = computed(() =>
+  buildDonutChart(dashboardData.value?.charts?.byCategoryStock || []),
+)
+
+const revenueChart = computed(() =>
+  buildDonutChart(dashboardData.value?.charts?.byOrderTypeRevenue || []),
+)
 
 function formatCurrency(amount) {
   return new Intl.NumberFormat('th-TH', {
@@ -87,18 +83,6 @@ function formatCurrency(amount) {
 
 function formatNumber(numberValue) {
   return new Intl.NumberFormat('th-TH').format(Number(numberValue) || 0)
-}
-
-function formatChartValue(value) {
-  if (activeRange.value === 'value' || activeRange.value === 'orders') {
-    if (activeRange.value === 'value') {
-      return formatCurrency(value)
-    }
-
-    return formatCurrency(value)
-  }
-
-  return formatNumber(value)
 }
 
 function resolveStockStatusClass(product) {
@@ -272,44 +256,72 @@ onBeforeUnmount(() => {
     </section>
 
     <section class="dashboard-grid">
-      <article class="panel panel--sales">
+      <article class="panel insight-panel">
         <header class="panel-head">
           <div>
-            <h3>ภาพรวมจากฐานข้อมูล</h3>
-            <p>แสดงข้อมูล {{ selectedChart.label }}</p>
+            <h3>สัดส่วนสต็อกตามหมวดหมู่</h3>
+            <p>ดูว่าสินค้าคงเหลืออยู่ในหมวดใดมากที่สุด</p>
           </div>
-
-          <div class="range-switch">
-            <button
-              v-for="range in Object.keys(chartModes)"
-              :key="range"
-              :class="['switch-btn', { 'switch-btn--active': activeRange === range }]"
-              type="button"
-              @click="activeRange = range"
-            >
-              {{ chartModes[range].label }}
-            </button>
-          </div>
+          <span class="panel-chip">ทั้งหมด {{ formatNumber(stockChart.total) }} ชิ้น</span>
         </header>
 
-        <div class="panel-kpi-row">
-          <div class="mini-metric mini-metric--orders">
-            <span>คำสั่งซื้อทั้งหมด</span>
-            <strong>{{ formatNumber(kpi.orderCount) }}</strong>
+        <div v-if="stockChart.rows.length === 0" class="chart-empty">
+          ยังไม่มีข้อมูลสต็อก
+        </div>
+        <div v-else class="donut-layout">
+          <div
+            class="donut-chart"
+            :style="{ '--donut-background': stockChart.gradient }"
+            role="img"
+            aria-label="สัดส่วนสต็อกตามหมวดหมู่"
+          >
+            <div class="donut-chart__center">
+              <strong>{{ formatNumber(stockChart.total) }}</strong>
+              <span>ชิ้น</span>
+            </div>
           </div>
-          <div class="mini-metric mini-metric--stock">
-            <span>สินค้าในระบบ</span>
-            <strong>{{ formatNumber(kpi.totalProducts) }}</strong>
+
+          <div class="donut-legend" role="list">
+            <div v-for="row in stockChart.rows" :key="row.label" class="donut-legend__row" role="listitem">
+              <span class="donut-legend__color" :style="{ background: row.color }" />
+              <span class="donut-legend__label">{{ row.label }}</span>
+              <strong>{{ formatNumber(row.value) }} ชิ้น</strong>
+            </div>
           </div>
         </div>
+      </article>
 
-        <div class="sales-chart" role="img" aria-label="กราฟแท่งข้อมูลภาพรวม">
-          <div v-for="bar in chartBars" :key="bar.label" class="bar-wrap">
-            <p class="bar-value">{{ formatChartValue(bar.value) }}</p>
-            <div class="bar-track">
-              <div class="bar-fill" :style="{ height: `${bar.height}%` }" />
+      <article class="panel insight-panel">
+        <header class="panel-head">
+          <div>
+            <h3>รายได้แยกตามประเภทออเดอร์</h3>
+            <p>ยอดรวมของออเดอร์ที่ชำระเงินแล้ว แยกเป็นพร้อมส่งและพรีออเดอร์</p>
+          </div>
+          <span class="panel-chip">{{ revenueChart.rows.length }} ประเภท</span>
+        </header>
+
+        <div v-if="revenueChart.rows.length === 0" class="chart-empty">
+          ยังไม่มีข้อมูลรายได้ของออเดอร์ที่ชำระเงินแล้ว
+        </div>
+        <div v-else class="donut-layout">
+          <div
+            class="donut-chart donut-chart--revenue"
+            :style="{ '--donut-background': revenueChart.gradient }"
+            role="img"
+            aria-label="รายได้แยกตามประเภทออเดอร์"
+          >
+            <div class="donut-chart__center">
+              <strong>{{ formatCurrency(revenueChart.total) }}</strong>
+              <span>รายได้รวม</span>
             </div>
-            <p class="bar-label">{{ bar.label }}</p>
+          </div>
+
+          <div class="donut-legend" role="list">
+            <div v-for="row in revenueChart.rows" :key="row.label" class="donut-legend__row" role="listitem">
+              <span class="donut-legend__color" :style="{ background: row.color }" />
+              <span class="donut-legend__label">{{ row.label }}</span>
+              <strong>{{ formatCurrency(row.value) }}</strong>
+            </div>
           </div>
         </div>
       </article>
@@ -322,7 +334,7 @@ onBeforeUnmount(() => {
       </header>
 
       <div class="table-scroll">
-        <table>
+        <table class="latest-products-table">
           <thead>
             <tr>
               <th>รหัสสินค้า</th>
@@ -364,7 +376,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-else class="table-scroll">
-        <table>
+        <table class="slip-table">
           <thead>
             <tr>
               <th>รหัสชำระ</th>
@@ -654,7 +666,6 @@ onBeforeUnmount(() => {
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 1fr;
   grid-template-columns: 1.6fr 1fr;
   gap: 0.85rem;
 }
@@ -730,76 +741,117 @@ onBeforeUnmount(() => {
   background: linear-gradient(160deg, #fff 0%, #eef7ff 100%);
 }
 
-.range-switch {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
+.insight-panel {
+  min-width: 0;
 }
 
-.switch-btn {
+.panel-chip {
+  flex: 0 0 auto;
+  border: 1px solid #e2d2f3;
   border-radius: 999px;
-  border: 1px solid #deceef;
+  padding: 0.3rem 0.62rem;
+  color: #76529b;
+  background: #f8f0ff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.donut-layout {
+  display: grid;
+  grid-template-columns: minmax(145px, 0.9fr) minmax(0, 1.1fr);
+  align-items: center;
+  gap: 1rem;
+  min-height: 220px;
+}
+
+.donut-chart {
+  position: relative;
+  width: min(210px, 100%);
+  aspect-ratio: 1;
+  margin: 0 auto;
+  border-radius: 50%;
+  background: var(--donut-background);
+  box-shadow: 0 10px 24px rgba(109, 70, 147, 0.1);
+}
+
+.donut-chart::after {
+  position: absolute;
+  inset: 22%;
+  content: '';
+  border-radius: 50%;
   background: #fff;
-  color: #765b99;
-  padding: 0.22rem 0.6rem;
-  font-size: 0.73rem;
+  box-shadow: inset 0 0 0 1px #f0e5f8;
+}
+
+.donut-chart__center {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+}
+
+.donut-chart__center strong {
+  color: #4d3271;
+  font-size: clamp(1rem, 2vw, 1.45rem);
+  font-weight: 900;
+  line-height: 1.1;
+}
+
+.donut-chart__center span {
+  margin-top: 0.18rem;
+  color: #8d7aad;
+  font-size: 0.72rem;
   font-weight: 700;
 }
 
-.switch-btn--active {
-  background: #d9b4fc;
-  border-color: #d9b4fc;
-  color: #5f3788;
-}
-
-.sales-chart {
-  height: 280px;
+.donut-legend {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
   gap: 0.5rem;
-  height: 220px;
+  min-width: 0;
+}
+
+.donut-legend__row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(48px, 1fr));
-  gap: 0.35rem;
+  grid-template-columns: 0.55rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.42rem 0.5rem;
+  border-radius: 9px;
+  background: #fcf9ff;
 }
 
-.bar-wrap {
-  height: 100%;
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  align-items: end;
-  gap: 0.25rem;
+.donut-legend__color {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
 }
 
-.bar-value,
-.bar-label {
-  font-size: 0.66rem;
-  text-align: center;
-  color: #8e7cad;
-}
-
-.bar-track {
-  height: 100%;
-  border-radius: 11px;
-  background: linear-gradient(180deg, #f7ecff 0%, #f3e5ff 100%);
-  position: relative;
+.donut-legend__label {
   overflow: hidden;
+  color: #5d467e;
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.bar-fill {
-  width: 100%;
-  border-radius: 11px;
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  background: linear-gradient(180deg, var(--pink), var(--grape));
-  animation: grow-bar 520ms ease;
+.donut-legend__row strong {
+  color: #4d3271;
+  font-size: 0.73rem;
+  white-space: nowrap;
 }
 
-@keyframes grow-bar {
-  from {
-    height: 0;
-  }
+.chart-empty {
+  padding: 1.25rem;
+  border: 1px dashed #dfcdf1;
+  border-radius: 12px;
+  color: #8e7cad;
+  font-size: 0.82rem;
+  text-align: center;
 }
 
 .summary-row {
@@ -964,14 +1016,92 @@ td {
     grid-template-columns: 1fr;
   }
 
-  .sales-chart {
-    height: 180px;
+  .donut-layout {
+    grid-template-columns: 1fr;
+    gap: 0.8rem;
+    min-height: 0;
+  }
+
+  .donut-chart {
+    width: min(170px, 62vw);
+  }
+
+  .donut-legend {
+    gap: 0.35rem;
   }
 }
 
-@media (min-width: 1081px) {
-  .sales-chart {
-    min-height: 300px;
+@media (max-width: 720px) {
+  .table-scroll {
+    overflow: visible;
+  }
+
+  .table-scroll > table,
+  .table-scroll > table thead,
+  .table-scroll > table tbody,
+  .table-scroll > table tr,
+  .table-scroll > table td {
+    display: block;
+    width: 100%;
+  }
+
+  .table-scroll > table thead {
+    display: none;
+  }
+
+  .table-scroll > table tr {
+    margin-bottom: 0.7rem;
+    padding: 0.7rem;
+    border: 1px solid #eadcf6;
+    border-radius: 12px;
+    background: #fff;
+  }
+
+  .table-scroll > table td {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.65rem;
+    padding: 0.4rem 0;
+    border: 0;
+    text-align: right;
+  }
+
+  .table-scroll > table td::before {
+    flex: 0 0 auto;
+    color: #8a789f;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-align: left;
+  }
+
+  .latest-products-table td:nth-child(1)::before { content: 'รหัส'; }
+  .latest-products-table td:nth-child(2)::before { content: 'สินค้า'; }
+  .latest-products-table td:nth-child(3)::before { content: 'หมวดหมู่'; }
+  .latest-products-table td:nth-child(4)::before { content: 'สถานะ'; }
+  .latest-products-table td:nth-child(5)::before { content: 'ราคา'; }
+
+  .slip-table td:nth-child(1)::before { content: 'รหัสชำระเงิน'; }
+  .slip-table td:nth-child(2)::before { content: 'ออเดอร์'; }
+  .slip-table td:nth-child(3)::before { content: 'ประเภท'; }
+  .slip-table td:nth-child(4)::before { content: 'ยอดเงิน'; }
+  .slip-table td:nth-child(5)::before { content: 'วิธีชำระ'; }
+  .slip-table td:nth-child(6)::before { content: 'วันที่'; }
+  .slip-table td:nth-child(7)::before { content: 'สถานะ'; }
+  .slip-table td:nth-child(8)::before { content: 'สลิป'; }
+  .slip-table td:nth-child(9)::before { content: 'จัดการ'; }
+
+  .slip-table td:last-child {
+    display: block;
+    padding-top: 0.65rem;
+  }
+
+  .slip-table td:last-child::before {
+    display: none;
+  }
+
+  .slip-table td:last-child .action-btns,
+  .slip-table td:last-child button {
+    width: 100%;
   }
 }
 /* ── SLIP SECTION ── */
@@ -1109,5 +1239,12 @@ td {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+@media (max-width: 720px) {
+  .table-scroll > table { min-width: 0; table-layout: fixed; }
+  .table-scroll > table td { min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
+  .table-scroll > table td::before { max-width: 40%; }
+  .table-scroll > table td > * { min-width: 0; max-width: 58%; overflow-wrap: anywhere; }
+  .latest-products-table td > *, .slip-table td > * { max-width: 100%; }
 }
 </style>

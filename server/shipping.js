@@ -115,7 +115,7 @@ router.get('/shipping-orders', async (req, res) => {
         s.name, s.phone, s.notes, s.address, s.Shipping_Carrier,
         s.provider_id, sp.provider_code, sp.provider_name, s.tracking_number,
         s.tracking_url, s.shipping_status, s.shipped_at,
-        od.detail_id, od.flavor, od.qty, od.received_qty, od.arrival_status,
+        od.detail_id, od.flavor, od.Price AS unit_price, od.qty, od.received_qty, od.arrival_status,
         p.prod_name
       FROM orders o
       JOIN shipping s ON o.order_id = s.order_id
@@ -165,6 +165,7 @@ router.get('/shipping-orders', async (req, res) => {
         detail_id: row.detail_id,
         prod_name: row.prod_name,
         flavor: row.flavor,
+        unit_price: row.unit_price,
         qty: row.qty,
         received_qty: row.received_qty,
         arrival_status: row.arrival_status,
@@ -186,7 +187,6 @@ router.patch('/orders/:orderId/shipment', async (req, res) => {
   const orderId = Number(req.params.orderId)
   const providerId = Number(req.body.provider_id)
   const trackingNumber = String(req.body.tracking_number || '').trim()
-  const requestedStatus = String(req.body.shipping_status || '').trim().toLowerCase()
 
   if (!Number.isInteger(orderId) || orderId <= 0) {
     return res.status(400).json({ error: 'รหัสคำสั่งซื้อไม่ถูกต้อง' })
@@ -228,8 +228,8 @@ router.patch('/orders/:orderId/shipment', async (req, res) => {
     const currentShipping = shippingRows[0] || {}
     const finalProviderId = provider?.provider_id || currentShipping.provider_id || null
     const finalCarrier = provider?.provider_name || currentShipping.Shipping_Carrier || null
-    const shippingStatus = requestedStatus === 'delivered' ? 'delivered' : 'shipped'
-    const orderStatus = shippingStatus === 'delivered' ? 'Delivered' : 'Shipped'
+    const shippingStatus = 'shipped'
+    const orderStatus = 'Shipped'
     const shippedAt = shippingStatus === 'shipped' ? new Date() : null
     const deliveredAt = shippingStatus === 'delivered' ? new Date() : null
     const updatedBy = Number(req.headers['x-user-id']) || null

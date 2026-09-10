@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { useAuth } from './composables/useAuth'
+import UserSidebarLayout from './components/UserSidebarLayout.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -262,6 +263,15 @@ function goToWebsite() {
   router.push('/dashboard')
 }
 
+function goBack() {
+  if (window.history.length > 1) {
+    router.back()
+    return
+  }
+
+  router.replace('/admin/home')
+}
+
 onMounted(() => {
   loadProfile()
   fetchLogoSettings()
@@ -274,7 +284,11 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <RouterView v-if="isStandaloneRoute || !isAdminRoute" />
+  <RouterView v-if="isStandaloneRoute" />
+
+  <UserSidebarLayout v-else-if="!isAdminRoute">
+    <RouterView />
+  </UserSidebarLayout>
 
   <div v-else class="app-layout">
     <div v-if="sidebarOpen" class="sidebar-backdrop" @click="closeSidebar"></div>
@@ -381,6 +395,10 @@ onUnmounted(() => {
               <span class="menu-icon"><svg class="menu-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg></span>
               <span class="menu-label">รายการจัดส่ง</span>
             </RouterLink>
+            <RouterLink to="/admin/shipping-providers">
+              <span class="menu-icon"><svg class="menu-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h10"/><path d="M7 13h6"/></svg></span>
+              <span class="menu-label">บริษัทขนส่ง</span>
+            </RouterLink>
             <RouterLink to="/admin/settings">
               <span class="menu-icon"><svg class="menu-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
               <span class="menu-label">ตั้งค่าระบบ</span>
@@ -403,12 +421,28 @@ onUnmounted(() => {
             <span><span class="menu-icon"><svg class="menu-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0 0 12 2z"/></svg></span><span class="menu-label">วิธีใช้งาน</span></span>
           </nav>
         </div>
+
+        <div class="sidebar-footer">
+          <button type="button" class="sidebar-footer__logout" @click="handleAdminLogout">
+            <span class="menu-icon" aria-hidden="true">
+              <svg class="menu-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10 4H5v16h5"></path>
+                <path d="m14 8 4 4-4 4"></path>
+                <path d="M8 12h10"></path>
+              </svg>
+            </span>
+            <span class="menu-label">ออกจากระบบ</span>
+          </button>
+        </div>
       </div>
     </aside>
 
     <section class="workspace">
       <header class="topbar">
         <div class="topbar-main">
+          <button type="button" class="topbar-back" aria-label="ย้อนกลับ" @click="goBack">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="m11 18-6-6 6-6"/></svg>
+          </button>
           <button
             type="button"
             class="sidebar-toggle"
@@ -417,6 +451,17 @@ onUnmounted(() => {
           >
             <span></span><span></span><span></span>
           </button>
+          <div class="mobile-brand" aria-label="Meowverse">
+            <div class="mobile-brand__avatar" aria-hidden="true">
+              <img
+                v-if="logoImage"
+                :src="resolveImageUrl(logoImage, defaultLogoImageUrl)"
+                alt=""
+              />
+              <span v-else>🐱</span>
+            </div>
+            <span>Meowverse</span>
+          </div>
           <label class="top-search" aria-label="ค้นหาสินค้า">
             <input placeholder="ค้นหาสินค้า" type="text" />
           </label>
@@ -424,9 +469,6 @@ onUnmounted(() => {
 
         <div class="topbar-right">
           <button class="notify" type="button" @click="goToWebsite">หน้าเว็บไซต์หลัก</button>
-          <button class="notify logout-btn" type="button" @click="handleAdminLogout">
-            ออกจากระบบ
-          </button>
           <button class="profile-chip" type="button" @click="toggleProfileEditor">
             <div class="profile-pic" aria-hidden="true">
               <img v-if="profile.avatar" :src="profile.avatar" alt="รูปโปรไฟล์ผู้ดูแลระบบ" />
@@ -521,11 +563,10 @@ onUnmounted(() => {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.86) 0%, rgba(255, 250, 255, 0.78) 100%);
   backdrop-filter: blur(14px);
-  transform: translateX(-100%);
+  transform: translateX(0);
   transition: transform 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
   box-shadow: 16px 0 40px rgba(60, 30, 80, 0.16);
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--theme-primary) 45%, #e6d9f5) transparent;
+  scrollbar-width: none;
 }
 
 .sidebar::before {
@@ -538,12 +579,9 @@ onUnmounted(() => {
 }
 
 .sidebar::-webkit-scrollbar {
-  width: 6px;
-}
-
-.sidebar::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--theme-primary) 40%, #e6d9f5);
-  border-radius: 999px;
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .sidebar--open {
@@ -555,6 +593,36 @@ onUnmounted(() => {
   flex-direction: column;
   min-height: 100%;
   padding: 1.15rem 1rem 1.5rem;
+}
+
+.sidebar-mobile-actions {
+  display: none;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 1rem;
+  border-top: 1px dashed color-mix(in srgb, var(--theme-primary) 22%, #ece2f7);
+}
+
+.sidebar-footer__logout {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  border: 1px solid #f0d1d9;
+  border-radius: 10px;
+  padding: 0.7rem 0.75rem;
+  background: #fff;
+  color: #9b4f5d;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-footer__logout:hover {
+  background: #fff5f7;
 }
 
 .brand-box {
@@ -1007,6 +1075,7 @@ a.router-link-exact-active .menu-icon,
   min-width: 0;
   display: flex;
   flex-direction: column;
+  margin-left: 278px;
 }
 
 .topbar {
@@ -1029,9 +1098,37 @@ a.router-link-exact-active .menu-icon,
   min-width: 0;
 }
 
+.topbar-back {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid #e7dff1;
+  border-radius: 10px;
+  color: var(--theme-primary, #8f62c8);
+  background: #fff;
+  cursor: pointer;
+}
+
+.topbar-back svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mobile-brand {
+  display: none;
+}
+
 /* ── MOBILE SIDEBAR TOGGLE (hidden on desktop) ── */
 .sidebar-toggle {
-  display: flex;
+  display: none;
   flex-direction: column;
   justify-content: center;
   align-items: center;
@@ -1055,7 +1152,7 @@ a.router-link-exact-active .menu-icon,
 
 /* ── MOBILE SIDEBAR BACKDROP ── */
 .sidebar-backdrop {
-  display: block;
+  display: none;
   position: fixed;
   inset: 0;
   background: rgba(20, 10, 30, 0.4);
@@ -1243,6 +1340,20 @@ a.router-link-exact-active .menu-icon,
 
   .sidebar {
     border-radius: 0 18px 18px 0;
+    transform: translateX(-100%);
+  }
+
+  .sidebar.sidebar--open {
+    transform: translateX(0);
+  }
+
+  .workspace {
+    margin-left: 0;
+  }
+
+  .page {
+    min-width: 0;
+    overflow-x: hidden;
   }
 
   .sidebar-backdrop {
@@ -1254,18 +1365,121 @@ a.router-link-exact-active .menu-icon,
   }
 
   .topbar {
-    flex-direction: column;
-    align-items: stretch;
+    position: relative;
+    display: block;
+    padding: 0.65rem 0.85rem 0.8rem;
+  }
+
+  .topbar-main {
+    display: grid;
+    grid-template-columns: 40px 40px minmax(0, 1fr);
+    grid-template-rows: 40px auto;
+    gap: 0.65rem;
+    align-items: center;
+  }
+
+  .sidebar-toggle {
+    grid-column: 2;
+    grid-row: 1;
+    position: relative;
+    z-index: 2;
+  }
+
+  .topbar-back {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .mobile-brand {
+    display: flex;
+    grid-column: 1 / -1;
+    grid-row: 1;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    min-width: 0;
+    padding: 0 4.5rem;
+    color: #503b69;
+    font-size: 0.95rem;
+    font-weight: 900;
+    pointer-events: none;
+  }
+
+  .mobile-brand__avatar {
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid color-mix(in srgb, var(--theme-primary) 55%, #fff);
+    font-size: 0.95rem;
+  }
+
+  .mobile-brand__avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .top-search {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    max-width: none;
   }
 
   .topbar-right {
-    justify-content: space-between;
+    position: absolute;
+    top: 0.65rem;
+    right: 0.85rem;
+    z-index: 3;
+    justify-content: flex-end;
+    gap: 0;
   }
 
-  .profile-panel {
+  .topbar-right > .notify {
+    display: none;
+  }
+
+  .profile-chip {
+    gap: 0.35rem;
+    padding: 0;
+  }
+
+  .topbar-right .profile-panel {
+    width: min(280px, calc(100vw - 1.7rem));
+    position: absolute;
+    top: calc(100% + 0.5rem);
+    right: 0;
+    margin-top: 0;
+  }
+
+  .sidebar-mobile-actions {
+    display: grid;
+    gap: 0.5rem;
+    margin-top: auto;
+    padding-top: 1rem;
+    border-top: 1px dashed color-mix(in srgb, var(--theme-primary) 22%, #ece2f7);
+  }
+
+  .sidebar-mobile-action {
     width: 100%;
-    position: static;
-    margin-top: 0.35rem;
+    border: 1px solid #e7dff1;
+    border-radius: 10px;
+    padding: 0.65rem 0.75rem;
+    background: #fff;
+    color: #6a4b87;
+    font: inherit;
+    font-size: 0.82rem;
+    font-weight: 700;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .sidebar-mobile-action--logout {
+    color: #9b4f5d;
+    border-color: #f0d1d9;
   }
 }
 
@@ -1281,6 +1495,10 @@ a.router-link-exact-active .menu-icon,
 
   .page-title {
     font-size: 1.3rem;
+  }
+
+  .profile-chip > div:last-child {
+    display: none;
   }
 }
 </style>

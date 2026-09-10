@@ -40,6 +40,7 @@ const hasInventoryTracking = computed(() => {
     .replace(/[_\s]+/g, ' ')
   return [
     'ready to ship',
+    'delayed',
     'partially received',
     'missing',
     'paid',
@@ -80,6 +81,9 @@ const totalReceivedAmount = computed(() =>
 )
 const refundAmount = computed(() =>
   orderItems.value.reduce((sum, item) => sum + Number(item.refundAmount || 0), 0),
+)
+const refundStatusLabel = computed(() =>
+  String(order.value?.refund_status || '').toLowerCase() === 'paid' ? 'โอนแล้ว' : 'ยังไม่โอน',
 )
 const displayOrderTotal = computed(() => {
   if (order.value?.total_amount != null) return Number(order.value.total_amount)
@@ -271,6 +275,27 @@ onMounted(() => {
               </span>
             </div>
 
+            <div class="summary-row refund-status-row" v-if="hasMissingItems">
+              <span class="summary-label">สถานะคืนเงิน</span>
+              <span
+                class="refund-status-label"
+                :class="{ 'refund-status-label--paid': refundStatusLabel === 'โอนแล้ว' }"
+              >
+                {{ refundStatusLabel }}
+              </span>
+            </div>
+
+            <div
+              v-if="hasMissingItems && refundStatusLabel === 'ยังไม่โอน'"
+              class="refund-instruction"
+            >
+              <strong>แจ้งคืนเงินสำหรับสินค้าที่ขาด</strong>
+              <p>
+                กรุณาแคปหน้าจอนี้ แล้วส่งให้แอดมินทาง LINE OA ของร้าน เพื่อดำเนินการโอนเงินคืน
+              </p>
+              <span>ยอดเงินที่ต้องคืน ฿{{ refundAmount.toLocaleString() }}</span>
+            </div>
+
             <div
               class="summary-row"
               v-if="order.Order_type === 'Preorder' && Number(order.import_fee_total) > 0"
@@ -307,7 +332,9 @@ onMounted(() => {
         </section>
 
         <!-- Action Button -->
-        <button class="btn-back-home" @click="goBack"><span>←</span> กลับไปรายการออเดอร์</button>
+        <button class="btn-back-home" type="button" @click="goBack">
+          <span>←</span> กลับไปรายการออเดอร์
+        </button>
       </div>
     </div>
   </div>
@@ -890,6 +917,39 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.refund-status-row {
+  margin-top: 0.5rem;
+}
+
+.refund-status-label {
+  color: #b45309;
+  font-weight: 700;
+}
+
+.refund-status-label--paid {
+  color: #047857;
+}
+
+.refund-instruction {
+  margin-top: 0.85rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid #f3bfd0;
+  border-radius: 14px;
+  background: #fff5f8;
+  color: #8f3156;
+}
+
+.refund-instruction strong,
+.refund-instruction span {
+  display: block;
+  font-weight: 700;
+}
+
+.refund-instruction p {
+  margin: 0.35rem 0;
+  line-height: 1.5;
 }
 
 .summary-label {

@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
 import translateError from '../../utils/translateError'
+import { printOrder } from '../../utils/printOrder'
 
 const route = useRoute()
 const router = useRouter()
@@ -440,6 +441,15 @@ function closeOrder() {
   selectedOrderError.value = ''
 }
 
+function printSelectedOrder() {
+  if (!selectedOrder.value || selectedOrderLoading.value) return
+
+  printOrder({
+    ...selectedOrder.value,
+    items: summarizedOrderItems.value,
+  })
+}
+
 function goBack() {
   router.push('/admin/home')
 }
@@ -802,7 +812,17 @@ onMounted(() => {
                 {{ getOrderTypeLabel(selectedOrder.Order_type) }}
               </p>
             </div>
-            <button class="close-btn" type="button" @click="closeOrder">✕</button>
+            <div class="modal-head__actions">
+              <button
+                v-if="!selectedOrderLoading && !selectedOrderError"
+                class="print-order-btn"
+                type="button"
+                @click="printSelectedOrder"
+              >
+                พิมพ์ใบออเดอร์
+              </button>
+              <button class="close-btn" type="button" @click="closeOrder">✕</button>
+            </div>
           </div>
 
           <div v-if="selectedOrderLoading" class="state-box">กำลังโหลดรายละเอียด...</div>
@@ -1419,6 +1439,29 @@ onMounted(() => {
   margin-bottom: 1rem;
 }
 
+.modal-head__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-shrink: 0;
+}
+
+.print-order-btn {
+  padding: 0.55rem 0.85rem;
+  border: 1px solid #7c5cdb;
+  border-radius: 999px;
+  background: #7c5cdb;
+  color: #fff;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.print-order-btn:hover {
+  background: #6848bf;
+}
+
 .modal-head p {
   margin: 0.25rem 0 0;
   color: #7b6992;
@@ -1623,5 +1666,110 @@ onMounted(() => {
     min-width: 0;
     width: 100%;
   }
+}
+
+@media (max-width: 600px) {
+  .table-scroll,
+  .summary-table-wrap {
+    overflow: visible;
+  }
+
+  .orders-table,
+  .summary-table {
+    display: block;
+    width: 100%;
+    border: 0;
+  }
+
+  .orders-table thead,
+  .summary-table thead {
+    display: none;
+  }
+
+  .orders-table tbody,
+  .orders-table tr,
+  .summary-table tbody,
+  .summary-table tr {
+    display: block;
+    width: 100%;
+  }
+
+  .orders-table tr,
+  .summary-table tr {
+    margin-bottom: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid #eadcf6;
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 5px 16px rgba(84, 54, 113, 0.06);
+  }
+
+  .orders-table td,
+  .summary-table td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.45rem 0;
+    border: 0;
+    text-align: right;
+  }
+
+  .orders-table td::before,
+  .summary-table td::before {
+    flex: 0 0 auto;
+    color: #8a789f;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-align: left;
+  }
+
+  .orders-table td:nth-child(1)::before { content: 'ออเดอร์'; }
+  .orders-table td:nth-child(2)::before { content: 'ลูกค้า'; }
+  .orders-table td:nth-child(3)::before { content: 'ประเภท'; }
+  .orders-table td:nth-child(4)::before { content: 'ยอดเงิน'; }
+  .orders-table td:nth-child(5)::before { content: 'สถานะ'; }
+  .orders-table td:nth-child(6)::before { content: 'รายการ'; }
+  .orders-table td:nth-child(7)::before { content: 'วันที่'; }
+  .summary-table td:nth-child(1)::before { content: 'สินค้า'; }
+  .summary-table td:nth-child(2)::before { content: 'ประเภท'; }
+  .summary-table td:nth-child(3)::before { content: 'ราคา/ชิ้น'; }
+  .summary-table td:nth-child(4)::before { content: 'จำนวนขาย'; }
+  .summary-table td:nth-child(5)::before { content: 'รวม'; }
+  .summary-table td:nth-child(6)::before { content: 'มูลค่ารวม'; }
+
+  .orders-table td:last-child {
+    display: block;
+    padding-top: 0.7rem;
+  }
+
+  .orders-table td:last-child::before {
+    display: none;
+  }
+
+  .orders-table td:last-child button {
+    width: 100%;
+  }
+
+  .summary-table td:last-child {
+    display: flex;
+  }
+
+  .summary-table td:last-child::before {
+    display: block;
+  }
+
+  .customer-cell,
+  .orders-table td > .status-pill {
+    text-align: right;
+  }
+}
+@media (max-width: 600px) {
+  .orders-table, .summary-table { min-width: 0; table-layout: fixed; }
+  .orders-table td, .summary-table td { min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
+  .orders-table td::before, .summary-table td::before { max-width: 40%; }
+  .orders-table td > *, .summary-table td > * { min-width: 0; max-width: 58%; overflow-wrap: anywhere; }
+  .orders-table td:last-child > *, .summary-table td:last-child > * { max-width: 100%; }
 }
 </style>

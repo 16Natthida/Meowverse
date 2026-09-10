@@ -252,7 +252,7 @@ onMounted(() => loadReport({ preserveOptions: false }))
           ยังไม่มีข้อมูลสถิติพรีออเดอร์ตามตัวกรองนี้
         </div>
         <div v-else class="table-scroll">
-          <table>
+          <table class="history-table">
             <thead>
               <tr>
                 <th>รูปภาพ</th>
@@ -295,6 +295,53 @@ onMounted(() => loadReport({ preserveOptions: false }))
               </tr>
             </tbody>
           </table>
+
+          <div class="history-cards" aria-label="สถิติสินค้าแยกตามรอบ">
+            <article v-for="row in history" :key="`card-${row.round_id}-${row.prod_id}`" class="history-card">
+              <section class="history-card__section history-card__product">
+                <p class="history-card__section-title">สินค้า / รอบ</p>
+                <div class="history-card__product-body">
+                  <img
+                    v-if="row.image_url"
+                    :src="row.image_url"
+                    :alt="row.product_name"
+                    class="history-card__image"
+                    loading="lazy"
+                  />
+                  <div v-else class="history-card__image history-card__image--placeholder">🖼️</div>
+                  <div class="history-card__product-info">
+                    <strong class="history-card__sku">{{ row.sku || `#${row.prod_id}` }}</strong>
+                    <p>{{ row.product_name }}</p>
+                    <small v-if="row.flavor_count">{{ formatNumber(row.flavor_count) }} รสชาติ/ตัวเลือก</small>
+                  </div>
+                </div>
+              </section>
+
+              <section class="history-card__section history-card__round">
+                <div class="history-card__round-row">
+                  <span><b>รอบ:</b> {{ row.round_name || '-' }}</span>
+                  <span :class="statusClass(row.round_status)">{{ statusLabel(row.round_status) }}</span>
+                </div>
+                <p class="history-card__date"><b>วันที่:</b> {{ formatDate(row.start_date) }} – {{ formatDate(row.end_date) }}</p>
+              </section>
+
+              <section class="history-card__section history-card__stats">
+                <p class="history-card__section-title">สถิติ</p>
+                <div class="history-card__stat-row">
+                  <span>จำนวนชิ้นที่สั่ง</span>
+                  <strong>{{ formatNumber(row.total_qty) }} ชิ้น</strong>
+                </div>
+                <div class="history-card__stat-row">
+                  <span>ราคาเฉลี่ย</span>
+                  <strong>{{ formatMoney(row.average_unit_price) }}</strong>
+                </div>
+                <div class="history-card__stat-row">
+                  <span>ยอดรวม</span>
+                  <strong class="amount-cell">{{ formatMoney(row.total_amount) }}</strong>
+                </div>
+              </section>
+            </article>
+          </div>
         </div>
       </section>
 
@@ -310,7 +357,7 @@ onMounted(() => loadReport({ preserveOptions: false }))
 
         <div v-if="roundSummaries.length === 0" class="empty-state">ยังไม่มีข้อมูลรายรอบ</div>
         <div v-else class="table-scroll">
-          <table>
+          <table class="rounds-table">
             <thead>
               <tr>
                 <th>รอบ</th>
@@ -566,5 +613,234 @@ tbody tr:hover { background: #fdfaff; }
   .kpi-value { font-size: 1.25rem; }
   .hero-actions .ghost-btn, .hero-actions .hero-btn--primary,
   .filter-buttons .ghost-btn, .filter-buttons .hero-btn--primary { flex: 1; }
+}
+
+@media (max-width: 720px) {
+  .table-scroll {
+    overflow: visible;
+  }
+
+  .table-scroll > table,
+  .table-scroll > table thead,
+  .table-scroll > table tbody,
+  .table-scroll > table tr,
+  .table-scroll > table td {
+    display: block;
+    width: 100%;
+  }
+
+  .table-scroll > table thead {
+    display: none;
+  }
+
+  .table-scroll > table tr {
+    margin-bottom: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid #eadcf6;
+    border-radius: 14px;
+    background: #fff;
+  }
+
+  .table-scroll > table td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.7rem;
+    padding: 0.42rem 0;
+    border: 0;
+    text-align: right;
+  }
+
+  .table-scroll > table td::before {
+    flex: 0 0 auto;
+    color: #8a789f;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-align: left;
+  }
+
+  .table-scroll > table td:nth-child(1)::before { content: 'สินค้า / รอบ'; }
+  .table-scroll > table td:nth-child(2)::before { content: 'วันที่'; }
+  .table-scroll > table td:nth-child(3)::before { content: 'สถานะ'; }
+  .table-scroll > table td:nth-child(4)::before { content: 'จำนวนสินค้า'; }
+  .table-scroll > table td:nth-child(5)::before { content: 'จำนวนชิ้น'; }
+  .table-scroll > table td:nth-child(6)::before { content: 'ยอดรวม'; }
+}
+@media (max-width: 720px) {
+  .table-scroll > table { min-width: 0; table-layout: fixed; }
+  .table-scroll > table td { min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
+  .table-scroll > table td::before { max-width: 40%; }
+  .table-scroll > table td > * { min-width: 0; max-width: 58%; overflow-wrap: anywhere; }
+}
+
+@media (max-width: 720px) {
+  .history-table td:nth-child(1)::before { content: 'รูปภาพ'; }
+  .history-table td:nth-child(2)::before { content: 'รหัสสินค้า'; }
+  .history-table td:nth-child(3)::before { content: 'ชื่อสินค้า'; }
+  .history-table td:nth-child(4)::before { content: 'รอบพรีออเดอร์'; }
+  .history-table td:nth-child(5)::before { content: 'ช่วงเวลา'; }
+  .history-table td:nth-child(6)::before { content: 'ออเดอร์'; }
+  .history-table td:nth-child(7)::before { content: 'จำนวนสั่ง'; }
+  .history-table td:nth-child(8)::before { content: 'ราคาเฉลี่ย'; }
+  .history-table td:nth-child(9)::before { content: 'ยอดรวม'; }
+
+  .rounds-table td:nth-child(1)::before { content: 'รอบ'; }
+  .rounds-table td:nth-child(2)::before { content: 'วันที่'; }
+  .rounds-table td:nth-child(3)::before { content: 'สถานะ'; }
+  .rounds-table td:nth-child(4)::before { content: 'จำนวนสินค้า'; }
+  .rounds-table td:nth-child(5)::before { content: 'จำนวนชิ้นรวม'; }
+  .rounds-table td:nth-child(6)::before { content: 'ยอดรวม'; }
+  .rounds-table td:nth-child(7)::before { content: 'จัดการ'; }
+  .rounds-table td:last-child { display: block; padding-top: 0.65rem; }
+  .rounds-table td:last-child::before { display: block; }
+  .rounds-table td:last-child > * { max-width: 100%; }
+}
+
+.history-cards {
+  display: none;
+}
+
+.history-card {
+  overflow: hidden;
+  border: 1px solid var(--panel-border);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 6px 18px rgba(84, 54, 113, 0.07);
+}
+
+.history-card__section {
+  padding: 1rem;
+}
+
+.history-card__section + .history-card__section {
+  border-top: 1px solid #eee4f7;
+}
+
+.history-card__section-title {
+  margin: 0 0 0.7rem;
+  color: var(--grape);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.history-card__product-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+}
+
+.history-card__image {
+  width: 68px;
+  height: 68px;
+  flex: 0 0 68px;
+  border-radius: 14px;
+  object-fit: cover;
+  background: #f5efff;
+}
+
+.history-card__image--placeholder {
+  display: grid;
+  place-items: center;
+  font-size: 1.5rem;
+}
+
+.history-card__product-info {
+  min-width: 0;
+  color: var(--text-main);
+}
+
+.history-card__sku {
+  display: block;
+  margin-bottom: 0.2rem;
+  color: var(--text-main);
+  font-size: 1rem;
+}
+
+.history-card__product-info p {
+  margin: 0;
+  font-weight: 700;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.history-card__product-info small {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--text-muted);
+}
+
+.history-card__round-row,
+.history-card__date {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.history-card__round-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.history-card__round-row > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.history-card__date {
+  margin-top: 0.55rem;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+}
+
+.history-card__stat-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.8rem;
+  align-items: center;
+  padding: 0.55rem 0;
+  border-top: 1px solid #f0e8f8;
+}
+
+.history-card__stat-row:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.history-card__stat-row span {
+  color: var(--text-muted);
+  font-size: 0.86rem;
+}
+
+.history-card__stat-row strong {
+  color: var(--text-main);
+  text-align: right;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .history-table {
+    display: none !important;
+  }
+
+  .history-cards {
+    display: grid;
+    gap: 0.8rem;
+  }
+}
+
+@media (max-width: 420px) {
+  .history-card__section {
+    padding: 0.85rem;
+  }
+
+  .history-card__round-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .history-card__stat-row {
+    gap: 0.5rem;
+  }
 }
 </style>

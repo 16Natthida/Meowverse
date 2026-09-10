@@ -963,5 +963,67 @@ async function saveImportFees() {
     justify-content: center;
   }
 }
+
+@media (max-width: 720px) {
+  .table-wrap {
+    overflow: visible;
+  }
+
+  .fee-table,
+  .fee-table thead,
+  .fee-table tbody,
+  .fee-table tr,
+  .fee-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .fee-table thead {
+    display: none;
+  }
+
+  .fee-table tr {
+    margin-bottom: 0.7rem;
+    padding: 0.75rem;
+    border: 1px solid #eadcf6;
+    border-radius: 12px;
+    background: #fff;
+  }
+
+  .fee-table td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.65rem;
+    padding: 0.42rem 0;
+    border: 0;
+    text-align: right;
+  }
+
+  .fee-table td::before {
+    flex: 0 0 auto;
+    color: #8a789f;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-align: left;
+  }
+
+  .fee-table td:nth-child(1)::before { content: 'สินค้า'; }
+  .fee-table td:nth-child(2)::before { content: 'รสชาติ / ขนาด'; }
+  .fee-table td:nth-child(3)::before { content: 'สั่ง / รับจริง'; }
+  .fee-table td:nth-child(4)::before { content: 'ราคา/ชิ้น'; }
+  .fee-table td:nth-child(5)::before { content: 'ค่านำเข้า'; }
+
+  .fee-table .fee-input-wrap {
+    width: min(100%, 150px);
+  }
+}
+@media (max-width: 720px) {
+  .fee-table { min-width: 0; table-layout: fixed; }
+  .fee-table td { min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
+  .fee-table td::before { max-width: 40%; }
+  .fee-table td > * { min-width: 0; max-width: 58%; overflow-wrap: anywhere; }
+  .fee-table .fee-input-wrap, .cell-product, .cell-flavor, .status-text { max-width: 100%; }
+}
 </style>
 // End of file

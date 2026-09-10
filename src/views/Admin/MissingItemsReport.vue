@@ -54,7 +54,7 @@
       <div v-else-if="missingItemsList.length === 0" class="empty-box">ไม่มีสินค้าที่ขาด</div>
 
       <div v-else class="table-wrap">
-        <table class="data-table">
+         <table class="data-table data-table--items">
           <thead>
             <tr>
               <th>สินค้า</th>
@@ -64,7 +64,7 @@
               <th class="num">รับจริง</th>
               <th class="num">ขาด</th>
               <th class="num">ยอดคืน</th>
-              <th>สถานะ</th>
+              <th>สถานะคืนเงิน</th>
               <th>การจัดการ</th>
               <th>ลูกค้า (สั่งซื้อ)</th>
             </tr>
@@ -83,33 +83,22 @@
               <td class="num" style="color: #ef4444; font-weight: 600">{{ item.missing_qty }}</td>
               <td class="num" style="color: #ef4444">฿{{ item.refund_amount.toLocaleString() }}</td>
               <td>
-                <span
-                  :class="[
-                    'status-badge',
-                    item.arrival_status ? `status-${item.arrival_status.toLowerCase()}` : '',
-                  ]"
-                >
-                  {{ formatOrderStatus(item.arrival_status) }}
+                <span :class="['status-badge', refundStatusClass(item)]">
+                  {{ refundStatusLabel(item) }}
                 </span>
               </td>
               <td>
                 <div class="action-buttons">
                   <button
-                    class="secondary-btn"
+                    v-if="!isRefundPaid(item)"
+                    class="refund-btn"
                     type="button"
-                    :disabled="isItemActionPending(item) || !canPerformItemAction(item, 'delay')"
-                    @click="executeItemAction(item, 'delay')"
+                    :disabled="isItemActionPending(item) || !canPerformRefundAction(item)"
+                    @click="handleRefundAction(item)"
                   >
-                    {{ item.arrival_status === 'Delayed' ? 'รอของแล้ว' : 'เลื่อนรอของ' }}
+                    {{ isRefundRequested(item) ? 'บันทึกว่าโอนแล้ว' : 'คืนเงิน' }}
                   </button>
-                  <button
-                    class="danger-btn"
-                    type="button"
-                    :disabled="isItemActionPending(item) || !canPerformItemAction(item, 'refund')"
-                    @click="executeItemAction(item, 'refund')"
-                  >
-                    {{ item.arrival_status === 'Missing' ? 'คืนเงินแล้ว' : 'คืนเงิน' }}
-                  </button>
+                  <span v-else class="refund-completed-label">โอนแล้ว</span>
                 </div>
               </td>
               <td class="customer">
@@ -131,7 +120,7 @@
       <div v-if="affectedRounds.length === 0" class="empty-box">ไม่มีรอบที่ได้รับผล</div>
 
       <div v-else class="table-wrap">
-        <table class="data-table">
+         <table class="data-table data-table--rounds">
           <thead>
             <tr>
               <th>รอบ</th>
@@ -179,66 +168,81 @@ function authHeaders() {
   }
 }
 
-function formatOrderStatus(status) {
-  const map = {
-    Partially_Received: 'รับไม่ครบ',
-    Missing: 'ขาดสินค้า',
-    Ready_to_Ship: 'พร้อมส่ง',
-    Pending: 'รอชำระเงิน',
-    Paid: 'ชำระแล้ว',
-    Delayed: 'รอของที่แยกส่ง',
-  }
-  return map[status] || status
+function isRefundPaid(item) {
+  return String(item?.refund_status || '').toLowerCase() === 'paid'
 }
 
-function isRefundDecision(item) {
-  return String(item.arrival_status || '').toLowerCase() === 'missing'
+function isRefundRequested(item) {
+  return String(item?.arrival_status || '').toLowerCase() === 'missing'
 }
 
-function isDelayDecision(item) {
-  return String(item.arrival_status || '').toLowerCase() === 'delayed'
+function isDelayed(item) {
+  return String(item?.arrival_status || '').toLowerCase() === 'delayed'
+}
+
+function refundStatusLabel(item) {
+  if (isRefundPaid(item)) return 'โอนแล้ว'
+  if (isDelayed(item)) return 'เลื่อนรอของ'
+  return 'ยังไม่โอน'
+}
+
+function refundStatusClass(item) {
+  if (isDelayed(item)) return 'status-delayed'
+  return isRefundPaid(item) ? 'status-refund-paid' : 'status-refund-pending'
 }
 
 function isItemActionPending(item) {
   return Boolean(itemActionLoading.value[item.detail_id])
 }
 
-function canPerformItemAction(item, action) {
-  if (!item || !['refund', 'delay'].includes(action)) return false
-  if (action === 'refund') return !isRefundDecision(item) && item.missing_qty > 0
-  if (action === 'delay') return !isDelayDecision(item) && item.missing_qty > 0
-  return false
+function canMarkRefundPaid(item) {
+  return Boolean(
+    item &&
+      isRefundRequested(item) &&
+      !isRefundPaid(item) &&
+      Number(item.missing_qty) > 0,
+  )
 }
 
-async function executeItemAction(item, action) {
-  if (!item || !['refund', 'delay'].includes(action)) return
-  if (!canPerformItemAction(item, action)) return
+function canRequestRefund(item) {
+  return Boolean(
+    item &&
+      !isRefundRequested(item) &&
+      !isRefundPaid(item) &&
+      Number(item.missing_qty) > 0,
+  )
+}
+
+function canPerformRefundAction(item) {
+  return isRefundRequested(item) ? canMarkRefundPaid(item) : canRequestRefund(item)
+}
+
+async function handleRefundAction(item) {
+  if (!item || !canPerformRefundAction(item)) return
   itemActionLoading.value = {
     ...itemActionLoading.value,
     [item.detail_id]: true,
   }
 
   try {
-    const response = await fetch(`${API_BASE_URL}/admin/inventory-intake/item/${item.detail_id}`, {
+    const response = await fetch(`${API_BASE_URL}/admin/refunds/orders/${item.order_id}/status`, {
       method: 'PATCH',
       headers: authHeaders(),
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({
+        detail_id: item.detail_id,
+        status: isRefundRequested(item) ? 'paid' : 'pending',
+      }),
     })
 
     const data = await response.json().catch(() => ({}))
     if (!response.ok) {
-      throw new Error(data.error || data.message || 'ไม่สามารถบันทึกการตัดสินใจได้')
+      throw new Error(data.error || data.message || 'ไม่สามารถบันทึกรายการคืนเงินได้')
     }
 
-    const updatedStatus = action === 'refund' ? 'Missing' : 'Delayed'
-    item.arrival_status = updatedStatus
-    item.refund_amount = action === 'refund' ? item.missing_qty * Number(item.unit_price || 0) : 0
-    item.order_status = data.order_status || item.order_status
-    // โหลดจากฐานข้อมูลอีกครั้ง เพื่อยืนยันว่าการตัดสินใจถูกบันทึกจริง
     await fetchData()
   } catch (error) {
     console.error(error)
-    alert(error.message || 'เกิดข้อผิดพลาดในการบันทึก')
+    alert(error.message || 'เกิดข้อผิดพลาดในการบันทึกรายการคืนเงิน')
   } finally {
     itemActionLoading.value = {
       ...itemActionLoading.value,
@@ -338,6 +342,7 @@ async function fetchData() {
             order_id: order.order_id,
             username: order.username,
             order_status: order.status,
+            refund_status: String(order.refund_status || 'pending').toLowerCase() === 'paid' ? 'paid' : 'pending',
             product_name: item.product_name,
             flavor: item.flavor,
             unit_price: item.unit_price,
@@ -345,10 +350,7 @@ async function fetchData() {
             received_qty: item.received_qty,
             missing_qty: missingQty,
             arrival_status: arrivalStatus,
-            refund_amount:
-              String(arrivalStatus).toLowerCase() === 'missing'
-                ? missingQty * Number(item.unit_price || 0)
-                : 0,
+            refund_amount: missingQty * Number(item.unit_price || 0),
             round_id: roundInfo.round_id,
             round_name: roundInfo.round_name,
           })
@@ -629,6 +631,16 @@ onUnmounted(() => {
   color: #1e40af;
 }
 
+.status-refund-pending {
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.status-refund-paid {
+  background: #d1fae5;
+  color: #065f46;
+}
+
 .action-buttons {
   display: flex;
   flex-direction: column;
@@ -636,7 +648,7 @@ onUnmounted(() => {
 }
 
 .secondary-btn,
-.danger-btn {
+.refund-btn {
   width: 100%;
   border: 1px solid transparent;
   border-radius: 10px;
@@ -660,18 +672,37 @@ onUnmounted(() => {
   background: #eef2ff;
 }
 
-.danger-btn {
-  background: #fee2e2;
-  color: #991b1b;
-  border-color: #fecaca;
+.refund-btn {
+  width: 100%;
+  border: 1px solid #f5b4c9;
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem;
+  background: #fff1f5;
+  color: #be185d;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
 }
 
-.danger-btn:hover:not(:disabled) {
-  background: #fca5a5;
+.refund-btn:hover:not(:disabled) {
+  background: #fce7f3;
+}
+
+.refund-completed-label {
+  display: inline-block;
+  width: 100%;
+  border: 1px solid #a7f3d0;
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem;
+  background: #d1fae5;
+  color: #065f46;
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-align: center;
 }
 
 .secondary-btn:disabled,
-.danger-btn:disabled {
+.refund-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
@@ -712,5 +743,115 @@ onUnmounted(() => {
   .action-buttons {
     flex-direction: column;
   }
+}
+
+@media (max-width: 720px) {
+  .table-wrap {
+    overflow: visible;
+  }
+
+  .data-table,
+  .data-table thead,
+  .data-table tbody,
+  .data-table tr,
+  .data-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .data-table thead {
+    display: none;
+  }
+
+  .data-table tr {
+    margin-bottom: 0.8rem;
+    padding: 0.8rem;
+    border: 1px solid #eadcf6;
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 5px 16px rgba(84, 54, 113, 0.06);
+  }
+
+  .data-table td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.7rem;
+    padding: 0.42rem 0;
+    border: 0;
+    text-align: right;
+  }
+
+  .data-table td::before {
+    flex: 0 0 auto;
+    color: #8a789f;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-align: left;
+  }
+
+  .data-table td:nth-child(1)::before { content: 'สินค้า / รอบ'; }
+  .data-table td:nth-child(2)::before { content: 'รสชาติ'; }
+  .data-table td:nth-child(3)::before { content: 'ราคา/ชิ้น'; }
+  .data-table td:nth-child(4)::before { content: 'สั่ง'; }
+  .data-table td:nth-child(5)::before { content: 'รับจริง'; }
+  .data-table td:nth-child(6)::before { content: 'ขาด'; }
+  .data-table td:nth-child(7)::before { content: 'ยอดคืน'; }
+  .data-table td:nth-child(8)::before { content: 'สถานะคืนเงิน'; }
+  .data-table td:nth-child(9)::before { content: 'จัดการ'; }
+  .data-table td:nth-child(10)::before { content: 'ลูกค้า'; }
+
+  .data-table--rounds td:nth-child(1)::before { content: 'รอบ'; }
+  .data-table--rounds td:nth-child(2)::before { content: 'สินค้าขาด'; }
+  .data-table--rounds td:nth-child(3)::before { content: 'ยอดคืน'; }
+  .data-table--rounds td:nth-child(4)::before { content: 'ออเดอร์ที่ได้รับผล'; }
+
+  .data-table td:last-child {
+    display: block;
+    padding-top: 0.7rem;
+  }
+
+  .data-table td:last-child::before {
+    display: none;
+  }
+
+  .data-table .action-buttons {
+    display: grid;
+    gap: 0.45rem;
+  }
+
+  .data-table .action-buttons button {
+    width: 100%;
+  }
+
+  .data-table--items td:nth-child(9) {
+    display: block;
+    padding-top: 0.7rem;
+  }
+
+  .data-table--items td:nth-child(9)::before {
+    display: none;
+  }
+
+  .data-table--items td:nth-child(10) {
+    display: flex;
+  }
+
+  .data-table--items td:nth-child(10)::before,
+  .data-table--rounds td:last-child::before {
+    display: block;
+  }
+
+  .data-table--rounds td:last-child {
+    display: flex;
+    padding-top: 0.42rem;
+  }
+}
+@media (max-width: 720px) {
+  .data-table { min-width: 0; table-layout: fixed; }
+  .data-table td { min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
+  .data-table td::before { max-width: 40%; }
+  .data-table td > * { min-width: 0; max-width: 58%; overflow-wrap: anywhere; }
+  .data-table td:last-child > *, .data-table .action-buttons, .data-table .action-buttons button { max-width: 100%; }
 }
 </style>

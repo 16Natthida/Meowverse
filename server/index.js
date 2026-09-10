@@ -9,7 +9,7 @@ import { mkdirSync } from 'node:fs'
 import { unlink } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import cartRouter from './cart.js'
-import orderRouter, { expirePendingReadyOrders, restoreReadyOrderStock } from './order.js'
+import orderRouter, { deductReadyOrderStock } from './order.js'
 import shippingRouter from './shipping.js'
 
 dotenv.config()
@@ -478,6 +478,23 @@ app.use('/api/cart', cartRouter)
 app.use('/api/orders', orderRouter)
 app.use('/api/admin', shippingRouter)
 
+// Active shipping providers are safe to expose to the checkout form.
+// Management endpoints remain protected by the admin-only router above.
+app.get('/api/shipping-providers', async (_req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT provider_id, provider_code, provider_name, tracking_url_template
+       FROM shipping_providers
+       WHERE is_active = 1
+       ORDER BY provider_name ASC`,
+    )
+    res.json(rows)
+  } catch (error) {
+    console.error('Public shipping providers API Error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 function authenticateToken(req, res, next) {
   const roleHeader = String(req.headers['x-user-role'] || '')
     .trim()
@@ -815,6 +832,7 @@ function mapProductRow(row, imageUrlMap) {
     imageUrls: imageUrlMap.get(row.id) || [],
     preorderEnabled: Boolean(row.preorderEnabled),
     readyToShipEnabled: Boolean(row.readyToShipEnabled),
+    isRecommended: Boolean(row.isRecommended),
   }
 }
 
@@ -962,7 +980,8 @@ async function queryProductsByIds(productIds, connection = pool) {
           LIMIT 1
         ) AS preorderRoundId,
         p.preorder_enabled AS preorderEnabled,
-        p.ready_to_ship_enabled AS readyToShipEnabled
+        p.ready_to_ship_enabled AS readyToShipEnabled,
+        p.is_recommended AS isRecommended
       FROM products p
       LEFT JOIN categories c ON c.cat_id = p.cat_id
       WHERE p.prod_id IN (?)
@@ -1043,7 +1062,8 @@ async function ensureAdminSchema() {
     ADD COLUMN IF NOT EXISTS flavors TEXT DEFAULT NULL,
     ADD COLUMN IF NOT EXISTS sku VARCHAR(100) DEFAULT NULL,
     ADD COLUMN IF NOT EXISTS preorder_enabled TINYINT(1) NOT NULL DEFAULT 0,
-    ADD COLUMN IF NOT EXISTS ready_to_ship_enabled TINYINT(1) NOT NULL DEFAULT 1
+    ADD COLUMN IF NOT EXISTS ready_to_ship_enabled TINYINT(1) NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS is_recommended TINYINT(1) NOT NULL DEFAULT 0
   `)
 
   await pool.query(`
@@ -1294,6 +1314,13 @@ async function ensureAdminSchema() {
     ADD COLUMN IF NOT EXISTS preorder_round_id INT DEFAULT NULL
   `)
 
+  // Track manual refund progress per item so refunding one missing item does not
+  // mark every missing item in the same order as refunded.
+  await pool.query(`
+    ALTER TABLE order_details
+    ADD COLUMN IF NOT EXISTS refund_status VARCHAR(20) NOT NULL DEFAULT 'pending'
+  `)
+
   // Keep intake decisions in order_details. Older databases only had Pending/Arrived,
   // which silently converted Missing/Delayed to an empty ENUM value.
   await pool.query(`
@@ -1317,6 +1344,22 @@ async function ensureAdminSchema() {
   await pool.query(`
     ALTER TABLE orders
     ADD COLUMN IF NOT EXISTS shipping_fee DECIMAL(10,2) NOT NULL DEFAULT 0
+  `)
+
+  // Keep manual refund tracking intentionally simple: pending or paid.
+  await pool.query(`
+    ALTER TABLE orders
+    ADD COLUMN IF NOT EXISTS refund_status VARCHAR(20) NOT NULL DEFAULT 'pending'
+  `)
+
+  await pool.query(`
+    ALTER TABLE orders
+    ADD COLUMN IF NOT EXISTS refund_completed_at DATETIME NULL
+  `)
+
+  await pool.query(`
+    ALTER TABLE orders
+    ADD COLUMN IF NOT EXISTS refund_completed_by INT NULL
   `)
 
   // Import_fee is stored as the allocated line total after quantity-based splitting.
@@ -1737,9 +1780,9 @@ app.post('/api/products', async (req, res) => {
     const [insertResult] = await connection.query(
       `
         INSERT INTO products
-          (cat_id, prod_name, description, flavors, flavor_stock, stock_qty, base_price, preorder_price, sku, preorder_enabled, ready_to_ship_enabled)
+          (cat_id, prod_name, description, flavors, flavor_stock, stock_qty, base_price, preorder_price, sku, preorder_enabled, ready_to_ship_enabled, is_recommended)
         VALUES
-          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         Number(payload.categoryId),
@@ -1755,6 +1798,7 @@ app.post('/api/products', async (req, res) => {
         payload.sku ? String(payload.sku).trim() : null,
         toBooleanNumber(payload.preorderEnabled),
         toBooleanNumber(payload.readyToShipEnabled ?? true),
+        toBooleanNumber(payload.isRecommended),
       ],
     )
 
@@ -1802,7 +1846,8 @@ app.put('/api/products/:id', async (req, res) => {
           preorder_price = ?,
           sku = ?,
           preorder_enabled = ?,
-          ready_to_ship_enabled = ?
+          ready_to_ship_enabled = ?,
+          is_recommended = ?
         WHERE prod_id = ?
       `,
       [
@@ -1819,6 +1864,7 @@ app.put('/api/products/:id', async (req, res) => {
         payload.sku ? String(payload.sku).trim() : null,
         toBooleanNumber(payload.preorderEnabled),
         toBooleanNumber(payload.readyToShipEnabled ?? true),
+        toBooleanNumber(payload.isRecommended),
         productId,
       ],
     )
@@ -1850,6 +1896,7 @@ app.patch('/api/products/:id/status', async (req, res) => {
   const statusColumnMap = {
     preorderEnabled: 'preorder_enabled',
     readyToShipEnabled: 'ready_to_ship_enabled',
+    isRecommended: 'is_recommended',
   }
 
   const column = statusColumnMap[key]
@@ -1944,7 +1991,8 @@ app.get('/api/products/public', async (req, res) => {
           LIMIT 1
         ), 0) AS chinaShippingFeeThb,
         p.preorder_enabled AS preorderEnabled,
-        p.ready_to_ship_enabled AS readyToShipEnabled
+        p.ready_to_ship_enabled AS readyToShipEnabled,
+        p.is_recommended AS isRecommended
       FROM products p
       LEFT JOIN categories c ON c.cat_id = p.cat_id
       WHERE (p.ready_to_ship_enabled = 1 OR p.preorder_enabled = 1)
@@ -2000,6 +2048,7 @@ app.get('/api/products/public', async (req, res) => {
       imageUrls: imageUrlMap.get(row.id) || [],
       preorderEnabled: Boolean(row.preorderEnabled),
       readyToShipEnabled: Boolean(row.readyToShipEnabled),
+      isRecommended: Boolean(row.isRecommended),
     }))
 
     res.json(products)
@@ -3305,25 +3354,14 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
 
     const orderData = orderRows[0]
     const normalizedOrderType = String(orderData.Order_type || '').trim().toLowerCase()
+    const normalizedOrderStatus = String(orderData.status || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[_\s]+/g, ' ')
 
     if (String(orderData.status || '').trim().toLowerCase() === 'cancelled') {
       await connection.rollback()
-      return res.status(409).json({ error: 'ออเดอร์นี้หมดเวลาชำระเงินและถูกยกเลิกแล้ว' })
-    }
-
-    if (
-      normalizedOrderType === 'ready' &&
-      String(orderData.status || '').trim().toLowerCase() === 'pending' &&
-      orderData.deadline &&
-      new Date(orderData.deadline).getTime() <= Date.now()
-    ) {
-      await restoreReadyOrderStock(connection, order_id)
-      await connection.query('DELETE FROM payment WHERE order_id = ?', [order_id])
-      await connection.query('DELETE FROM shipping WHERE order_id = ?', [order_id])
-      await connection.query('DELETE FROM order_details WHERE order_id = ?', [order_id])
-      await connection.query('DELETE FROM orders WHERE order_id = ?', [order_id])
-      await connection.commit()
-      return res.status(409).json({ error: 'หมดเวลาชำระเงิน ออเดอร์นี้ถูกยกเลิกแล้ว' })
+      return res.status(409).json({ error: 'ออเดอร์นี้ถูกยกเลิกแล้ว' })
     }
 
     const effectiveShippingFee =
@@ -3377,6 +3415,21 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     } else {
       return res.status(400).json({ error: 'ไม่รองรับประเภทออเดอร์นี้' })
     }
+
+    if (normalizedOrderType === 'ready') {
+      if (!['pending', 'invalid slip'].includes(normalizedOrderStatus)) {
+        await connection.rollback()
+        return res.status(409).json({ error: 'ออเดอร์นี้ส่งหลักฐานการชำระเงินไปแล้วหรืออยู่ระหว่างตรวจสอบ' })
+      }
+
+      // พร้อมส่งจะตัดสต็อกเมื่อผู้ใช้แนบสลิปและกดบันทึกเท่านั้น
+      const stockResult = await deductReadyOrderStock(connection, order_id)
+      if (!stockResult.ok) {
+        await connection.rollback()
+        return res.status(409).json({ error: stockResult.error })
+      }
+    }
+
     if (effectiveShippingFee > 0 && Number(orderData.shipping_fee) <= 0) {
       await connection.query('UPDATE orders SET shipping_fee = ? WHERE order_id = ?', [
         effectiveShippingFee,
@@ -3421,7 +3474,8 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     if (!isPreorderImportFeeRound) {
       // 4. ดึงรายละเอียดออเดอร์เพื่อเคลียร์ตะกร้าและปรับสต็อกหลังชำระเงินจริง
       const [detailRows] = await connection.query(
-        `SELECT od.prod_id, od.qty, od.Price AS unit_price, od.flavor
+        `SELECT od.prod_id, od.qty, od.Price AS unit_price, od.flavor,
+                od.item_type, od.preorder_round_id
          FROM order_details od
          WHERE od.order_id = ?`,
         [order_id],
@@ -3436,29 +3490,26 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
                AND user_id = (SELECT user_id FROM orders WHERE order_id = ?)
                AND qty = ?
                AND COALESCE(flavor, '') = COALESCE(?, '')
-               AND COALESCE(round_price, 0) = COALESCE(?, 0)
+               AND COALESCE(item_type, '') = COALESCE(?, '')
+               AND COALESCE(preorder_round_id, 0) = COALESCE(?, 0)
              LIMIT 1`,
-            [detail.prod_id, order_id, detail.qty, detail.flavor || '', detail.unit_price || 0],
+            [
+              detail.prod_id,
+              order_id,
+              detail.qty,
+              detail.flavor || '',
+              detail.item_type || '',
+              detail.preorder_round_id || 0,
+            ],
           )
         }
       }
-
-      // Stock for ready-to-ship orders was reserved when the order was created.
-      // Do not decrement it again when the payment slip is submitted.
 
       // 7. อัปเดตสถานะในตาราง orders เป็น 'Slip_submitted' เพื่อให้แอดมินรู้ว่า user แนบสลิปมาแล้ว
       await connection.query(`UPDATE orders SET status = 'Slip_submitted' WHERE order_id = ?`, [
         order_id,
       ])
 
-      // 8. ลบรายการในตะกร้าหลังชำระเงินสำเร็จ
-      const [userIdRows] = await connection.query('SELECT user_id FROM orders WHERE order_id = ?', [
-        order_id,
-      ])
-      if (userIdRows.length > 0) {
-        const userId = userIdRows[0].user_id
-        await connection.query('DELETE FROM cart WHERE user_id = ?', [userId])
-      }
     }
 
     await connection.commit()
@@ -3648,6 +3699,8 @@ app.get('/api/admin/inventory-intake/orders', authenticateToken, requireAdmin, a
         o.user_id,
         o.total_amount,
         o.status,
+        o.refund_status,
+        o.refund_completed_at,
         o.Order_type AS order_type,
         o.Order_date AS order_date,
         a.username,
@@ -3680,6 +3733,7 @@ app.get('/api/admin/inventory-intake/orders', authenticateToken, requireAdmin, a
            od.qty AS ordered_qty,
            COALESCE(od.received_qty, 0) AS received_qty,
            COALESCE(od.arrival_status, 'Pending') AS arrival_status,
+           COALESCE(od.refund_status, 'pending') AS refund_status,
            p.prod_name AS product_name,
            p.stock_qty AS stock_qty,
            COALESCE(
@@ -3729,6 +3783,7 @@ app.get('/api/admin/inventory-intake/orders', authenticateToken, requireAdmin, a
         received_qty: receivedQty,
         missing_qty: missingQty,
         arrival_status: detail.arrival_status || 'Pending',
+        refund_status: String(detail.refund_status || 'pending').toLowerCase() === 'paid' ? 'paid' : 'pending',
         stock_qty: Number(detail.stock_qty) || 0,
         unit_price: unitPrice,
         line_total: lineTotal,
@@ -3754,6 +3809,8 @@ app.get('/api/admin/inventory-intake/orders', authenticateToken, requireAdmin, a
         username: order.username || '',
         full_name: order.full_name || '',
         status: order.status || 'Pending',
+        refund_status: String(order.refund_status || 'pending').toLowerCase() === 'paid' ? 'paid' : 'pending',
+        refund_completed_at: order.refund_completed_at || null,
         order_type: order.order_type || 'Preorder',
         order_date: order.order_date,
         total_amount: Number(order.total_amount) || 0,
@@ -4650,6 +4707,172 @@ app.post(
 // PATCH /api/admin/inventory-intake/item/:detail_id
 // ปรับสถานะสินค้าที่ขาดระหว่างการรับสินค้าเข้า: คืนเงินหรือรอของ
 // ─────────────────────────────────────────────
+// PATCH /api/admin/refunds/orders/:order_id/status
+// แจ้งคืนเงินหรือบันทึกการโอนเงินคืนเฉพาะรายการที่เลือก
+// ─────────────────────────────────────────────
+app.patch(
+  '/api/admin/refunds/orders/:order_id/status',
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    const orderId = Number(req.params.order_id)
+    const detailId = Number(req.body?.detail_id)
+    const requestedStatus = String(req.body?.status || '').trim().toLowerCase()
+
+    if (!orderId) {
+      return res.status(400).json({ error: 'order_id is required' })
+    }
+
+    if (!detailId) {
+      return res.status(400).json({ error: 'detail_id is required' })
+    }
+
+    if (!['pending', 'paid'].includes(requestedStatus)) {
+      return res.status(400).json({ error: 'status must be pending or paid' })
+    }
+
+    const connection = await pool.getConnection()
+    try {
+      await connection.beginTransaction()
+
+      const [orderRows] = await connection.query(
+        `SELECT order_id, refund_status, refund_completed_at
+         FROM orders
+         WHERE order_id = ?
+         LIMIT 1
+         FOR UPDATE`,
+        [orderId],
+      )
+
+      if (orderRows.length === 0) {
+        await connection.rollback()
+        return res.status(404).json({ error: 'ไม่พบออเดอร์นี้' })
+      }
+
+      const [detailRows] = await connection.query(
+        `SELECT detail_id, qty AS ordered_qty, COALESCE(received_qty, 0) AS received_qty,
+                COALESCE(arrival_status, 'Pending') AS arrival_status,
+                COALESCE(refund_status, 'pending') AS refund_status, Price AS unit_price
+         FROM order_details
+         WHERE order_id = ? AND detail_id = ?
+         LIMIT 1`,
+        [orderId, detailId],
+      )
+
+      if (detailRows.length === 0) {
+        await connection.rollback()
+        return res.status(404).json({ error: 'ไม่พบรายการสินค้านี้ในออเดอร์' })
+      }
+
+      const detail = detailRows[0]
+      const missingQty = Math.max(
+        (Number(detail.ordered_qty) || 0) - (Number(detail.received_qty) || 0),
+        0,
+      )
+      const refundAmount = missingQty * (Number(detail.unit_price) || 0)
+      const currentArrivalStatus = String(detail.arrival_status || '').toLowerCase()
+      const currentRefundStatus = String(detail.refund_status || '').toLowerCase()
+
+      if (missingQty <= 0) {
+        await connection.rollback()
+        return res.status(400).json({ error: 'รายการนี้ไม่มีสินค้าขาด จึงไม่สามารถคืนเงินได้' })
+      }
+
+      if (requestedStatus === 'paid' && currentArrivalStatus !== 'missing') {
+        await connection.rollback()
+        return res.status(400).json({ error: 'กรุณาแจ้งคืนเงินรายการนี้ก่อนบันทึกว่าโอนแล้ว' })
+      }
+
+      if (requestedStatus === 'pending' && currentRefundStatus === 'paid') {
+        await connection.rollback()
+        return res.status(400).json({ error: 'รายการนี้บันทึกว่าโอนเงินแล้ว' })
+      }
+
+      if (requestedStatus === 'pending') {
+        // Mark only the selected item as Missing.
+        await connection.query(
+          `UPDATE order_details
+           SET arrival_status = 'Missing', refund_status = 'pending'
+           WHERE detail_id = ? AND order_id = ?`,
+          [detailId, orderId],
+        )
+
+        // Keep intake history consistent when a round was already processed.
+        await connection.query(
+          `UPDATE inventory_intake_session_items
+           SET arrival_status = 'Missing',
+               refund_amount = missing_qty * unit_price
+           WHERE detail_id = ?`,
+          [detailId],
+        )
+      } else {
+        // Record payment only for the selected missing item.
+        await connection.query(
+          `UPDATE order_details
+           SET refund_status = 'paid'
+           WHERE detail_id = ? AND order_id = ?`,
+          [detailId, orderId],
+        )
+      }
+
+      const [refundRows] = await connection.query(
+        `SELECT qty AS ordered_qty, COALESCE(received_qty, 0) AS received_qty,
+                COALESCE(arrival_status, 'Pending') AS arrival_status,
+                COALESCE(refund_status, 'pending') AS refund_status
+         FROM order_details
+         WHERE order_id = ?`,
+        [orderId],
+      )
+      const shortageRows = refundRows.filter((row) => {
+        const rowMissingQty = Math.max(
+          (Number(row.ordered_qty) || 0) - (Number(row.received_qty) || 0),
+          0,
+        )
+        return rowMissingQty > 0
+      })
+      const allRefundsPaid =
+        shortageRows.length > 0 &&
+        shortageRows.every(
+          (row) =>
+            String(row.arrival_status || '').toLowerCase() === 'missing' &&
+            String(row.refund_status || '').toLowerCase() === 'paid',
+        )
+
+      await connection.query(
+        `UPDATE orders
+         SET refund_status = ?,
+             status = 'missing',
+             refund_completed_at = ?,
+             refund_completed_by = ?
+         WHERE order_id = ?`,
+        [
+          allRefundsPaid ? 'paid' : 'pending',
+          allRefundsPaid ? new Date() : null,
+          allRefundsPaid ? req.user?.id || null : null,
+          orderId,
+        ],
+      )
+
+      await connection.commit()
+      res.json({
+        success: true,
+        order_id: orderId,
+        detail_id: detailId,
+        refund_status: requestedStatus,
+        refund_amount: refundAmount,
+        refund_completed_at: allRefundsPaid ? new Date().toISOString() : null,
+        already_applied: currentRefundStatus === 'paid',
+      })
+    } catch (error) {
+      await connection.rollback()
+      console.error('[PATCH /api/admin/refunds/orders/:order_id/status]', error)
+      res.status(500).json({ error: error.message })
+    } finally {
+      connection.release()
+    }
+  },
+)
+
 app.patch(
   '/api/admin/inventory-intake/item/:detail_id',
   authenticateToken,
@@ -4927,6 +5150,28 @@ app.get('/api/dashboard/overview', authenticateToken, requireAdmin, async (_req,
       value: Number(row.value) || 0,
     }))
 
+    // Chart data: รายได้จากออเดอร์ที่ชำระเงินแล้ว แยกตามประเภทออเดอร์
+    const [orderTypeRevenueRows] = await pool.query(
+      `
+      SELECT
+        CASE
+          WHEN LOWER(o.Order_type) = 'ready' THEN 'พร้อมส่ง'
+          WHEN LOWER(o.Order_type) = 'preorder' THEN 'พรีออเดอร์'
+        END AS label,
+        SUM(o.total_amount) AS value
+      FROM orders o
+      WHERE LOWER(o.Order_type) IN ('ready', 'preorder')
+        AND REPLACE(LOWER(o.status), '_', ' ') IN ('paid', 'ready to ship', 'shipped', 'delivered')
+      GROUP BY LOWER(o.Order_type)
+      ORDER BY value DESC
+      `,
+    )
+
+    const byOrderTypeRevenue = orderTypeRevenueRows.map((row) => ({
+      label: row.label || 'ไม่ระบุประเภท',
+      value: Number(row.value) || 0,
+    }))
+
     // ล่าสุด 10 สินค้า
     const [latestProductsRows] = await pool.query(
       `
@@ -4961,6 +5206,7 @@ app.get('/api/dashboard/overview', authenticateToken, requireAdmin, async (_req,
       byCategoryValue,
       byCategoryLowStock,
       byRecentOrders,
+      byOrderTypeRevenue,
     }
 
     res.json({
@@ -5574,18 +5820,11 @@ async function startServer() {
       console.error('[auto-sync] initial run failed:', error.message)
     })
 
-    expirePendingReadyOrders(pool).catch((error) => {
-      console.error('[ready-order-expiry] initial run failed:', error.message)
-    })
-
     const preorderRoundAutoCloseTimer = setInterval(() => {
       autoSyncPreorderRoundStatuses().catch((error) => {
         console.error('[auto-sync] scheduled run failed:', error.message)
       })
 
-      expirePendingReadyOrders(pool).catch((error) => {
-        console.error('[ready-order-expiry] scheduled run failed:', error.message)
-      })
     }, 60 * 1000)
 
     preorderRoundAutoCloseTimer.unref?.()

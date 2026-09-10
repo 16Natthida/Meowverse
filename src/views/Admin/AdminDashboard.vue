@@ -613,4 +613,59 @@ onMounted(() => {
     overflow-y: visible;
   }
 }
+
+@media (max-width: 600px) {
+  .table-container {
+    overflow: visible;
+  }
+
+  .custom-table,
+  .custom-table thead,
+  .custom-table tbody,
+  .custom-table tr,
+  .custom-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .custom-table thead {
+    display: none;
+  }
+
+  .custom-table tr {
+    margin-bottom: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid #eadcf6;
+    border-radius: 14px;
+    background: #fff;
+  }
+
+  .custom-table td {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.65rem;
+    padding: 0.42rem 0;
+    border: 0;
+    text-align: right;
+  }
+
+  .custom-table td::before {
+    flex: 0 0 auto;
+    color: #8a789f;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-align: left;
+  }
+
+  .custom-table td:nth-child(1)::before { content: 'ออเดอร์'; }
+  .custom-table td:nth-child(2)::before { content: 'ลูกค้า'; }
+  .custom-table td:nth-child(3)::before { content: 'ยอดเงิน'; }
+  .custom-table td:nth-child(4)::before { content: 'สถานะ'; }
+}
+@media (max-width: 600px) {
+  .custom-table { min-width: 0; table-layout: fixed; }
+  .custom-table td { min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
+  .custom-table td::before { max-width: 40%; }
+  .custom-table td > * { min-width: 0; max-width: 58%; overflow-wrap: anywhere; }
+}
 </style>

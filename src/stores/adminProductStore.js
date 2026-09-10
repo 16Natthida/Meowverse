@@ -155,6 +155,7 @@ export function useAdminProductStore() {
         : (payload.imageUrls || []).map((url) => String(url || '').trim()).filter(Boolean),
       preorderEnabled: Boolean(payload.preorderEnabled),
       readyToShipEnabled: Boolean(payload.readyToShipEnabled),
+      isRecommended: Boolean(payload.isRecommended),
     }
   }
 

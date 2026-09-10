@@ -766,4 +766,82 @@ onMounted(() => {
     padding: 0.7rem 0.8rem 0.7rem 2.2rem;
   }
 }
+
+@media (max-width: 600px) {
+  .table-container {
+    overflow: visible;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+  }
+
+  .users-table,
+  .users-table thead,
+  .users-table tbody,
+  .users-table tr,
+  .users-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .users-table thead {
+    display: none;
+  }
+
+  .users-table tr {
+    margin-bottom: 0.8rem;
+    padding: 0.8rem;
+    border: 1px solid #eadcf6;
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 5px 16px rgba(84, 54, 113, 0.06);
+  }
+
+  .users-table td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.7rem;
+    padding: 0.45rem 0;
+    border: 0;
+    text-align: right;
+  }
+
+  .users-table td::before {
+    flex: 0 0 auto;
+    color: #8a789f;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-align: left;
+  }
+
+  .users-table td:nth-child(1)::before { content: 'ชื่อผู้ใช้'; }
+  .users-table td:nth-child(2)::before { content: 'ชื่อจริง'; }
+  .users-table td:nth-child(3)::before { content: 'Role'; }
+  .users-table td:nth-child(4)::before { content: 'โทรศัพท์'; }
+  .users-table td:nth-child(5)::before { content: 'LINE ID'; }
+  .users-table td:nth-child(6)::before { content: 'สร้างเมื่อ'; }
+
+  .users-table td:last-child {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.45rem;
+    padding-top: 0.7rem;
+  }
+
+  .users-table td:last-child::before {
+    display: none;
+  }
+
+  .users-table td:last-child button {
+    width: 100%;
+  }
+}
+@media (max-width: 600px) {
+  .users-table { min-width: 0; table-layout: fixed; }
+  .users-table td { min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
+  .users-table td::before { max-width: 40%; }
+  .users-table td > * { min-width: 0; max-width: 58%; overflow-wrap: anywhere; }
+  .users-table td:last-child > * { max-width: 100%; }
+}
 </style>

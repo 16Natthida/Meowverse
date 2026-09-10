@@ -1904,4 +1904,89 @@ onMounted(async () => {
     grid-template-columns: 1fr;
   }
 }
+
+@media (max-width: 600px) {
+  .table-scroll-wrap {
+    overflow: visible;
+  }
+
+  .preorder-table,
+  .preorder-table thead,
+  .preorder-table tbody,
+  .preorder-table tr,
+  .preorder-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .preorder-table {
+    min-width: 0;
+  }
+
+  .preorder-table thead {
+    display: none;
+  }
+
+  .preorder-table tr {
+    margin-bottom: 0.8rem;
+    padding: 0.8rem;
+    border: 1px solid #eadcf6;
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 5px 16px rgba(84, 54, 113, 0.06);
+  }
+
+  .preorder-table td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.7rem;
+    padding: 0.45rem 0;
+    border: 0;
+    text-align: right;
+  }
+
+  .preorder-table td::before {
+    flex: 0 0 auto;
+    color: #8a789f;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-align: left;
+  }
+
+  .preorder-table td:nth-child(1)::before { content: 'ชื่อรอบ'; }
+  .preorder-table td:nth-child(2)::before { content: 'รายละเอียด'; }
+  .preorder-table td:nth-child(3)::before { content: 'วันเริ่ม'; }
+  .preorder-table td:nth-child(4)::before { content: 'วันสิ้นสุด'; }
+  .preorder-table td:nth-child(5)::before { content: 'สถานะ'; }
+
+  .preorder-table td:last-child {
+    display: grid;
+    gap: 0.45rem;
+    padding-top: 0.7rem;
+  }
+
+  .preorder-table td:last-child::before {
+    display: none;
+  }
+
+  .preorder-table .actions .btn-action {
+    width: 100%;
+  }
+
+  .modal,
+  .modal-large {
+    width: calc(100vw - 1.25rem);
+    max-width: calc(100vw - 1.25rem);
+    max-height: calc(100vh - 1.25rem);
+    overflow-y: auto;
+  }
+}
+@media (max-width: 600px) {
+  .preorder-table { min-width: 0; table-layout: fixed; }
+  .preorder-table td { min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
+  .preorder-table td::before { max-width: 40%; }
+  .preorder-table td > * { min-width: 0; max-width: 58%; overflow-wrap: anywhere; }
+  .preorder-table td:last-child > *, .preorder-table .actions, .preorder-table .btn-action { max-width: 100%; }
+}
 </style>

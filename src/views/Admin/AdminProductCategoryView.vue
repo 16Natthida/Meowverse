@@ -20,6 +20,7 @@ const editingProductId = ref(null)
 const isSubmitting = ref(false)
 const isCategorySubmitting = ref(false)
 const isAddingStock = ref(false)
+const togglingRecommendationId = ref(null)
 const flavorInput = ref('')
 const selectedProductForStock = ref(null)
 const stockForm = reactive({
@@ -47,6 +48,7 @@ const form = reactive({
   preorderEnabled: false,
   stock: 0,
   readyToShipEnabled: true,
+  isRecommended: false,
 })
 
 const categoryForm = reactive({
@@ -266,6 +268,7 @@ async function submitForm() {
       imageUrls: processedImages.map((img) => img.url),
       preorderEnabled: form.preorderEnabled,
       readyToShipEnabled: form.readyToShipEnabled,
+      isRecommended: form.isRecommended,
       stock:
         parseFlavorsText(form.flavorsText).length > 0
           ? totalFlavorStock.value
@@ -414,6 +417,7 @@ function editProduct(product) {
   form.preorderEnabled = Boolean(product.preorderEnabled)
   form.stock = Number(product.stock) || 0
   form.readyToShipEnabled = Boolean(product.readyToShipEnabled)
+  form.isRecommended = Boolean(product.isRecommended)
   flavorInput.value = ''
 }
 
@@ -431,6 +435,7 @@ function resetForm() {
   form.preorderEnabled = false
   form.stock = 0
   form.readyToShipEnabled = true
+  form.isRecommended = false
   flavorInput.value = ''
 
   editingProductId.value = null
@@ -491,6 +496,7 @@ async function submitAddStock() {
           ),
       preorderEnabled: Boolean(selectedProductForStock.value.preorderEnabled),
       readyToShipEnabled: Boolean(stockForm.readyToShipEnabled),
+      isRecommended: Boolean(selectedProductForStock.value.isRecommended),
     }
 
     await store.updateProduct(selectedProductForStock.value.id, payload)
@@ -548,6 +554,22 @@ function getAvailabilityText(product) {
   }
 
   return statuses.join(' • ')
+}
+
+async function toggleRecommendation(product) {
+  if (!product || togglingRecommendationId.value !== null) return
+
+  togglingRecommendationId.value = product.id
+  const nextValue = !product.isRecommended
+
+  try {
+    await store.toggleProductFlag(product.id, 'isRecommended', nextValue)
+    setNotice('success', nextValue ? 'เพิ่มสินค้าในสินค้าแนะนำแล้ว' : 'นำสินค้าออกจากสินค้าแนะนำแล้ว')
+  } catch {
+    setNotice('error', 'เปลี่ยนสถานะสินค้าแนะนำไม่สำเร็จ')
+  } finally {
+    togglingRecommendationId.value = null
+  }
 }
 
 function getStockLevelClass(stock) {
@@ -845,6 +867,22 @@ onMounted(async () => {
           </label>
         </div>
 
+        <div class="recommended-toggle-card">
+          <div class="recommended-toggle-card__info">
+            <div class="recommended-toggle-card__title">
+              <span class="icon">⭐</span>
+              <span>สินค้าแนะนำบนหน้าหลัก</span>
+              <span v-if="form.isRecommended" class="recommended-badge">กำลังแนะนำ</span>
+            </div>
+            <p class="recommended-toggle-card__desc">เลือกเพื่อแสดงสินค้านี้ในส่วน “สินค้าแนะนำ” ให้ลูกค้าเห็นก่อน</p>
+          </div>
+
+          <label class="switch-control">
+            <input v-model="form.isRecommended" type="checkbox" />
+            <span class="switch-slider"></span>
+          </label>
+        </div>
+
         <label class="upload-field">
           รูปภาพ ({{ form.images.length }}/{{ MAX_IMAGE_COUNT }})
           <input
@@ -912,6 +950,16 @@ onMounted(async () => {
           <span :class="getStockLevelClass(product.stock)">{{
             getStockLevelText(product.stock)
           }}</span>
+          <button
+            type="button"
+            :class="['recommend-toggle', { 'recommend-toggle--active': product.isRecommended }]"
+            :disabled="togglingRecommendationId === product.id"
+            :aria-label="product.isRecommended ? 'นำออกจากสินค้าแนะนำ' : 'ตั้งเป็นสินค้าแนะนำ'"
+            :title="product.isRecommended ? 'นำออกจากสินค้าแนะนำ' : 'ตั้งเป็นสินค้าแนะนำ'"
+            @click="toggleRecommendation(product)"
+          >
+            {{ product.isRecommended ? '★' : '☆' }}
+          </button>
         </div>
 
         <p class="caption">
@@ -944,6 +992,7 @@ onMounted(async () => {
         </p>
         <p class="meta">คงเหลือ: {{ product.stock }} ชิ้น</p>
         <p class="meta">รูปภาพทั้งหมด: {{ getImageCount(product) }}</p>
+        <p v-if="product.isRecommended" class="recommendation-status">⭐ สินค้าแนะนำบนหน้าหลัก</p>
 
         <div class="card-actions">
           <button class="ghost" type="button" @click="editProduct(product)">แก้ไข</button>
@@ -1301,6 +1350,55 @@ onMounted(async () => {
   line-height: 1.3;
 }
 
+.recommended-toggle-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  margin: 0.4rem 0 0.6rem;
+  background: linear-gradient(135deg, #fffaf1 0%, #fff5f8 100%);
+  border: 1px solid #f1d7ad;
+  border-radius: 14px;
+  box-shadow: 0 4px 14px rgba(165, 112, 54, 0.05);
+}
+
+.recommended-toggle-card__info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.recommended-toggle-card__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #704b28;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.recommended-badge,
+.recommendation-status {
+  color: #a86218;
+  font-weight: 800;
+}
+
+.recommended-badge {
+  padding: 0.15rem 0.55rem;
+  border: 1px solid #f0d09f;
+  border-radius: 999px;
+  background: #fff;
+  font-size: 0.7rem;
+}
+
+.recommended-toggle-card__desc {
+  margin: 0;
+  color: #8a6d56;
+  font-size: 0.76rem;
+  line-height: 1.3;
+}
+
 /* ── TOGGLE SWITCH SLIDER ── */
 .switch-control {
   position: relative;
@@ -1429,6 +1527,44 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 0.45rem;
   align-items: flex-start;
+}
+
+.card-head h3 {
+  flex: 1;
+  min-width: 0;
+}
+
+.recommend-toggle {
+  flex: 0 0 auto;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  border: 1px solid #e3d2f2;
+  border-radius: 50%;
+  background: #fff;
+  color: #b79bcf;
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.recommend-toggle:hover:not(:disabled) {
+  border-color: #efc779;
+  color: #c27b27;
+  transform: scale(1.06);
+}
+
+.recommend-toggle--active {
+  border-color: #f0d09f;
+  background: #fff8e9;
+  color: #d38a1c;
+  box-shadow: 0 3px 8px rgba(211, 138, 28, 0.16);
+}
+
+.recommend-toggle:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .media {

@@ -158,6 +158,7 @@ const updateQty = async (item, newQty) => {
       throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`)
     }
     item.qty = newQty
+    window.dispatchEvent(new CustomEvent('meowverse:cart-updated'))
   } catch (err) {
     showNotice(err.message, 'error')
   } finally {
@@ -187,6 +188,7 @@ const removeItem = async (item) => {
     console.debug('[removeItem] Delete successful, refreshing cart...')
     // Refresh cart from server to keep UI in sync (handles server-side merges)
     await fetchCart()
+    window.dispatchEvent(new CustomEvent('meowverse:cart-updated'))
     console.debug('[removeItem] Cart refreshed, total items:', cartItems.value.length)
     showNotice(`ลบ "${item.name}" ออกจากตะกร้าแล้ว`, 'success')
   } catch (err) {
@@ -277,21 +279,6 @@ const checkout = async () => {
 
     const data = await res.json()
 
-    let reservedReadyOrderId = null
-    if (String(data.order_type || data.orderType || '').toLowerCase() === 'ready') {
-      const reserveRes = await fetch(`${API_BASE_URL}/orders/confirm-payment`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      if (!reserveRes.ok) {
-        const body = await reserveRes.json().catch(() => ({}))
-        throw new Error(body.error ?? body.message ?? `HTTP ${reserveRes.status}`)
-      }
-      const reservedOrder = await reserveRes.json()
-      reservedReadyOrderId = reservedOrder.order_id
-    }
-
     // Save pending order data to sessionStorage
     sessionStorage.setItem(
       'pending_order_data',
@@ -302,7 +289,7 @@ const checkout = async () => {
         shipping_fee: data.shipping_fee,
         total_amount: data.total_amount,
         item_count: data.item_count,
-        order_id: reservedReadyOrderId,
+        order_id: null,
       }),
     )
 
@@ -315,8 +302,8 @@ const checkout = async () => {
       if (newOrderType === 'preorder') {
         router.push('/preorder-payment-temp')
       } else {
-        // Ready stock: go to dedicated ready payment page
-        router.push(`/ready-payment/${reservedReadyOrderId}`)
+        // Ready stock: create the order only after the user submits the slip.
+        router.push('/ready-payment-temp')
       }
     }, 1500)
   } catch (err) {

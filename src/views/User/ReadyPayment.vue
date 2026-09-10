@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
 
@@ -10,8 +10,6 @@ const currentUser = computed(() => getUser())
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 
 const order = ref(null)
-const reservationSeconds = ref(null)
-let reservationTimer = null
 // ── PRODUCT IMAGE MAP ──
 const productImageMap = ref({})
 
@@ -98,44 +96,6 @@ const totalPayable = computed(() => {
   const orderTotal = Number(order.value?.total_amount ?? itemsTotal.value)
   return orderTotal + (storedFee > 0 ? 0 : shippingFee.value)
 })
-
-const reservationTimerLabel = computed(() => {
-  if (reservationSeconds.value === null) return ''
-  const minutes = Math.floor(Math.max(reservationSeconds.value, 0) / 60)
-  const seconds = Math.max(reservationSeconds.value, 0) % 60
-  return `${minutes}:${String(seconds).padStart(2, '0')}`
-})
-
-const isReservationActive = computed(() =>
-  String(order.value?.Order_type || '').toLowerCase() === 'ready' &&
-  String(order.value?.status || '').toLowerCase() === 'pending' &&
-  reservationSeconds.value !== null &&
-  reservationSeconds.value > 0,
-)
-
-function updateReservationTimer() {
-  const deadline = new Date(order.value?.deadline || '').getTime()
-  if (!Number.isFinite(deadline)) {
-    reservationSeconds.value = null
-    return
-  }
-
-  reservationSeconds.value = Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
-  if (reservationSeconds.value === 0 && reservationTimer) {
-    clearInterval(reservationTimer)
-    reservationTimer = null
-    showNotice('หมดเวลาชำระเงิน ระบบคืนสินค้าเข้าสต็อกแล้ว', 'error')
-    fetchOrder().finally(() => {
-      setTimeout(() => router.push('/dashboard'), 1200)
-    })
-  }
-}
-
-function startReservationTimer() {
-  if (reservationTimer) clearInterval(reservationTimer)
-  updateReservationTimer()
-  reservationTimer = window.setInterval(updateReservationTimer, 1000)
-}
 
 const slipFile = ref(null)
 const slipPreview = ref(null)
@@ -283,9 +243,6 @@ const isPaymentComplete = computed(() => {
   return ['paid', 'ready to ship', 'shipped', 'delivered'].includes(normalized)
 })
 
-// ยกเลิกได้เฉพาะออเดอร์ที่บันทึกในระบบแล้วและยังไม่ถูกล็อกสถานะ (ยังไม่ชำระเงินสำเร็จ)
-const canCancelOrder = computed(() => Boolean(order.value?.order_id) && !isShippingLocked.value)
-
 const primaryButtonLabel = computed(() => {
   if (isPaymentComplete.value) return 'ชำระเงินและจัดส่งเรียบร้อยแล้ว'
   if (isPaidOrReady.value) return loading.value ? 'กำลังประมวลผล...' : 'บันทึกข้อมูลจัดส่ง'
@@ -320,6 +277,26 @@ const selectPaymentMethod = (methodId) => {
 }
 
 const shippingInfo = ref({ name: '', phone: '', address: '', notes: '', carrier: '' })
+const defaultShippingProviders = [
+  { provider_code: 'kerry', provider_name: 'Kerry' },
+  { provider_code: 'flash', provider_name: 'Flash' },
+  { provider_code: 'j&t', provider_name: 'J&T' },
+  { provider_code: 'ems', provider_name: 'EMS' },
+]
+const shippingProviders = ref([...defaultShippingProviders])
+
+async function loadShippingProviders() {
+  try {
+    const response = await fetch(`${API_BASE_URL}/shipping-providers`)
+    if (!response.ok) throw new Error('โหลดรายชื่อบริษัทขนส่งไม่สำเร็จ')
+    const providers = await response.json()
+    if (Array.isArray(providers) && providers.length) {
+      shippingProviders.value = providers
+    }
+  } catch {
+    // Keep the original choices if the provider list is temporarily unavailable.
+  }
+}
 
 const onFileChange = (e) => {
   const file = e.target.files[0]
@@ -406,7 +383,6 @@ const fetchOrder = async () => {
       }
     }
     order.value = data
-    startReservationTimer()
     const apiProdIds = (data.items || []).map((i) => i.prod_id)
     await fetchProductImages(apiProdIds)
 
@@ -544,53 +520,19 @@ function showNotice(msg, type = 'success') {
   }, 5000)
 }
 
-const cancelling = ref(false)
-
-async function cancelOrder() {
-  if (!order.value?.order_id || cancelling.value) return
-
-  const confirmed = window.confirm('ยืนยันยกเลิกคำสั่งซื้อนี้? ระบบจะคืนสินค้าเข้าสต็อกทันที')
-  if (!confirmed) return
-
-  try {
-    cancelling.value = true
-    const res = await fetch(`${API_BASE_URL}/orders/${order.value.order_id}/cancel`, {
-      method: 'PATCH',
-    })
-    if (!res.ok) {
-      const errorBody = await res.json().catch(() => null)
-      throw new Error(errorBody?.error || errorBody?.message || 'ไม่สามารถยกเลิกคำสั่งซื้อได้')
-    }
-
-    if (reservationTimer) {
-      clearInterval(reservationTimer)
-      reservationTimer = null
-    }
-
-    showNotice('ยกเลิกคำสั่งซื้อและคืนสินค้าเข้าสต็อกเรียบร้อยแล้ว', 'success')
-    setTimeout(() => router.push('/order-list'), 1200)
-  } catch (err) {
-    showNotice(err.message || 'เกิดข้อผิดพลาดในการยกเลิกคำสั่งซื้อ', 'error')
-  } finally {
-    cancelling.value = false
-  }
-}
-
 function goBack() {
   router.back()
 }
 
 onMounted(async () => {
   await loadPaymentMethods()
+  await loadShippingProviders()
   fetchOrder()
   if (currentUser.value && !shippingInfo.value.name) {
     shippingInfo.value.name = currentUser.value.full_name || ''
   }
 })
 
-onUnmounted(() => {
-  if (reservationTimer) clearInterval(reservationTimer)
-})
 </script>
 
 <template>
@@ -632,19 +574,6 @@ onUnmounted(() => {
               <p class="hero-subtitle">
                 ตรวจรายการสินค้า แนบสลิป และกรอกข้อมูลจัดส่งให้ครบก่อนกดยืนยันคำสั่งซื้อ
               </p>
-              <div v-if="isReservationActive" class="reservation-banner">
-                <span class="reservation-banner__icon">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 15"></polyline></svg>
-                </span>
-                <div class="reservation-banner__text">
-                  <strong class="reservation-banner__title">กรุณาแนบสลิปและกรอกข้อมูลจัดส่งให้ครบภายในเวลาที่กำหนด</strong>
-                  <span class="reservation-banner__hint">หากเกินเวลาที่กำหนด ระบบจะยกเลิกคำสั่งซื้อของคุณ</span>
-                </div>
-                <div class="reservation-banner__timer">
-                  <span class="reservation-banner__timer-label">เวลาคงเหลือ</span>
-                  <strong>{{ reservationTimerLabel }}</strong>
-                </div>
-              </div>
               <div class="hero-meta">
                 <div class="hero-meta-item">
                   <span class="hero-meta-label">รายการ</span>
@@ -736,10 +665,13 @@ onUnmounted(() => {
                   <label for="shipping-carrier">บริษัทขนส่ง</label>
                   <select id="shipping-carrier" v-model="shippingInfo.carrier" :disabled="isShippingLocked">
                     <option value="">-- เลือกบริษัทขนส่ง --</option>
-                    <option value="Kerry">Kerry</option>
-                    <option value="Flash">Flash</option>
-                    <option value="J&T">J&T</option>
-                    <option value="EMS">EMS</option>
+                    <option
+                      v-for="provider in shippingProviders"
+                      :key="provider.provider_id || provider.provider_code"
+                      :value="provider.provider_name"
+                    >
+                      {{ provider.provider_name }}
+                    </option>
                   </select>
                 </div>
               </div>
@@ -867,15 +799,6 @@ onUnmounted(() => {
               <hr class="divider" />
               <button type="button" class="btn-checkout" @click="onPrimaryAction" :disabled="loading || isShippingLocked">
                 {{ primaryButtonLabel }}
-              </button>
-              <button
-                v-if="canCancelOrder"
-                type="button"
-                class="btn-cancel-order"
-                @click="cancelOrder"
-                :disabled="loading || cancelling"
-              >
-                {{ cancelling ? 'กำลังยกเลิก...' : 'ยกเลิกคำสั่งซื้อ' }}
               </button>
             </div>
           </div>
@@ -1116,82 +1039,6 @@ onUnmounted(() => {
   border-radius: 14px;
   overflow: hidden;
   flex-shrink: 0;
-}
-.reservation-banner {
-  display: flex;
-  align-items: center;
-  gap: 0.9rem;
-  margin-top: 1rem;
-  padding: 0.95rem 1.1rem;
-  border: 1px solid #f2c27d;
-  border-radius: 16px;
-  background: linear-gradient(135deg, #fffaf0, #fff3dd);
-  box-shadow: 0 8px 20px rgba(197, 90, 22, 0.1);
-}
-.reservation-banner__icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 40px;
-  height: 40px;
-  border-radius: 999px;
-  background: rgba(197, 90, 22, 0.14);
-  color: #c55a16;
-}
-.reservation-banner__text {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-.reservation-banner__title {
-  color: #8a531d;
-  font-size: 0.92rem;
-  font-weight: 800;
-  line-height: 1.4;
-}
-.reservation-banner__hint {
-  color: #a0793f;
-  font-size: 0.8rem;
-  line-height: 1.45;
-}
-.reservation-banner__timer {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  flex: 0 0 auto;
-  padding-left: 0.95rem;
-  border-left: 1px solid rgba(197, 90, 22, 0.22);
-}
-.reservation-banner__timer-label {
-  font-size: 0.7rem;
-  font-weight: 700;
-  color: #a0793f;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-.reservation-banner__timer strong {
-  color: #c55a16;
-  font-size: 1.65rem;
-  font-weight: 800;
-  letter-spacing: 0.03em;
-  line-height: 1.2;
-}
-@media (max-width: 560px) {
-  .reservation-banner {
-    flex-wrap: wrap;
-  }
-  .reservation-banner__timer {
-    flex: 1 1 100%;
-    align-items: flex-start;
-    padding-left: 0;
-    padding-top: 0.6rem;
-    margin-top: 0.4rem;
-    border-left: none;
-    border-top: 1px solid rgba(197, 90, 22, 0.22);
-  }
 }
 .item-img img {
   width: 100%;
@@ -1542,28 +1389,6 @@ onUnmounted(() => {
 }
 .btn-checkout:disabled {
   opacity: 0.72;
-  cursor: not-allowed;
-}
-.btn-cancel-order {
-  margin-top: 0.6rem;
-  padding: 12px 16px;
-  background: #fff;
-  color: #dc2626;
-  border: 1px solid #f1a9a9;
-  border-radius: 14px;
-  font-weight: 700;
-  cursor: pointer;
-  transition:
-    background-color 0.2s ease,
-    color 0.2s ease,
-    box-shadow 0.2s ease;
-}
-.btn-cancel-order:hover:not(:disabled) {
-  background: #fef2f2;
-  box-shadow: 0 8px 18px rgba(220, 38, 38, 0.12);
-}
-.btn-cancel-order:disabled {
-  opacity: 0.6;
   cursor: not-allowed;
 }
 .state-wrap {

@@ -675,5 +675,6 @@ async function saveTheme() {
   .hero-btn {
     width: 100%;
   }
+
 }
 </style>

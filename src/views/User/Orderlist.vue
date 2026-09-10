@@ -92,6 +92,10 @@ function handleOutsideClick(event) {
   }
 }
 
+function handleShellSearch(event) {
+  searchQuery.value = String(event.detail ?? '')
+}
+
 function handleLogout() {
   if (typeof logout === 'function') {
     logout()
@@ -102,10 +106,12 @@ function handleLogout() {
 
 onMounted(() => {
   document.addEventListener('click', handleOutsideClick)
+  window.addEventListener('meowverse:user-search', handleShellSearch)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleOutsideClick)
+  window.removeEventListener('meowverse:user-search', handleShellSearch)
 })
 
 const orders = ref([])
@@ -113,9 +119,6 @@ const loading = ref(true)
 const error = ref(null)
 const copiedTrackingOrderId = ref(null)
 const confirmingReceiptOrderId = ref(null)
-const orderListNow = ref(Date.now())
-let orderListTimer = null
-const expiredOrderRefreshes = new Set()
 
 async function copyTrackingNumber(order) {
   const trackingNumber = String(order.tracking_number || '').trim()
@@ -257,48 +260,6 @@ function formatDate(dateStr) {
     hour: '2-digit',
     minute: '2-digit',
   })
-}
-
-function isReadyPaymentOrder(order) {
-  return (
-    String(order?.Order_type || '').trim().toLowerCase() === 'ready' &&
-    String(order?.status || '').trim().toLowerCase() === 'pending' &&
-    Boolean(order?.deadline)
-  )
-}
-
-function getRemainingPaymentSeconds(order) {
-  if (!isReadyPaymentOrder(order)) return null
-
-  const deadline = new Date(order.deadline).getTime()
-  if (!Number.isFinite(deadline)) return null
-
-  return Math.max(0, Math.ceil((deadline - orderListNow.value) / 1000))
-}
-
-function formatRemainingPaymentTime(order) {
-  const remainingSeconds = getRemainingPaymentSeconds(order)
-  if (remainingSeconds === null) return ''
-
-  const minutes = Math.floor(remainingSeconds / 60)
-  const seconds = remainingSeconds % 60
-  return `${minutes}:${String(seconds).padStart(2, '0')}`
-}
-
-function startOrderListTimer() {
-  if (orderListTimer) clearInterval(orderListTimer)
-
-  orderListTimer = window.setInterval(() => {
-    orderListNow.value = Date.now()
-
-    for (const order of orders.value) {
-      if (!isReadyPaymentOrder(order) || getRemainingPaymentSeconds(order) !== 0) continue
-      if (expiredOrderRefreshes.has(order.order_id)) continue
-
-      expiredOrderRefreshes.add(order.order_id)
-      fetchOrders()
-    }
-  }, 1000)
 }
 
 // ── NAV BADGE (mirrors Dashboard's exact RED/GREEN priority logic, derived from existing orders data) ──
@@ -450,11 +411,6 @@ function toggleExpand(orderId, evt) {
 
 onMounted(() => {
   fetchOrders()
-  startOrderListTimer()
-})
-
-onUnmounted(() => {
-  if (orderListTimer) clearInterval(orderListTimer)
 })
 </script>
 
@@ -848,20 +804,8 @@ onUnmounted(() => {
             </div>
 
             <!-- ── META CHIPS ── -->
-            <div class="meta-row" v-if="order.deadline || (order.Order_type === 'Preorder' && Number(order.import_fee_total) > 0)">
-              <span
-                v-if="isReadyPaymentOrder(order) && getRemainingPaymentSeconds(order) > 0"
-                class="meta-chip meta-chip--deadline"
-              >
-                ต้องชำระภายใน {{ formatRemainingPaymentTime(order) }} นาที
-              </span>
-              <span
-                v-else-if="isReadyPaymentOrder(order)"
-                class="meta-chip meta-chip--expired"
-              >
-                หมดเวลาชำระเงิน
-              </span>
-              <span v-else-if="order.deadline" class="meta-chip">กำหนดจ่าย {{ formatDate(order.deadline) }}</span>
+            <div class="meta-row" v-if="(order.Order_type === 'Preorder' && order.deadline) || (order.Order_type === 'Preorder' && Number(order.import_fee_total) > 0)">
+              <span v-if="order.Order_type === 'Preorder' && order.deadline" class="meta-chip">กำหนดจ่าย {{ formatDate(order.deadline) }}</span>
               <span v-if="order.Order_type === 'Preorder' && Number(order.import_fee_total) > 0" class="meta-chip meta-chip--warn">
                 ค่านำเข้ารอบที่ 2 ฿{{ Number(order.import_fee_total).toLocaleString() }}
               </span>
@@ -1538,8 +1482,9 @@ onUnmounted(() => {
 }
 .tracking-summary {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 1rem;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.35rem 0.75rem;
   width: 100%;
   margin-top: 0.15rem;
   padding: 0.65rem 0.8rem;
@@ -1548,6 +1493,11 @@ onUnmounted(() => {
   background: #fbf8ff;
   color: #6e5b91;
   font-size: 0.82rem;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.tracking-summary > span:first-child {
+  flex: 0 0 auto;
 }
 .tracking-summary strong {
   color: #432f61;
@@ -1557,6 +1507,12 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.tracking-summary__number strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .tracking-copy-btn {
   border: 1px solid #a77adb;
@@ -1567,6 +1523,7 @@ onUnmounted(() => {
   font: inherit;
   font-weight: 700;
   cursor: pointer;
+  flex: 0 0 auto;
 }
 .tracking-copy-btn:hover {
   background: #f0e5ff;
@@ -1580,6 +1537,8 @@ onUnmounted(() => {
   font: inherit;
   font-weight: 800;
   cursor: pointer;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 .tracking-confirm-btn:hover:not(:disabled) {
   background: #d1fae5;
@@ -1732,18 +1691,6 @@ onUnmounted(() => {
   background: #f2ecfd;
   color: var(--primary-dark);
 }
-.meta-chip--deadline {
-  background: #fff3dd;
-  color: #b45309;
-  border: 1px solid #f2c27d;
-  font-variant-numeric: tabular-nums;
-}
-.meta-chip--expired {
-  background: #fdeded;
-  color: #dc2626;
-  border: 1px solid #f0b3ab;
-}
-
 /* ── CARD FOOT ── */
 .order-card__foot {
   display: flex;

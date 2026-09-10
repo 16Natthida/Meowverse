@@ -896,4 +896,76 @@ onMounted(() => {
     grid-template-columns: 1fr;
   }
 }
+
+@media (max-width: 600px) {
+  .summary-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .items-head {
+    display: none;
+  }
+
+  .items-row {
+    grid-template-columns: 1fr;
+    gap: 0;
+    padding: 0.8rem;
+    border: 1px solid rgba(160, 126, 191, 0.18);
+    border-radius: 14px;
+    margin-bottom: 0.65rem;
+  }
+
+  .items-row .product-col {
+    grid-column: auto;
+    align-items: flex-start;
+    padding-bottom: 0.55rem;
+  }
+
+  .items-row > div:not(.product-col) {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    min-height: 2.7rem;
+    padding: 0.5rem 0;
+    border-top: 1px solid rgba(160, 126, 191, 0.12);
+    text-align: right;
+  }
+
+  .items-row > div:nth-child(2)::before { content: 'จำนวนที่สั่ง'; }
+  .items-row > div:nth-child(3)::before { content: 'รับจริง'; }
+  .items-row > div:nth-child(4)::before { content: 'ขาด / เกิน'; }
+  .items-row > div:nth-child(5)::before { content: 'สถานะ'; }
+
+  .items-row > div:not(.product-col)::before {
+    flex: 0 0 auto;
+    color: #8d7aad;
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-align: left;
+  }
+
+  .items-row > * {
+    min-width: 0;
+  }
+
+  .qty-input {
+    padding: 0.55rem;
+  }
+
+  .action-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .action-row button {
+    width: 100%;
+  }
+}
+@media (max-width: 600px) {
+  .items-row > * { min-width: 0; max-width: 100%; }
+  .items-row .product-col { overflow-wrap: anywhere; }
+  .items-row input, .items-row select, .items-row button { max-width: 100%; }
+  .items-row > div:not(.product-col) > * { min-width: 0; max-width: 65%; }
+}
 </style>

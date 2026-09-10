@@ -1100,4 +1100,86 @@ onMounted(() => {
     padding: 1rem;
   }
 }
+
+@media (max-width: 760px) {
+  .table-scroll {
+    overflow: visible;
+  }
+
+  .slip-table,
+  .slip-table thead,
+  .slip-table tbody,
+  .slip-table tr,
+  .slip-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .slip-table thead {
+    display: none;
+  }
+
+  .slip-table tr {
+    margin-bottom: 0.85rem;
+    padding: 0.8rem;
+    border: 1px solid #eadcf6;
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 5px 16px rgba(84, 54, 113, 0.06);
+  }
+
+  .slip-table td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.7rem;
+    padding: 0.45rem 0;
+    border: 0;
+    text-align: right;
+  }
+
+  .slip-table td::before {
+    flex: 0 0 auto;
+    color: #8a789f;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-align: left;
+  }
+
+  .slip-table td:nth-child(1)::before { content: 'รหัสชำระเงิน'; }
+  .slip-table td:nth-child(2)::before { content: 'ออเดอร์'; }
+  .slip-table td:nth-child(3)::before { content: 'ประเภท'; }
+  .slip-table td:nth-child(4)::before { content: 'ยอดเงิน'; }
+  .slip-table td:nth-child(5)::before { content: 'วิธีชำระ'; }
+  .slip-table td:nth-child(6)::before { content: 'วันที่'; }
+  .slip-table td:nth-child(7)::before { content: 'สถานะ'; }
+  .slip-table td:nth-child(8)::before { content: 'หลักฐาน'; }
+  .slip-table td:nth-child(9)::before { content: 'จัดการ'; }
+
+  .slip-table td:last-child {
+    display: block;
+    padding-top: 0.7rem;
+  }
+
+  .slip-table td:last-child::before {
+    display: none;
+  }
+
+  .slip-table td:last-child .action-btns,
+  .slip-table td:last-child button {
+    width: 100%;
+  }
+
+  .slip-table td:last-child .action-btns {
+    display: grid;
+    gap: 0.45rem;
+  }
+}
+@media (max-width: 760px) {
+  .slip-table { min-width: 0; table-layout: fixed; }
+  .slip-table td { min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
+  .slip-table td::before { max-width: 40%; }
+  .slip-table td > * { min-width: 0; max-width: 58%; overflow-wrap: anywhere; }
+  .slip-table td:last-child > * { max-width: 100%; }
+}
 </style>

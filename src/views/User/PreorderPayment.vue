@@ -127,12 +127,22 @@ const isPreorderOrder = computed(
 )
 
 const isDelayedOrder = computed(() => normalizedOrderStatus.value === 'delayed')
+const isMissing = computed(() => normalizedOrderStatus.value === 'missing')
+
+// Missing is the customer-facing refund stage, not an import-fee payment stage.
+const missingRefundAmount = computed(() => Number(order.value?.missing_amount || 0))
+const refundStatusLabel = computed(() =>
+  String(order.value?.refund_status || '').trim().toLowerCase() === 'paid'
+    ? 'โอนแล้ว'
+    : 'ยังไม่โอน',
+)
 
 const assignedShipping = computed(() => order.value?.saved_shipping || {})
 
 // รอบ 2 ต้องยึดทั้งสถานะและยอดค่านำเข้า เพื่อรองรับออเดอร์เก่าที่สถานะเคยถูกบันทึกเป็นค่าว่าง
 const isImportFeePaymentStage = computed(() => {
   const status = normalizedOrderStatus.value
+  if (isMissing.value) return false
   if (IMPORT_FEE_PAYMENT_STATUSES.includes(status)) return true
   return importFeeTotal.value > 0 && !['paid', 'ready to ship', 'shipped', 'delivered'].includes(status)
 })
@@ -145,10 +155,10 @@ const isImportFeeStage = computed(() => {
 // รอแอดมินแจ้งค่านำเข้า: ล็อกทุกอย่างยกเว้นขอเลื่อนเวลา
 const isWaitingForImportFee = computed(
   () =>
+    !isMissing.value &&
     ['wait for import fee', 'delayed'].includes(normalizedOrderStatus.value) &&
     importFeeTotal.value <= 0,
 )
-const isMissing = computed(() => normalizedOrderStatus.value === 'missing')
 
 const isRoundOpen = computed(() => {
   const roundStatus = String(order.value?.preorder_round_status || '')
@@ -195,6 +205,8 @@ const amountDue = computed(() => {
     Number(order.value?.shipping_fee || 0) ||
     (['preorder', 'pending_import'].includes(orderType) ? 65 : 0)
 
+  if (isMissing.value) return 0
+
   // ✅ ออเดอร์ที่จ่ายค่าสินค้าครบแล้ว (Paid / Ready to Ship / Shipped / Delivered)
   // ให้นำค่าสินค้า + ค่านำเข้า + ค่าส่งในไทย (65 บาท) มารวมเป็นยอดรวม
   // ต้องเช็คก่อน isFullyPaid เพราะสถานะเหล่านี้รวมอยู่ใน isFullyPaid ซึ่งจะ return 0 ทันที
@@ -219,6 +231,7 @@ const amountDue = computed(() => {
 })
 
 const heroTotal = computed(() => {
+  if (isMissing.value) return missingRefundAmount.value
   if (isImportFeePaymentStage.value) return importFeeTotal.value
   if (isDelayedOrder.value) return itemsSubtotal.value
   return amountDue.value
@@ -252,6 +265,26 @@ const shippingInfo = ref({
   notes: '',
   carrier: '',
 })
+const defaultShippingProviders = [
+  { provider_code: 'kerry', provider_name: 'Kerry' },
+  { provider_code: 'flash', provider_name: 'Flash' },
+  { provider_code: 'j&t', provider_name: 'J&T' },
+  { provider_code: 'ems', provider_name: 'EMS' },
+]
+const shippingProviders = ref([...defaultShippingProviders])
+
+async function loadShippingProviders() {
+  try {
+    const response = await fetch(`${API_BASE_URL}/shipping-providers`)
+    if (!response.ok) throw new Error('โหลดรายชื่อบริษัทขนส่งไม่สำเร็จ')
+    const providers = await response.json()
+    if (Array.isArray(providers) && providers.length) {
+      shippingProviders.value = providers
+    }
+  } catch {
+    // Keep the original choices if the provider list is temporarily unavailable.
+  }
+}
 
 // ตัวอย่างกฎกติกาที่ลูกค้าต้องอ่านและยอมรับก่อนยืนยันการชำระเงิน
 const storeTerms = [
@@ -410,10 +443,13 @@ const orderStatusDisplay = computed(() => {
       ),
     },
     missing: {
-      label: 'สินค้านำเข้าล่าช้า กรุณารอทางแอดมินแจ้งอีกครั้ง',
-      color: '#ef4444',
+      label:
+        String(order.value?.refund_status || '').trim().toLowerCase() === 'paid'
+          ? 'คืนเงินแล้ว'
+          : 'รอการคืนเงิน',
+      color: '#b42363',
       icon: getIcon(
-        '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>',
+        '<path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"></path><polyline points="16 2 21 2 21 7"></polyline><line x1="21" y1="2" x2="10" y2="13"></line>',
       ),
     },
     delayed: {
@@ -990,6 +1026,7 @@ function goBack() {
 
 onMounted(async () => {
   await loadPaymentMethods()
+  await loadShippingProviders()
   fetchOrder()
 })
 </script>
@@ -1045,13 +1082,19 @@ onMounted(async () => {
               </div>
               <h1>
                 {{
-                  isImportFeePaymentStage
+                  isMissing
+                    ? 'แจ้งคืนเงินสินค้าที่ขาด'
+                    : isImportFeePaymentStage
                     ? 'ชำระเงินค่านำเข้า (รอบ 2)'
                     : 'ชำระเงินสำหรับคำสั่งพรีออเดอร์'
                 }}
               </h1>
 
-              <p class="hero-subtitle" v-if="importFeeTotal === 0">
+              <p class="hero-subtitle" v-if="isMissing">
+                <strong>สินค้าบางรายการขาดจากการรับเข้า:</strong> แอดมินกำลังดำเนินการคืนเงินให้คุณ
+                กรุณาแคปหน้าจอนี้แล้วส่งให้แอดมินทาง LINE OA ของร้าน
+              </p>
+              <p class="hero-subtitle" v-else-if="importFeeTotal === 0">
                 <strong>รอบ 1 (ชำระแรก):</strong> สินค้า Preorder จะถูกนำเข้าหลังได้รับการชำระเงิน
                 ทีมงานจะแจ้งค่านำเข้าเพิ่มเติมภายหลัง
               </p>
@@ -1068,7 +1111,7 @@ onMounted(async () => {
                 <div class="hero-meta-divider"></div>
                 <div class="hero-meta-item">
                   <span class="hero-meta-label">
-                    {{ isImportFeePaymentStage ? 'ค่านำเข้าแจ้งแล้ว' : 'ยอดรวม' }}
+                    {{ isMissing ? 'ยอดคืน' : isImportFeePaymentStage ? 'ค่านำเข้าแจ้งแล้ว' : 'ยอดรวม' }}
                   </span>
                   <strong>
                     ฿{{ heroTotal.toLocaleString() }}
@@ -1097,7 +1140,7 @@ onMounted(async () => {
             </div>
           </section>
 
-          <div v-if="isRoundOpen" class="round-open-notice">
+          <div v-if="isRoundOpen && !isMissing" class="round-open-notice">
             <strong>รอบพรีออเดอร์ยังไม่ปิด</strong>
             <span>คุณสามารถดูรายละเอียดออเดอร์ได้ แต่จะยังชำระเงินหรือส่งสลิปไม่ได้จนกว่าแอดมินจะปิดรอบ</span>
           </div>
@@ -1483,10 +1526,13 @@ onMounted(async () => {
                     :disabled="isShippingLocked"
                   >
                     <option value="">-- เลือกบริษัทขนส่ง --</option>
-                    <option value="Kerry">Kerry</option>
-                    <option value="Flash">Flash</option>
-                    <option value="J&T">J&T</option>
-                    <option value="EMS">EMS</option>
+                    <option
+                      v-for="provider in shippingProviders"
+                      :key="provider.provider_id || provider.provider_code"
+                      :value="provider.provider_name"
+                    >
+                      {{ provider.provider_name }}
+                    </option>
                   </select>
                 </div>
               </div>
@@ -1517,7 +1563,7 @@ onMounted(async () => {
 
         <div class="payment-section">
           <div class="payment-sticky">
-            <div v-if="!isFullyPaid" class="section-card postpone-card postpone-card--prominent">
+            <div v-if="!isFullyPaid && !isMissing" class="section-card postpone-card postpone-card--prominent">
               <div v-if="!isWaitingForImportFee" class="postpone-header">
                 <div>
                   <p class="postpone-title" style="display: flex; align-items: center">
@@ -1752,7 +1798,7 @@ onMounted(async () => {
               v-if="isMissing"
               class="section-card glass-card payment-panel payment-panel--locked"
             >
-              <div class="invalid-slip-banner invalid-slip-banner--import">
+              <div class="invalid-slip-banner invalid-slip-banner--refund">
                 <div class="invalid-slip-banner__icon">
                   <svg
                     width="22"
@@ -1764,22 +1810,25 @@ onMounted(async () => {
                     stroke-linecap="round"
                     stroke-linejoin="round"
                   >
-                    <path
-                      d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
-                    ></path>
-                    <line x1="12" y1="9" x2="12" y2="13"></line>
-                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                    <path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"></path>
+                    <polyline points="16 2 21 2 21 7"></polyline>
+                    <line x1="21" y1="2" x2="10" y2="13"></line>
                   </svg>
                 </div>
                 <div class="invalid-slip-banner__text">
-                  <strong>สินค้านำเข้าล่าช้า กรุณารอทางแอดมินแจ้งอีกครั้ง</strong>
-                  <span>ระบบจะเปิดให้ชำระเงินและแนบสลิปได้อีกครั้งเมื่อแอดมินแจ้งข้อมูลเพิ่มเติมแล้ว</span>
+                  <strong>สินค้าขาด — อยู่ระหว่างดำเนินการคืนเงิน</strong>
+                  <span v-if="refundStatusLabel === 'ยังไม่โอน'">
+                    กรุณาแคปหน้าจอนี้ แล้วส่งให้แอดมินทาง LINE OA ของร้านเพื่อดำเนินการโอนเงินคืน
+                  </span>
+                  <span v-else>แอดมินโอนเงินคืนให้แล้ว</span>
+                  <span>ยอดเงินคืน: ฿{{ missingRefundAmount.toLocaleString() }}</span>
+                  <span>สถานะการคืนเงิน: {{ refundStatusLabel }}</span>
                 </div>
               </div>
             </div>
 
             <div
-              v-else-if="!isCancelled && !isWaitingForImportFee && !isFullyPaid"
+              v-else-if="!isCancelled && !isMissing && !isWaitingForImportFee && !isFullyPaid"
               class="section-card glass-card payment-panel"
             >
               <h3 class="section-title" style="display: flex; align-items: center">
@@ -1966,7 +2015,7 @@ onMounted(async () => {
             </div>
 
             <div
-              v-if="!isCancelled && normalizedOrderStatus !== 'delayed' && !isWaitingForImportFee"
+              v-if="!isCancelled && !isMissing && normalizedOrderStatus !== 'delayed' && !isWaitingForImportFee"
               class="section-card summary-card summary-card--wide summary-card--compact"
             >
               <div
@@ -2515,6 +2564,14 @@ onMounted(async () => {
   background: #fff1f1;
   border: 1.5px solid #fca5a5;
   color: #b91c1c;
+}
+.invalid-slip-banner--refund {
+  background: linear-gradient(180deg, #fff8fc 0%, #fff1f7 100%);
+  border-color: #f3a4c8;
+  color: #b42363;
+}
+.invalid-slip-banner--refund .invalid-slip-banner__text span {
+  opacity: 1;
 }
 .invalid-slip-banner__icon {
   font-size: 1.2rem;

@@ -63,12 +63,19 @@ function handleOutsideClick(event) {
   }
 }
 
+function handleShellSearch(event) {
+  searchQuery.value = String(event.detail ?? '')
+  currentPage.value = 1
+}
+
 onMounted(() => {
   document.addEventListener('click', handleOutsideClick)
+  window.addEventListener('meowverse:user-search', handleShellSearch)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleOutsideClick)
+  window.removeEventListener('meowverse:user-search', handleShellSearch)
 })
 
 const activeTab = ref('พร้อมส่ง')
@@ -255,6 +262,7 @@ const fetchProducts = async () => {
         p.readyToShipEnabled != null || p.isReadyToShip != null
           ? Boolean(p.readyToShipEnabled ?? p.isReadyToShip)
           : !(p.preorderEnabled ?? p.isPreorder ?? false),
+      isRecommended: Boolean(p.isRecommended ?? p.is_recommended ?? false),
     }))
   } catch (err) {
     error.value = err.message
@@ -391,6 +399,7 @@ const addToCart = async (product, flavor = '', qty = 1) => {
       'success',
     )
     await fetchCartCount() // อัปเดต badge
+    window.dispatchEvent(new CustomEvent('meowverse:cart-updated'))
   } catch (err) {
     showNotice(err.message, 'error')
   } finally {
@@ -653,6 +662,25 @@ const filteredProducts = computed(() => {
   }
 
   return list
+})
+
+const recommendedProducts = computed(() => {
+  const keyword = searchQuery.value.trim().toLowerCase()
+
+  return products.value
+    .filter((product) => product.isRecommended && (product.isReadyToShip || product.isPreorder))
+    .filter((product) => {
+      if (activeCategory.value !== null && Number(product.categoryId) !== Number(activeCategory.value)) {
+        return false
+      }
+
+      if (!keyword) return true
+      return (
+        product.name.toLowerCase().includes(keyword) ||
+        product.categoryName.toLowerCase().includes(keyword)
+      )
+    })
+    .slice(0, 6)
 })
 
 const totalPages = computed(() =>
@@ -1034,6 +1062,41 @@ onMounted(async () => {
           <span class="cat-btn__icon">{{ cat.icon }}</span>
           <span class="cat-btn__label">{{ cat.name }}</span>
         </button>
+      </div>
+    </section>
+
+    <section v-if="activeTab === 'หน้าหลัก' && recommendedProducts.length" class="recommended-products">
+      <div class="recommended-products__header">
+        <div>
+          <p class="recommended-products__eyebrow">Handpicked for you</p>
+          <h2 class="products__title">สินค้าแนะนำ</h2>
+          <p class="products__sub">สินค้าที่ร้านคัดสรรมาให้เป็นพิเศษ</p>
+        </div>
+        <span class="recommended-products__sparkle">⭐</span>
+      </div>
+
+      <div class="recommended-products__grid">
+        <article
+          v-for="product in recommendedProducts"
+          :key="`recommended-${product.id}`"
+          class="recommended-card"
+          role="button"
+          tabindex="0"
+          @click="openProductDetail(product)"
+          @keydown.enter.prevent="openProductDetail(product)"
+          @keydown.space.prevent="openProductDetail(product)"
+        >
+          <div class="recommended-card__image">
+            <img v-if="product.image" :src="product.image" :alt="product.name" />
+            <span v-else class="product-card__emoji">🐾</span>
+            <span class="recommended-card__label">แนะนำ</span>
+          </div>
+          <div class="recommended-card__body">
+            <h3>{{ product.name }}</h3>
+            <p>{{ product.categoryName }}</p>
+            <strong>฿{{ Number(getProductPrice(product)).toLocaleString() }}</strong>
+          </div>
+        </article>
       </div>
     </section>
 
@@ -2093,6 +2156,105 @@ onMounted(async () => {
   box-shadow: 0 10px 28px rgba(89, 61, 125, 0.08);
 }
 
+.recommended-products {
+  max-width: var(--content-max);
+  margin: 0.9rem auto 0;
+  padding: 1.15rem 1rem 1.25rem;
+  border: 1px solid #f2d5a6;
+  border-radius: 18px;
+  background: linear-gradient(145deg, #fffaf1, #fff5f8);
+  box-shadow: 0 10px 28px rgba(165, 112, 54, 0.1);
+}
+.recommended-products__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.8rem;
+}
+.recommended-products__eyebrow {
+  color: #c27b27;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.recommended-products__sparkle {
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  place-items: center;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 4px 12px rgba(165, 112, 54, 0.12);
+}
+.recommended-products__grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+.recommended-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(237, 205, 157, 0.9);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.88);
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.recommended-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 20px rgba(165, 112, 54, 0.16);
+}
+.recommended-card__image {
+  position: relative;
+  aspect-ratio: 1;
+  overflow: hidden;
+  background: linear-gradient(135deg, #fff2d8, #fde8f0);
+}
+.recommended-card__image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.recommended-card__label {
+  position: absolute;
+  top: 0.4rem;
+  left: 0.4rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 999px;
+  background: #fff;
+  color: #a86218;
+  font-size: 0.62rem;
+  font-weight: 900;
+}
+.recommended-card__body {
+  padding: 0.58rem 0.62rem 0.68rem;
+}
+.recommended-card__body h3 {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: #513c60;
+  font-size: 0.78rem;
+  line-height: 1.25;
+  line-clamp: 2;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.recommended-card__body p {
+  overflow: hidden;
+  margin: 0.25rem 0 0.38rem;
+  color: #9b879d;
+  font-size: 0.67rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recommended-card__body strong {
+  color: #a86218;
+  font-size: 0.82rem;
+}
+
 .products__header {
   margin-bottom: 0.8rem;
 }
@@ -2855,6 +3017,10 @@ onMounted(async () => {
   }
 }
 @media (max-width: 480px) {
+  .recommended-products__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .cat-btn {
     min-width: 72px;
     padding-inline: 0.55rem;
@@ -2877,6 +3043,10 @@ onMounted(async () => {
 }
 
 @media (max-width: 900px) {
+  .recommended-products__grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .detail-modal {
     max-height: calc(100vh - 1.5rem);
     overflow: auto;

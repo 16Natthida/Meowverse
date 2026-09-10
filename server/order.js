@@ -9,8 +9,6 @@ const SHIPPING_FEES = Object.freeze({
   preorder: 65,
   ready: 49,
 })
-const READY_PAYMENT_RESERVATION_MS = 15 * 60 * 1000
-
 function getShippingFee(items) {
   const hasPreorder = items.some(isPreorderItem)
 
@@ -105,36 +103,6 @@ async function getPostponeDeadlineColumn(connection) {
   return postponeDeadlineColumnName
 }
 
-async function maybeExpireOrder(connection, orderId) {
-  const [rows] = await connection.query(
-    'SELECT order_id, status, deadline, Order_type FROM orders WHERE order_id = ? LIMIT 1 FOR UPDATE',
-    [orderId],
-  )
-  if (rows.length === 0) return null
-
-  const order = rows[0]
-  if (!order.deadline) return order
-
-  const deadlineTime = new Date(order.deadline).getTime()
-  if (Number.isNaN(deadlineTime)) return order
-
-  const cancellableStatuses = ['Pending']
-  if (
-    deadlineTime <= Date.now() &&
-    String(order.Order_type || '').toLowerCase() === 'ready'
-  ) {
-    if (cancellableStatuses.includes(order.status)) {
-      await restoreReadyOrderStock(connection, order.order_id)
-    }
-    if (['Pending', 'Cancelled'].includes(order.status)) {
-      await deleteOrder(connection, orderId)
-      return null
-    }
-  }
-
-  return order
-}
-
 async function deleteOrder(connection, orderId) {
   await connection.query('DELETE FROM payment WHERE order_id = ?', [orderId])
   await connection.query('DELETE FROM shipping WHERE order_id = ?', [orderId])
@@ -216,35 +184,50 @@ export async function restoreReadyOrderStock(connection, orderId) {
   }
 }
 
-export async function expirePendingReadyOrders(db) {
-  const connection = await db.getConnection()
-  try {
-    await connection.beginTransaction()
-    const [orders] = await connection.query(
-      `SELECT order_id, status
-       FROM orders
-       WHERE LOWER(Order_type) = 'ready'
-         AND status IN ('Pending', 'Cancelled')
-         AND deadline IS NOT NULL
-         AND deadline <= NOW()
+export async function deductReadyOrderStock(connection, orderId) {
+  const [details] = await connection.query(
+    `SELECT prod_id, qty, flavor
+     FROM order_details
+     WHERE order_id = ? AND LOWER(COALESCE(item_type, '')) = 'ready-to-ship'`,
+    [orderId],
+  )
+
+  for (const item of details) {
+    const [productRows] = await connection.query(
+      `SELECT stock_qty, flavor_stock
+       FROM products
+       WHERE prod_id = ?
+       LIMIT 1
        FOR UPDATE`,
+      [item.prod_id],
     )
 
-    for (const order of orders) {
-      if (order.status === 'Pending') {
-        await restoreReadyOrderStock(connection, order.order_id)
-      }
-      await deleteOrder(connection, order.order_id)
+    const product = productRows[0]
+    if (!product) {
+      return { ok: false, error: `ไม่พบสินค้ารหัส ${item.prod_id}` }
     }
 
-    await connection.commit()
-    return orders.length
-  } catch (error) {
-    await connection.rollback()
-    throw error
-  } finally {
-    connection.release()
+    const flavor = String(item.flavor || '').trim()
+    const flavorStock = parseFlavorStockMap(product.flavor_stock)
+    const hasFlavorStock = flavor && Object.prototype.hasOwnProperty.call(flavorStock, flavor)
+    const availableQty = hasFlavorStock
+      ? Number(flavorStock[flavor]) || 0
+      : Number(product.stock_qty) || 0
+    const requestedQty = Number(item.qty) || 0
+
+    if (requestedQty > availableQty) {
+      return {
+        ok: false,
+        error: hasFlavorStock
+          ? `ขออภัย รสชาติ "${flavor}" มีสต็อกเหลือเพียง ${availableQty} ชิ้น`
+          : `สินค้ามีสต็อกไม่เพียงพอ (เหลือ ${availableQty} ชิ้น)`,
+      }
+    }
+
+    await adjustReadyStock(connection, item, -requestedQty)
   }
+
+  return { ok: true }
 }
 
 function resolveReopenedOrderStatus(orderRow) {
@@ -446,7 +429,7 @@ router.post('/checkout-preview', async (req, res) => {
 })
 
 // POST /api/orders/confirm-payment
-// สร้างออเดอร์จริง + ลบ cart เมื่อกดยืนยันการชำระ
+// สร้างออเดอร์จริงไว้ก่อนส่งสลิป โดยยังไม่ลบรายการออกจาก cart
 router.post('/confirm-payment', async (req, res) => {
   let { user_id, items: requestItems = [] } = req.body || {}
 
@@ -574,43 +557,6 @@ router.post('/confirm-payment', async (req, res) => {
     }
     const mergedItems = Array.from(mergedMap.values())
 
-    // Reserve ready-to-ship stock while the payment page is open.
-    for (const item of mergedItems) {
-      if (String(item.item_type || '').toLowerCase() !== 'ready-to-ship') continue
-
-      const [productRows] = await connection.query(
-        `SELECT stock_qty, flavors, flavor_stock
-         FROM products
-         WHERE prod_id = ?
-         LIMIT 1
-         FOR UPDATE`,
-        [item.prod_id],
-      )
-      const product = productRows[0]
-      if (!product) {
-        await connection.rollback()
-        return res.status(400).json({ error: `ไม่พบสินค้า "${item.name}"` })
-      }
-
-      const flavor = String(item.flavor || '').trim()
-      const flavorStock = parseFlavorStockMap(product.flavor_stock)
-      const hasFlavorStock = flavor && Object.prototype.hasOwnProperty.call(flavorStock, flavor)
-      const availableQty = hasFlavorStock
-        ? Number(flavorStock[flavor]) || 0
-        : Number(product.stock_qty) || 0
-
-      if (Number(item.qty) > availableQty) {
-        await connection.rollback()
-        return res.status(400).json({
-          error: hasFlavorStock
-            ? `ขออภัย รสชาติ "${flavor}" มีสต็อกเหลือเพียง ${availableQty} ชิ้น`
-            : `สินค้า "${item.name}" มีสต็อกไม่เพียงพอ (เหลือ ${availableQty} ชิ้น)`,
-        })
-      }
-
-      await adjustReadyStock(connection, item, -Number(item.qty))
-    }
-
     // ใช้ราคาจาก query (calculated price) ของรายการที่รวมแล้ว
     const subtotalAmount = mergedItems.reduce(
       (sum, item) => sum + (Number(item.price) || 0) * Number(item.qty || 0),
@@ -633,22 +579,17 @@ router.post('/confirm-payment', async (req, res) => {
 
     const shippingFee = getShippingFee(mergedItems)
     const totalAmount = subtotalAmount + (hasPreorder ? chinaShippingTotalThb : shippingFee)
-    const deadline = !hasPreorder
-      ? new Date(Date.now() + READY_PAYMENT_RESERVATION_MS)
-      : null
-
     const [orderResult] = await connection.query(
       `INSERT INTO orders
          (user_id, total_amount, shipping_fee, status, Order_type,
-          deadline, china_shipping_total_thb)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          china_shipping_total_thb)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       [
         user_id,
         totalAmount,
         shippingFee,
         'Pending',
         orderType,
-        deadline,
         chinaShippingTotalThb,
       ],
     )
@@ -710,15 +651,6 @@ router.post('/confirm-payment', async (req, res) => {
           [item.qty, item.preorder_round_id, item.prod_id],
         )
       }
-    }
-
-    // ลบเฉพาะสินค้าที่สั่งออกจากตะกร้า (เลือกเฉพาะตามรายการที่ได้รับ)
-    if (selectedCartIds.length > 0) {
-      const deletePlaceholders = selectedCartIds.map(() => '?').join(',')
-      await connection.query(
-        `DELETE FROM cart WHERE cart_id IN (${deletePlaceholders})`,
-        selectedCartIds,
-      )
     }
 
     await connection.commit()
@@ -976,6 +908,7 @@ router.get('/', async (req, res) => {
     const [rows] = await db.query(
       `SELECT order_id, user_id, total_amount, shipping_fee, import_fee_total,
               china_shipping_total_thb, status, deadline, Order_type, Order_date,
+              refund_status, refund_completed_at,
               (
                 SELECT COALESCE(sp.provider_name, s.Shipping_Carrier)
                 FROM shipping s
@@ -1093,20 +1026,9 @@ router.get('/:order_id', async (req, res) => {
 
   try {
     const db = getDB(req)
-    const expiryConnection = await db.getConnection()
-    try {
-      await expiryConnection.beginTransaction()
-      await maybeExpireOrder(expiryConnection, order_id)
-      await expiryConnection.commit()
-    } catch (expiryError) {
-      await expiryConnection.rollback()
-      throw expiryError
-    } finally {
-      expiryConnection.release()
-    }
-
     const [orderRows] = await db.query(
       `SELECT o.order_id, o.user_id, o.total_amount, o.shipping_fee, o.status, o.deadline, o.Order_type, o.Order_date, o.import_fee_total,
+              o.refund_status, o.refund_completed_at,
               o.china_shipping_total_thb, a.username,
               (SELECT LOWER(pr.status)
                FROM preorder_rounds pr
@@ -1209,7 +1131,10 @@ COALESCE(
     const missingAmount = detailRows.reduce((sum, item) => {
       const orderedQty = Number(item.qty || 0)
       const receivedQty = item.received_qty != null ? Number(item.received_qty) : orderedQty
-      return sum + Math.max(orderedQty - receivedQty, 0) * Number(item.unit_price || 0)
+      const isMissing = String(item.arrival_status || '').trim().toLowerCase() === 'missing'
+      return isMissing
+        ? sum + Math.max(orderedQty - receivedQty, 0) * Number(item.unit_price || 0)
+        : sum
     }, 0)
 
     const missingItems = detailRows.reduce((sum, item) => {
@@ -1312,7 +1237,7 @@ router.patch('/:order_id/import-fee', async (req, res) => {
 // ─────────────────────────────────────────────
 // PATCH /api/orders/:order_id/cancel
 // ผู้ใช้กดยกเลิกออเดอร์เอง (ก่อนชำระเงินสำเร็จ)
-// คืนสินค้าเข้าสต็อกและลบออเดอร์แบบเดียวกับตอนออเดอร์หมดเวลา (maybeExpireOrder)
+// คืนสินค้าเข้าสต็อกและลบออเดอร์ที่ผู้ใช้ยกเลิก
 // ─────────────────────────────────────────────
 router.patch('/:order_id/cancel', async (req, res) => {
   const { order_id } = req.params
@@ -1346,8 +1271,11 @@ router.patch('/:order_id/cancel', async (req, res) => {
       })
     }
 
-    // คืนสต็อกเฉพาะรายการพร้อมส่ง (ready-to-ship) เหมือนตอนหมดเวลาการจอง
-    if (String(order.Order_type || '').toLowerCase() === 'ready') {
+    // คืนสต็อกเฉพาะเมื่อเคยส่งสลิปแล้ว เพราะออเดอร์ Pending ยังไม่ตัดสต็อก
+    if (
+      String(order.Order_type || '').toLowerCase() === 'ready' &&
+      normalizedStatus === 'slip submitted'
+    ) {
       await restoreReadyOrderStock(connection, order.order_id)
     }
 
@@ -1462,27 +1390,43 @@ router.patch('/:order_id/status', async (req, res) => {
 // ─────────────────────────────────────────────
 router.patch('/:order_id/reject-slip', async (req, res) => {
   const { order_id } = req.params
+  const db = getDB(req)
+  const connection = await db.getConnection()
 
   try {
-    const db = getDB(req)
-    const [rows] = await db.query('SELECT status FROM orders WHERE order_id = ? LIMIT 1', [
-      order_id,
-    ])
+    await connection.beginTransaction()
+    const [rows] = await connection.query(
+      'SELECT status, Order_type FROM orders WHERE order_id = ? LIMIT 1 FOR UPDATE',
+      [order_id],
+    )
 
     if (rows.length === 0) {
+      await connection.rollback()
       return res.status(404).json({ error: 'ไม่พบออเดอร์ที่ระบุ' })
     }
 
     const currentStatus = String(rows[0].status || '').trim()
+    const normalizedStatus = currentStatus.toLowerCase().replace(/[_\s]+/g, ' ')
     const isImportFeeRound = ['Pending_import_fee', 'Import_slip_submitted'].includes(currentStatus)
     const nextStatus = isImportFeeRound ? 'Invalid import slip' : 'Invalid slip'
 
-    await db.query('UPDATE orders SET status = ? WHERE order_id = ?', [nextStatus, order_id])
+    if (
+      String(rows[0].Order_type || '').toLowerCase() === 'ready' &&
+      normalizedStatus === 'slip submitted'
+    ) {
+      await restoreReadyOrderStock(connection, order_id)
+    }
+
+    await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [nextStatus, order_id])
+    await connection.commit()
 
     res.json({ success: true, order_id: Number(order_id), status: nextStatus })
   } catch (err) {
+    await connection.rollback()
     console.error('[PATCH /api/orders/:order_id/reject-slip]', err)
     res.status(500).json({ error: 'เกิดข้อผิดพลาดในการอัปเดตสถานะ' })
+  } finally {
+    connection.release()
   }
 })
 
