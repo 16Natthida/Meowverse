@@ -27,54 +27,6 @@ const profileForm = reactive({
   avatar: '',
 })
 
-const pageTitle = computed(() => {
-  if (route.path === '/admin/home') {
-    return 'แดชบอร์ด'
-  }
-
-  if (route.path === '/admin/products') {
-    return 'จัดการสต็อกสินค้า'
-  }
-
-  if (route.path === '/admin/sales/ready-to-ship') {
-    return 'รายการยอดขายพร้อมส่ง'
-  }
-
-  if (route.path === '/admin/sales/preorder') {
-    return 'รายการยอดขายพรีออเดอร์'
-  }
-
-  if (route.path === '/admin/sales' || route.path === '/admin/orders') {
-    return 'รายการยอดขาย'
-  }
-
-  if (route.path === '/admin/preorder-rounds') {
-    return 'จัดการรอบพรีออเดอร์'
-  }
-
-  if (route.path === '/admin/preorder-statistics') {
-    return 'สถิติพรีออเดอร์ย้อนหลัง'
-  }
-
-  if (route.path === '/admin/postpones') {
-    return 'คำขอเลื่อนการชำระเงิน'
-  }
-
-  if (route.path === '/admin/slips') {
-    return 'จัดการสลิปการชำระเงิน'
-  }
-
-  if (route.path === '/admin/inventory-intake') {
-    return 'รับสินค้าเข้า'
-  }
-
-  if (route.path === '/admin/shipping') {
-    return 'รายการจัดส่ง'
-  }
-
-  return 'แดชบอร์ด'
-})
-
 const isStandaloneRoute = computed(() => route.path === '/login')
 const isAdminRoute = computed(() => route.path.startsWith('/admin'))
 
@@ -414,14 +366,6 @@ onUnmounted(() => {
           </nav>
         </div>
 
-        <div class="menu-block menu-block--soft">
-          <p class="menu-title"><span class="menu-title__paw"><svg class="menu-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h6l2 2h8v12H4z"/></svg></span>เครื่องมือ</p>
-          <nav class="menu-list" aria-label="เครื่องมือ">
-            <span><span class="menu-icon"><svg class="menu-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 6 13.5 15.5 8.5 10.5 1 18"/><path d="M17 6h6v6"/></svg></span><span class="menu-label">รายงาน</span></span>
-            <span><span class="menu-icon"><svg class="menu-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0 0 12 2z"/></svg></span><span class="menu-label">วิธีใช้งาน</span></span>
-          </nav>
-        </div>
-
         <div class="sidebar-footer">
           <button type="button" class="sidebar-footer__logout" @click="handleAdminLogout">
             <span class="menu-icon" aria-hidden="true">
@@ -526,14 +470,33 @@ onUnmounted(() => {
       </header>
 
       <main class="page">
-        <h1 class="page-title">{{ pageTitle }}</h1>
-        <RouterView />
+        <RouterView v-slot="{ Component }">
+          <component :is="Component" class="admin-page-content" />
+        </RouterView>
       </main>
     </section>
   </div>
 </template>
 
 <style scoped>
+.page > :deep(.admin-page-content) {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+.page > :deep(.admin-page-content > .admin-page-heading) {
+  margin: 0;
+}
+
+.page > :deep(.admin-page-content:has(> .admin-page-heading)) {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
 .app-layout {
   min-height: 100vh;
   display: grid;

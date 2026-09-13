@@ -1,18 +1,12 @@
 <template>
   <main class="users-page">
-    <div class="page-header">
-      <div class="header-content">
-        <h1>สมาชิก</h1>
-        <p>จัดการบัญชีผู้ใช้และผู้ดูแลระบบ</p>
-        <div class="member-count">
-          <span class="label">สมาชิกทั้งหมด</span>
-          <span class="count">{{ filteredUsers.length }}</span>
-        </div>
-      </div>
-      <div class="header-actions">
+    <AdminPageHeader title="สมาชิก" description="จัดการบัญชีผู้ใช้และผู้ดูแลระบบ"><div class="header-actions">
         <button class="btn-add-user" @click="goToAddUser"><span>➕</span> เพิ่มผู้ใช้ใหม่</button>
       </div>
-    </div>
+<template #details><div class="member-count">
+          <span class="label">สมาชิกทั้งหมด</span>
+          <span class="count">{{ filteredUsers.length }}</span>
+        </div></template></AdminPageHeader>
 
     <div class="controls-section">
       <div class="search-box">
@@ -135,6 +129,7 @@
 </template>
 
 <script setup>
+import AdminPageHeader from '../../components/AdminPageHeader.vue'
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'

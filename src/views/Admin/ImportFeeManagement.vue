@@ -1,28 +1,7 @@
 <template>
   <div class="import-fee-page">
     <!-- Header -->
-    <div class="page-header">
-      <div class="page-header__icon" aria-hidden="true">
-        <svg
-          width="22"
-          height="22"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <path d="M12 2L2 7l10 5 10-5-10-5z" />
-          <path d="M2 17l10 5 10-5" />
-          <path d="M2 12l10 5 10-5" />
-        </svg>
-      </div>
-      <div>
-        <h2 class="page-header__title">กรอกค่านำเข้าสินค้าพรีออเดอร์</h2>
-        <p class="page-header__sub">บันทึกค่านำเข้าเพื่อคำนวณยอดชำระรอบที่ 2 ของลูกค้า</p>
-      </div>
-    </div>
+    <AdminPageHeader title="กรอกค่านำเข้าสินค้าพรีออเดอร์" description="บันทึกค่านำเข้าเพื่อคำนวณยอดชำระรอบที่ 2 ของลูกค้า"></AdminPageHeader>
 
     <!-- Round selector -->
     <div class="card selector-card">
@@ -252,6 +231,7 @@
 </template>
 
 <script setup>
+import AdminPageHeader from '../../components/AdminPageHeader.vue'
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useAuth } from '../../composables/useAuth'
 import translateError from '../../utils/translateError'

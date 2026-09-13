@@ -1,4 +1,5 @@
 <script setup>
+import AdminPageHeader from '../../components/AdminPageHeader.vue'
 import { ref, onMounted, computed } from 'vue'
 import { printOrder } from '../../utils/printOrder'
 
@@ -168,6 +169,7 @@ onMounted(fetchShippingOrders)
 
 <template>
   <div class="shipping-page">
+    <AdminPageHeader title="รายการจัดส่ง" description="จัดการคำสั่งซื้อที่รอจัดส่งและข้อมูลติดตามพัสดุ" />
     <section class="panel table-panel">
       <header class="panel-head">
         <div class="panel-head__title">

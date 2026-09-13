@@ -1,4 +1,5 @@
 <script setup>
+import AdminPageHeader from '../../components/AdminPageHeader.vue'
 import { computed, onMounted, ref } from 'vue'
 import translateError from '../../utils/translateError'
 
@@ -234,13 +235,7 @@ onMounted(() => {
 
 <template>
   <div class="admin-support-page">
-    <section class="hero-panel">
-      <div class="hero-copy">
-        <p class="eyebrow">Admin Operations</p>
-        <h1>จัดการสลิปการชำระเงิน</h1>
-        <p>ตรวจสอบ อนุมัติ และดูหลักฐานการโอนเงินสำหรับออเดอร์พรีออเดอร์</p>
-      </div>
-    </section>
+    <AdminPageHeader title="จัดการสลิปการชำระเงิน" description="ตรวจสอบ อนุมัติ และดูหลักฐานการโอนเงินสำหรับออเดอร์พรีออเดอร์"></AdminPageHeader>
 
     <section class="kpi-grid">
       <article class="kpi-card">

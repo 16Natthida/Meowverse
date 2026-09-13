@@ -1,10 +1,60 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import AdminPageHeader from '../../components/AdminPageHeader.vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+const termsText = ref('')
+const termsLoading = ref(true)
+const termsLoaded = ref(false)
+const termsSaving = ref(false)
+const termsError = ref('')
+const termsSuccess = ref('')
+const activeSection = ref('terms')
+const bannerPreviewFailed = ref(false)
+const termsPreview = computed(() => termsText.value.split('\n').map((line) => line.trim()).filter(Boolean))
+
+async function loadTerms() {
+  termsLoading.value = true
+  termsError.value = ''
+  try {
+    const response = await fetch(`${API_BASE_URL}/site-settings/preorder-terms`)
+    if (!response.ok) throw new Error('ไม่สามารถโหลดกฎพรีออเดอร์ได้ กรุณาลองใหม่')
+    const data = await response.json()
+    termsText.value = data.terms.join('\n')
+    termsLoaded.value = true
+  } catch (error) {
+    termsError.value = error.message
+  } finally {
+    termsLoading.value = false
+  }
+}
+
+async function saveTerms() {
+  termsSaving.value = true
+  termsError.value = ''
+  termsSuccess.value = ''
+  try {
+    const response = await fetch(`${API_BASE_URL}/site-settings/preorder-terms`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...getAdminHeaders() },
+      body: JSON.stringify({ terms: termsPreview.value }),
+    })
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.message || 'ไม่สามารถบันทึกกฎได้')
+    termsText.value = data.terms.join('\n')
+    termsSuccess.value = 'บันทึกกฎแล้ว ลูกค้าจะเห็นกฎใหม่เมื่อเปิดหรือโหลดหน้าชำระเงินพรีออเดอร์อีกครั้ง'
+  } catch (error) {
+    termsError.value = error.message
+  } finally {
+    termsSaving.value = false
+  }
+}
+
+onMounted(loadTerms)
 
 // Banner state
 const bannerImageUrl = ref('')
+watch(bannerImageUrl, () => { bannerPreviewFailed.value = false })
 const bannerLoading = ref(false)
 const bannerSaving = ref(false)
 const bannerError = ref('')
@@ -347,13 +397,50 @@ async function saveTheme() {
 
 <template>
   <div class="settings-view">
-    <header class="page-header">
-      <h1>ตั้งค่าระบบ</h1>
-      <p>จัดการแบนเนอร์และโลโก้ของร้าน</p>
-    </header>
+    <AdminPageHeader title="ตั้งค่าระบบ" description="จัดการแบนเนอร์ โลโก้ และกฎพรีออเดอร์ของร้าน"></AdminPageHeader>
+
+    <nav class="settings-tabs" aria-label="หมวดการตั้งค่า">
+      <button type="button" :class="{ active: activeSection === 'terms' }" :aria-pressed="activeSection === 'terms'" @click="activeSection = 'terms'">กฎพรีออเดอร์</button>
+      <button type="button" :class="{ active: activeSection === 'brand' }" :aria-pressed="activeSection === 'brand'" @click="activeSection = 'brand'">แบนเนอร์และโลโก้</button>
+    </nav>
+
+    <section v-show="activeSection === 'terms'" class="panel settings-panel">
+      <header class="panel-head panel-head--stack">
+        <h3>กฎกติกาและเงื่อนไขพรีออเดอร์</h3>
+        <p>แสดงให้ลูกค้าอ่านและยอมรับก่อนยืนยันการชำระเงินพรีออเดอร์</p>
+      </header>
+      <p v-if="termsLoading" role="status">กำลังโหลดกฎ...</p>
+      <form v-else-if="termsLoaded" class="terms-form" @submit.prevent="saveTerms">
+        <div class="terms-editor settings-controls">
+        <div class="editor-heading"><h4>แก้ไขข้อความกฎ</h4><span class="count-badge">{{ termsPreview.length }} / 50 ข้อ</span></div>
+        <label class="field">
+          เขียนหนึ่งข้อต่อบรรทัด ไม่ต้องใส่เลขข้อ
+          <textarea v-model="termsText" rows="11" :disabled="termsSaving" required @input="termsSuccess = ''" />
+        </label>
+        <p class="editor-hint">เพิ่ม ลบ หรือสลับบรรทัดเพื่อจัดลำดับกฎ • ข้อละไม่เกิน 1,000 ตัวอักษร</p>
+        </div>
+        <div class="terms-preview">
+          <span class="preview-label">มุมมองลูกค้า</span>
+          <h4>ตัวอย่างกฎที่ลูกค้าจะเห็น</h4>
+          <p class="preview-description">กฎกติกาและเงื่อนไขของร้าน</p>
+          <ol><li v-for="(term, index) in termsPreview" :key="index">{{ term }}</li></ol>
+          <p v-if="!termsPreview.length" class="editor-hint">เริ่มเขียนกฎทางซ้าย เพื่อดูตัวอย่างที่นี่</p>
+          <div class="preview-consent"><span aria-hidden="true">✓</span> ฉันได้อ่านและยอมรับเงื่อนไขของร้านแล้ว</div>
+        </div>
+        <div class="settings-actions terms-footer">
+          <p>กดบันทึกเพื่ออัปเดตกฎที่แสดงในหน้าชำระเงิน</p>
+          <button class="hero-btn hero-btn--primary" type="submit" :disabled="termsSaving || !termsPreview.length">
+            {{ termsSaving ? 'กำลังบันทึก...' : 'บันทึกกฎพรีออเดอร์' }}
+          </button>
+        </div>
+      </form>
+      <p v-if="termsError" class="settings-note settings-note--error" role="alert">{{ termsError }}</p>
+      <button v-if="!termsLoading && !termsLoaded" class="hero-btn hero-btn--ghost" @click="loadTerms">ลองโหลดอีกครั้ง</button>
+      <p v-if="termsSuccess" class="settings-note settings-note--success" role="status">{{ termsSuccess }}</p>
+    </section>
 
     <!-- Banner Section -->
-    <section class="panel settings-panel">
+    <section v-show="activeSection === 'brand'" class="panel settings-panel">
       <header class="panel-head panel-head--stack">
         <h3>ตั้งค่าแบนเนอร์หน้าแรก</h3>
         <p>อัปโหลดรูปใหม่หรือวางลิงก์รูป เพื่อเปลี่ยนภาพที่ผู้ใช้เห็นบนหน้า dashboard</p>
@@ -361,13 +448,14 @@ async function saveTheme() {
 
       <div class="settings-layout">
         <div class="settings-preview">
-          <img :src="resolveBannerImageUrl(bannerImageUrl)" alt="ตัวอย่างแบนเนอร์หน้าแรก" />
+          <img v-if="!bannerPreviewFailed" :key="bannerImageUrl" :src="resolveBannerImageUrl(bannerImageUrl)" alt="ตัวอย่างแบนเนอร์หน้าแรก" @error="bannerPreviewFailed = true" />
+          <div v-else class="image-empty"><span aria-hidden="true">▧</span><strong>ไม่สามารถแสดงตัวอย่างรูปได้</strong><p>เลือกรูปใหม่ หรือเปลี่ยนลิงก์รูปแบนเนอร์</p></div>
         </div>
 
         <div class="settings-controls">
           <label class="field">
             ลิงก์รูปแบนเนอร์
-            <input v-model="bannerImageUrl" placeholder="/uploads/banner.jpg" type="url" />
+            <input v-model="bannerImageUrl" placeholder="/uploads/banner.jpg" type="url" @input="bannerPreviewFailed = false" />
           </label>
 
           <input
@@ -405,7 +493,7 @@ async function saveTheme() {
     </section>
 
     <!-- Logo Section -->
-    <section class="panel settings-panel">
+    <section v-show="activeSection === 'brand'" class="panel settings-panel">
       <header class="panel-head panel-head--stack">
         <h3>ตั้งค่าโลโก้ร้าน</h3>
         <p>อัปโหลดโลโก้ของร้าน เพื่อแทนที่อีโมจิ 🐱 ในแถบด้านข้าง</p>
@@ -465,8 +553,12 @@ async function saveTheme() {
 .settings-view {
   display: flex;
   flex-direction: column;
-  gap: 2rem;
-  padding: 0;
+  gap: 1.5rem;
+  padding: 1rem 1rem 3rem;
+  width: 100%;
+  max-width: 1760px;
+  box-sizing: border-box;
+  margin: 0 auto;
 }
 
 .page-header {
@@ -493,12 +585,42 @@ async function saveTheme() {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+  padding: 32px;
+  background: #fff;
+  border: 1px solid #e9e2f0;
+  border-radius: 20px;
+  box-shadow: 0 5px 24px #49316406;
 }
+
+.settings-tabs { display: flex; gap: 6px; padding: 5px; background: #eee7f5; border-radius: 12px; align-self: flex-start; }
+.settings-tabs button { border: 0; background: transparent; color: #756487; padding: 11px 20px; border-radius: 9px; font: inherit; font-size: 0.9rem; cursor: pointer; }
+.settings-tabs button.active { background: #fff; color: #7044a8; box-shadow: 0 2px 6px #49316410; font-weight: 600; }
+.settings-tabs button:focus-visible, .hero-btn:focus-visible { outline: 3px solid #b794de; outline-offset: 3px; }
+.terms-form { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 28px; }
+.terms-editor { min-width: 0; }
+.editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.editor-heading h4, .terms-preview h4 { margin: 0; color: #432f61; font-size: 1rem; }
+.count-badge { background: #f1eafa; color: #7955a3; font-size: 0.75rem; padding: 5px 10px; border-radius: 20px; white-space: nowrap; }
+.editor-hint { margin: 0; color: #85778f; font-size: 0.78rem; line-height: 1.7; }
+.terms-preview { min-width: 0; background: #faf8fd; border: 1px solid #e8def2; padding: 24px; border-radius: 14px; }
+.preview-label { display: inline-block; margin-bottom: 16px; font-size: 0.72rem; color: #8157ab; background: #eee4f8; padding: 4px 10px; border-radius: 6px; }
+.preview-description { color: #91839c; font-size: 0.78rem; margin: 6px 0 20px; }
+.terms-preview ol { padding-left: 24px; color: #655574; font-size: 1rem; line-height: 1.9; }
+.terms-preview li::marker { color: #9671b7; font-weight: 600; }
+.preview-consent { border-top: 1px solid #e8def2; padding-top: 16px; margin-top: 20px; color: #857190; font-size: 0.75rem; line-height: 1.7; }
+.preview-consent span { display: inline-block; margin-right: 6px; color: #8250b1; }
+.terms-footer { grid-column: 1 / -1; border-top: 1px solid #eee8f3; padding-top: 20px; justify-content: space-between; align-items: center; }
+.terms-footer p { margin: 0; color: #8a7b96; font-size: 0.8rem; }
+.image-empty { text-align: center; color: #93819f; padding: 24px; font-size: 0.85rem; }
+.image-empty span { display: block; font-size: 2.5rem; margin-bottom: 12px; }
+.image-empty p { font-size: 0.75rem; }
 
 .panel-head {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #f0eaf5;
 }
 
 .panel-head h3 {
@@ -515,7 +637,7 @@ async function saveTheme() {
 
 .settings-layout {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
   gap: 2rem;
   align-items: start;
 }
@@ -524,7 +646,7 @@ async function saveTheme() {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 300px;
+  min-height: 180px;
   background: linear-gradient(135deg, #f4eefb 0%, #f9f3fc 100%);
   border-radius: 12px;
   overflow: hidden;
@@ -534,6 +656,7 @@ async function saveTheme() {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  max-height: 240px;
 }
 
 .logo-preview-box {
@@ -586,6 +709,28 @@ async function saveTheme() {
   transition: all 0.2s ease;
 }
 
+.field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.75rem;
+  border: 1px solid #d0bfe0;
+  border-radius: 8px;
+  font: inherit;
+  line-height: 1.7;
+  resize: vertical;
+  color: #51435e;
+  background: #fdfcfe;
+  font-size: 1rem;
+  min-height: 360px;
+  line-height: 1.95;
+}
+
+.terms-preview li {
+  overflow-wrap: anywhere;
+  margin-bottom: 0.5rem;
+}
+
+.field textarea:focus,
 .field input:focus {
   outline: none;
   border-color: #9876c0;
@@ -614,7 +759,7 @@ async function saveTheme() {
 }
 
 .hero-btn--primary {
-  background: linear-gradient(135deg, #c9a6ff 0%, #9876c0 100%);
+  background: #8154b3;
   color: #fff;
 }
 
@@ -659,13 +804,20 @@ async function saveTheme() {
 }
 
 @media (max-width: 768px) {
+  .field textarea { min-height: 280px; }
+  .settings-view { padding: 8px 0 24px; }
+  .settings-panel { padding: 18px; border-radius: 16px; }
+  .terms-form { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .terms-preview { padding: 18px; }
+  .settings-tabs { align-self: stretch; }
+  .settings-tabs button { flex: 1; padding: 10px; }
   .settings-layout {
     grid-template-columns: 1fr;
     gap: 1.5rem;
   }
 
   .settings-preview {
-    min-height: 250px;
+    min-height: 180px;
   }
 
   .settings-actions {

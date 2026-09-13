@@ -3,16 +3,7 @@
     <div class="page-orb page-orb--one" aria-hidden="true"></div>
     <div class="page-orb page-orb--two" aria-hidden="true"></div>
 
-    <section class="hero-panel">
-      <div>
-        <p class="subtitle">เพิ่มบัญชีผู้ใช้</p>
-        <h1>สร้างผู้ใช้หรือแอดมินใหม่</h1>
-        <p class="hero-copy">
-          เพิ่มบัญชีให้ทีมงานหรือผู้ใช้งานได้ในหน้าเดียว พร้อมตรวจข้อมูลก่อนบันทึก
-        </p>
-      </div>
-      <div class="hero-badge">Admin Control</div>
-    </section>
+    <AdminPageHeader title="สร้างผู้ใช้หรือแอดมินใหม่" description="เพิ่มบัญชีให้ทีมงานหรือผู้ใช้งานได้ในหน้าเดียว พร้อมตรวจข้อมูลก่อนบันทึก"></AdminPageHeader>
 
     <div class="content-grid">
       <section class="form-panel">
@@ -126,6 +117,7 @@
 </template>
 
 <script setup>
+import AdminPageHeader from '../../components/AdminPageHeader.vue'
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 

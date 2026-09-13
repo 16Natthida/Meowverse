@@ -1,4 +1,5 @@
 <script setup>
+import AdminPageHeader from '../../components/AdminPageHeader.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
@@ -465,17 +466,10 @@ onMounted(() => {
 
 <template>
   <div class="admin-order-page">
-    <section class="hero-panel">
-      <div class="hero-copy">
-        <p class="eyebrow">{{ salesPageMeta.eyebrow }}</p>
-        <h1>{{ salesPageMeta.title }}</h1>
-        <p>{{ salesPageMeta.subtitle }}</p>
-      </div>
-      <div class="hero-actions">
+    <AdminPageHeader :title="salesPageMeta.title" :description="salesPageMeta.subtitle"><div class="hero-actions">
         <button class="ghost-btn" type="button" @click="goBack">กลับ Dashboard</button>
         <button class="primary-btn" type="button" @click="viewSlipList">ไปหน้าสลิป</button>
-      </div>
-    </section>
+      </div></AdminPageHeader>
 
     <!-- ── QUICK SWITCH: ทั้งหมด / พร้อมส่ง / พรีออเดอร์ ── -->
     <div class="sales-type-switch">

@@ -1,4 +1,5 @@
 <script setup>
+import AdminPageHeader from '../../components/AdminPageHeader.vue'
 import { computed, onMounted, ref } from 'vue'
 import { useAuth } from '../../composables/useAuth'
 import translateError from '../../utils/translateError'
@@ -257,15 +258,7 @@ onMounted(() => {
 
 <template>
   <div class="inventory-intake-page">
-    <section class="hero-panel">
-      <div class="hero-copy">
-        <p class="eyebrow">Admin Operations</p>
-        <h1>รับสินค้าเข้าตามรอบพรีออเดอร์</h1>
-        <p>
-          เลือก “รอบ” แล้วกรอกจำนวนรับจริงรวมทั้งรอบ ระบบจะคำนวณสินค้ารวมและรายการที่ขาดอัตโนมัติ
-        </p>
-      </div>
-    </section>
+    <AdminPageHeader title="รับสินค้าเข้าตามรอบพรีออเดอร์" description="เลือก “รอบ” แล้วกรอกจำนวนรับจริงรวมทั้งรอบ ระบบจะคำนวณสินค้ารวมและรายการที่ขาดอัตโนมัติ"></AdminPageHeader>
 
     <section class="kpi-grid">
       <article class="kpi-card">

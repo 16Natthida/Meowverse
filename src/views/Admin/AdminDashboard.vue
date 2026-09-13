@@ -1,4 +1,5 @@
 <script setup>
+import AdminPageHeader from '../../components/AdminPageHeader.vue'
 import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
@@ -145,10 +146,7 @@ onMounted(() => {
       </header>
 
       <div class="scroll-content">
-        <section class="welcome-section">
-          <h1>สวัสดีคุณ {{ currentUser?.username || 'Admin' }} 👋</h1>
-          <p>นี่คือภาพรวมของร้าน Meowverse Pet Shop ในวันนี้</p>
-        </section>
+        <AdminPageHeader title="แดชบอร์ด" description="นี่คือภาพรวมของร้าน Meowverse Pet Shop ในวันนี้"></AdminPageHeader>
 
         <section class="stats-grid">
           <div v-for="(stat, idx) in stats" :key="idx" class="stat-card">

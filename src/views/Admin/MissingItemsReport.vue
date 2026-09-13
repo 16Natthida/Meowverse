@@ -1,13 +1,7 @@
 <template>
   <div class="missing-items-page">
     <!-- Header -->
-    <section class="hero-panel">
-      <div class="hero-copy">
-        <p class="eyebrow">Admin Operations</p>
-        <h1>รายงานสินค้าที่ขาด / ตกหล่น</h1>
-        <p>ดูรายละเอียดสินค้าที่ขาด เลือกรอบ และลูกค้าที่ได้รับผลกระทบ</p>
-      </div>
-    </section>
+    <AdminPageHeader title="รายงานสินค้าที่ขาด / ตกหล่น" description="ดูรายละเอียดสินค้าที่ขาด เลือกรอบ และลูกค้าที่ได้รับผลกระทบ"></AdminPageHeader>
 
     <!-- Filters -->
     <section class="panel">
@@ -147,6 +141,7 @@
 </template>
 
 <script setup>
+import AdminPageHeader from '../../components/AdminPageHeader.vue'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useAuth } from '../../composables/useAuth'
 

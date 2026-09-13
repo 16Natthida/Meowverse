@@ -1,4 +1,5 @@
 <script setup>
+import AdminPageHeader from '../../components/AdminPageHeader.vue'
 import { onMounted, ref } from 'vue'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
@@ -112,10 +113,7 @@ onMounted(loadProviders)
 
 <template>
   <div class="shipping-providers-page">
-    <header class="page-header">
-      <h1>บริษัทขนส่ง</h1>
-      <p>เพิ่มและจัดการบริษัทขนส่งที่ใช้ในระบบจัดส่ง</p>
-    </header>
+    <AdminPageHeader title="บริษัทขนส่ง" description="เพิ่มและจัดการบริษัทขนส่งที่ใช้ในระบบจัดส่ง"></AdminPageHeader>
 
     <section class="panel provider-panel">
       <header class="panel-head">

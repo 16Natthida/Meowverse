@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import cartRouter from './cart.js'
 import orderRouter, { deductReadyOrderStock } from './order.js'
 import shippingRouter from './shipping.js'
+import { DEFAULT_PREORDER_TERMS, normalizePreorderTerms } from './preorderTerms.js'
 
 dotenv.config()
 
@@ -1640,6 +1641,38 @@ app.post('/api/uploads/images', upload.single('image'), (req, res) => {
     url: `/uploads/${req.file.filename}`,
     fileName: req.file.originalname,
   })
+})
+
+app.get('/api/site-settings/preorder-terms', async (_req, res) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT setting_value FROM site_settings WHERE setting_key = ? LIMIT 1',
+      ['preorder_terms'],
+    )
+    const terms = rows.length ? normalizePreorderTerms(JSON.parse(rows[0].setting_value)) : DEFAULT_PREORDER_TERMS
+    if (!terms) throw new Error('Invalid stored preorder terms')
+    res.set('Cache-Control', 'no-store').json({ terms })
+  } catch {
+    res.status(500).json({ message: 'ไม่สามารถโหลดกฎพรีออเดอร์ได้ กรุณาลองใหม่' })
+  }
+})
+
+app.put('/api/site-settings/preorder-terms', authenticateToken, requireAdmin, async (req, res) => {
+  const terms = normalizePreorderTerms(req.body?.terms)
+  if (!terms) {
+    return res.status(400).json({ message: 'กรุณาระบุกฎ 1–50 ข้อ ข้อละไม่เกิน 1,000 ตัวอักษร และข้อความรวมไม่เกิน 60 KB' })
+  }
+  try {
+    const value = JSON.stringify(terms)
+    await pool.query(
+      `INSERT INTO site_settings (setting_key, setting_value) VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE setting_value = ?, updated_at = CURRENT_TIMESTAMP`,
+      ['preorder_terms', value, value],
+    )
+    res.json({ terms })
+  } catch {
+    res.status(500).json({ message: 'ไม่สามารถบันทึกกฎพรีออเดอร์ได้ กรุณาลองใหม่' })
+  }
 })
 
 app.get('/api/site-settings/banner', async (_req, res) => {

@@ -1,4 +1,5 @@
 <script setup>
+import AdminPageHeader from '../../components/AdminPageHeader.vue'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
@@ -133,17 +134,10 @@ onMounted(() => {
   <div class="postpone-page">
 
     <!-- ── Hero ── -->
-    <section class="hero-panel">
-      <div class="hero-copy">
-        <p class="eyebrow">Admin · Preorder</p>
-        <h2>🗓️ คำขอเลื่อนวันชำระ</h2>
-        <p>ดูคำขอเลื่อนทั้งหมดของลูกค้า และอนุมัติหรือปฏิเสธพร้อมอัปเดตกำหนดชำระใหม่</p>
-      </div>
-      <div class="hero-actions">
+    <AdminPageHeader title="คำขอเลื่อนวันชำระ" description="ดูคำขอเลื่อนทั้งหมดของลูกค้า และอนุมัติหรือปฏิเสธพร้อมอัปเดตกำหนดชำระใหม่"><div class="hero-actions">
         <button class="ghost-btn" type="button" @click="goBack">← กลับ Dashboard</button>
         <button class="hero-btn--primary" type="button" @click="fetchRequests">🔄 รีเฟรช</button>
-      </div>
-    </section>
+      </div></AdminPageHeader>
 
     <!-- ── KPI Cards ── -->
     <div class="kpi-grid">

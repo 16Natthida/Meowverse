@@ -286,15 +286,29 @@ async function loadShippingProviders() {
   }
 }
 
-// ตัวอย่างกฎกติกาที่ลูกค้าต้องอ่านและยอมรับก่อนยืนยันการชำระเงิน
-const storeTerms = [
-  'สินค้าพรีออเดอร์อาจใช้เวลาจัดส่งตามกำหนดการของร้านและผู้ผลิต',
-  'กำหนดการจัดส่งอาจเปลี่ยนแปลงได้ หากเกิดความล่าช้าจากขนส่งหรือปัจจัยภายนอก',
-  'ค่านำเข้า (ถ้ามี) จะแจ้งให้ชำระเพิ่มเติมในรอบที่ 2 หลังสินค้าถึงไทย',
-  'กรุณาตรวจสอบชื่อ ที่อยู่ เบอร์โทรศัพท์ และรายละเอียดสินค้าให้ถูกต้องก่อนยืนยัน',
-  'เมื่อยืนยันคำสั่งซื้อแล้ว การยกเลิกหรือเปลี่ยนแปลงรายการจะเป็นไปตามเงื่อนไขของร้าน',
-]
+const storeTerms = ref([])
+const termsLoading = ref(true)
+const termsError = ref('')
 const termsAccepted = ref(false)
+
+async function loadStoreTerms() {
+  termsLoading.value = true
+  termsAccepted.value = false
+  termsError.value = ''
+  try {
+    const response = await fetch(`${API_BASE_URL}/site-settings/preorder-terms`)
+    if (!response.ok) throw new Error('ไม่สามารถโหลดกฎพรีออเดอร์ได้ กรุณาลองใหม่')
+    const data = await response.json()
+    if (!Array.isArray(data.terms) || !data.terms.length) throw new Error('ไม่พบกฎพรีออเดอร์ กรุณาลองใหม่')
+    storeTerms.value = data.terms
+  } catch (error) {
+    termsError.value = error.message
+  } finally {
+    termsLoading.value = false
+  }
+}
+
+onMounted(loadStoreTerms)
 
 const totalItemQuantity = computed(() =>
   Number(
@@ -803,7 +817,7 @@ const confirmPayment = async () => {
     return
   }
 
-  if (!termsAccepted.value) {
+  if (termsLoading.value || termsError.value || !termsAccepted.value) {
     showNotice('กรุณาอ่านและยอมรับกฎกติกาของร้านก่อนยืนยันการชำระเงิน', 'error')
     return
   }
@@ -2133,8 +2147,13 @@ onMounted(async () => {
                      <p>กรุณาอ่านรายละเอียดก่อนยืนยันคำสั่งซื้อ</p>
                    </div>
                  </div>
-                 <ol class="terms-list">
-                   <li v-for="term in storeTerms" :key="term">{{ term }}</li>
+                 <p v-if="termsLoading" role="status">กำลังโหลดกฎพรีออเดอร์...</p>
+                 <div v-else-if="termsError" role="alert">
+                   <p>{{ termsError }}</p>
+                   <button type="button" @click="loadStoreTerms">ลองโหลดอีกครั้ง</button>
+                 </div>
+                 <ol v-else class="terms-list">
+                   <li v-for="(term, index) in storeTerms" :key="index" style="overflow-wrap: anywhere">{{ term }}</li>
                  </ol>
                  <label
                    class="terms-consent"
@@ -2143,7 +2162,7 @@ onMounted(async () => {
                    <input
                      v-model="termsAccepted"
                      type="checkbox"
-                     :disabled="isReadOnlyStage || isRoundOpen"
+                     :disabled="isReadOnlyStage || isRoundOpen || termsLoading || !!termsError"
                    />
                    <span>ฉันได้อ่านและยอมรับกฎกติกาและเงื่อนไขของร้านแล้ว</span>
                  </label>

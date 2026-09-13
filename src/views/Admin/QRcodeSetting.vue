@@ -1,11 +1,6 @@
 <template>
   <main class="qr-page">
-    <div class="page-header">
-      <div>
-        <h1>ตั้งค่า QR Codes</h1>
-        <p>อัปโหลด QR สำหรับการชำระเงิน และจัดการรายการ QR ทั้งหมด</p>
-      </div>
-    </div>
+    <AdminPageHeader title="ตั้งค่า QR Codes" description="อัปโหลด QR สำหรับการชำระเงิน และจัดการรายการ QR ทั้งหมด"></AdminPageHeader>
 
     <section class="upload-section">
       <form @submit.prevent="uploadQr">
@@ -48,6 +43,7 @@
 </template>
 
 <script setup>
+import AdminPageHeader from '../../components/AdminPageHeader.vue'
 import { ref, onMounted } from 'vue'
 import { useAuth } from '../../composables/useAuth'
 

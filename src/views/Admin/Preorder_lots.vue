@@ -1,18 +1,28 @@
 <template>
   <div class="preorder-container">
-    <div class="preorder-header">
-      <h1>รอบนำเข้าสินค้า</h1>
-      <p class="subtitle">รายการรอบนำเข้าสินค้าพรีออเดอร์ Meowverse Pet Shop</p>
-      <button class="btn-add-round" @click="openCreateRoundModal">
-        + เพิ่มรอบนำเข้าสินค้าแอดมิน
-      </button>
-    </div>
+    <AdminPageHeader title="รอบนำเข้าสินค้า" description="รายการรอบนำเข้าสินค้าพรีออเดอร์ Meowverse Pet Shop"><button class="btn-add-round" @click="openCreateRoundModal">
+        + สร้างรอบพรีออเดอร์
+      </button></AdminPageHeader>
 
     <div class="preorder-content" v-if="!isLoading">
+      <div class="rounds-toolbar">
+        <div><h2>รอบพรีออเดอร์ทั้งหมด <span>{{ preorderRounds.length }}</span></h2><p>จัดการกำหนดเวลา สินค้า และสถานะของแต่ละรอบ</p></div>
+        <div class="rounds-filters">
+          <input v-model="roundSearch" type="search" aria-label="ค้นหารอบพรีออเดอร์" placeholder="ค้นหาชื่อรอบหรือรายละเอียด…" />
+          <select v-model="roundStatusFilter" aria-label="กรองสถานะรอบ">
+            <option value="all">ทุกสถานะ</option>
+            <option value="active">เปิดรับออเดอร์</option>
+            <option value="closed">ปิดรอบแล้ว</option>
+            <option value="scheduled">ตามกำหนดเวลา</option>
+            <option value="archived">เก็บถาวร</option>
+          </select>
+        </div>
+      </div>
       <div v-if="preorderRounds.length === 0" class="empty-state">
         <p>ยังไม่มีรอบนำเข้าสินค้าที่สร้าง กรุณาสร้างรอบนำเข้าใหม่</p>
       </div>
 
+      <div v-else-if="!visibleRounds.length" class="empty-state"><p>ไม่พบรอบที่ตรงกับการค้นหา</p><button class="btn-action" @click="roundSearch = ''; roundStatusFilter = 'all'">ล้างตัวกรอง</button></div>
       <div v-else class="table-scroll-wrap">
       <table class="preorder-table">
         <thead>
@@ -22,12 +32,12 @@
             <th>วันเริ่ม</th>
             <th>วันสิ้นสุด</th>
             <th>สถานะ</th>
-            <th>การกระทำ</th>
+            <th>จัดการรอบ</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="round in preorderRounds" :key="round.id">
-            <td>{{ round.name }}</td>
+          <tr v-for="round in visibleRounds" :key="round.id">
+            <td><strong class="round-name">{{ round.name }}</strong><small class="round-id">รอบ #{{ round.id }}</small></td>
             <td class="project-column">{{ round.description || '-' }}</td>
             <td>{{ formatDate(round.startDate) }}</td>
             <td>{{ formatDate(round.endDate) }}</td>
@@ -37,7 +47,7 @@
               </span>
             </td>
             <td class="actions">
-              <button class="btn-action" @click="openRoundDetailModal(round)">รายละเอียด</button>
+              <button class="btn-action btn-action--detail" @click="openRoundDetailModal(round)">รายละเอียด</button>
               <button class="btn-action" @click="openEditRoundModal(round)">แก้ไข</button>
               <button
                 class="btn-action"
@@ -62,6 +72,7 @@
         </tbody>
       </table>
       </div>
+      <p v-if="preorderRounds.length" class="rounds-count" role="status">แสดง {{ visibleRounds.length }} จาก {{ preorderRounds.length }} รอบ</p>
     </div>
 
     <div v-else class="loading">
@@ -504,6 +515,7 @@
 </template>
 
 <script setup>
+import AdminPageHeader from '../../components/AdminPageHeader.vue'
 import { ref, computed, onMounted, reactive } from 'vue'
 import { usePreorderStore } from '@/stores/preorderStore'
 import { useAdminProductStore } from '@/stores/adminProductStore'
@@ -586,6 +598,17 @@ function normalizeProduct(product) {
 }
 
 const preorderRounds = computed(() => preorderStore.preorderRounds.map(normalizeRound))
+const roundSearch = ref('')
+const roundStatusFilter = ref('all')
+const visibleRounds = computed(() => {
+  const query = roundSearch.value.trim().toLowerCase()
+  return preorderRounds.value.filter((round) => {
+    const status = String(round.status || '').toLowerCase()
+    const matchesStatus = roundStatusFilter.value === 'all' ||
+      (roundStatusFilter.value === 'active' ? ['active', 'open'].includes(status) : status === roundStatusFilter.value)
+    return matchesStatus && `${round.name || ''} ${round.description || ''}`.toLowerCase().includes(query)
+  })
+})
 const currentRound = computed(() => normalizeRound(preorderStore.currentRound))
 const isLoading = computed(() => preorderStore.isLoading)
 const allProducts = computed(() => (adminProductStore.products || []).map(normalizeProduct))
@@ -1022,8 +1045,7 @@ onMounted(async () => {
 <style scoped>
 .preorder-container {
   padding: 20px;
-  background: linear-gradient(135deg, #fff4fb 0%, #ffe6f5 100%);
-  min-height: 100vh;
+  background: transparent;
 }
 
 .preorder-header {
@@ -1044,11 +1066,11 @@ onMounted(async () => {
 }
 
 .btn-add-round {
-  background: linear-gradient(135deg, #ff93b8 0%, #f7c8e4 100%);
+  background: #8154b3;
   color: white;
   border: none;
   padding: 12px 24px;
-  border-radius: 999px;
+  border-radius: 10px;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -1061,10 +1083,11 @@ onMounted(async () => {
 }
 
 .preorder-content {
-  background: rgba(255, 245, 253, 0.95);
+  background: #fff;
+  border: 1px solid #e9e2f0;
   border-radius: 18px;
   padding: 24px;
-  box-shadow: 0 12px 32px rgba(212, 129, 177, 0.12);
+  box-shadow: 0 4px 18px #49316405;
 }
 
 .empty-state,
@@ -1086,20 +1109,23 @@ onMounted(async () => {
 }
 
 .preorder-table thead {
-  background-color: #f5f5f5;
+  background-color: #f8f5fc;
 }
 
 .preorder-table th {
-  padding: 12px;
+  padding: 16px;
   text-align: left;
   font-weight: 600;
-  color: #333;
-  border-bottom: 2px solid #e0e0e0;
+  color: #594268;
+  font-size: 0.8rem;
+  border-bottom: 1px solid #e9e2f0;
 }
 
 .preorder-table td {
-  padding: 12px;
-  border-bottom: 1px solid #f0f0f0;
+  padding: 22px 16px;
+  border-bottom: 1px solid #f0eaf5;
+  color: #51415f;
+  font-size: 0.875rem;
 }
 
 .preorder-table tbody tr:hover {
@@ -1107,7 +1133,7 @@ onMounted(async () => {
 }
 
 .project-column {
-  color: #999;
+  color: #685775;
 }
 
 .status-badge {
@@ -1140,15 +1166,16 @@ onMounted(async () => {
 }
 
 .actions {
-  display: flex;
-  gap: 8px;
+  white-space: nowrap;
 }
 
 .btn-action {
-  background-color: #f0f0f0;
-  border: 1px solid #ddd;
-  padding: 6px 12px;
-  border-radius: 4px;
+  background-color: #fff;
+  color: #756482;
+  border: 1px solid #e7deef;
+  padding: 9px 12px;
+  margin: 3px;
+  border-radius: 8px;
   font-size: 12px;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -1861,6 +1888,32 @@ onMounted(async () => {
 }
 
 /* Responsive */
+.rounds-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+.rounds-toolbar h2 { margin: 0; color: #49345f; font-size: 1.1rem; }
+.rounds-toolbar h2 span { display: inline-block; margin-left: 8px; padding: 4px 10px; border-radius: 8px; font-size: 0.8rem; background: #f1eafa; color: #8154b3; }
+.rounds-toolbar p { margin: 8px 0 0; font-size: 0.8rem; color: #685775; }
+.rounds-filters { display: flex; flex-wrap: wrap; gap: 10px; }
+.rounds-filters input, .rounds-filters select { box-sizing: border-box; padding: 11px 14px; border: 1px solid #e7deef; border-radius: 10px; background: #fdfcfe; color: #6b577b; font: inherit; font-size: 0.85rem; min-height: 44px; }
+.rounds-filters input { width: 290px; max-width: 100%; }
+.rounds-filters :focus-visible, .btn-action:focus-visible, .btn-add-round:focus-visible { outline: 3px solid #c3a4e3; outline-offset: 2px; }
+.round-name { display: block; color: #513664; font-size: 1rem; }
+.round-id { display: block; margin-top: 6px; font-size: 0.72rem; color: #685775; }
+.rounds-count { margin: 18px 0 0; font-size: 0.78rem; color: #685775; }
+.btn-action--detail { color: #8154b3; background: #f4eefb; border-color: #e7d9f4; font-weight: 600; }
+.status-badge { white-space: nowrap; border: 1px solid transparent; font-weight: 700; padding: 6px 12px; font-size: 13px; }
+.status-badge::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: currentColor; vertical-align: middle; }
+.status-badge.closed { background: #fee2e2; color: #991b1b; border-color: #f5a5a5; }
+.status-badge.open, .status-badge.active { background: #dcfce7; color: #166534; border-color: #86d5a0; }
+.status-badge.scheduled { background: #fef3c7; color: #854d0e; border-color: #e7c45a; }
+.status-badge.archived { background: #e5e7eb; color: #374151; border-color: #b8bfca; }
+.preorder-table tbody tr:last-child td { border-bottom: 0; }
+@media (max-width: 600px) {
+  .rounds-filters { width: 100%; }
+  .rounds-filters input, .rounds-filters select { width: 100%; }
+  .preorder-content { padding: 16px; }
+  .preorder-table tr { box-sizing: border-box; }
+  .actions { white-space: normal; }
+}
 @media (max-width: 768px) {
   .preorder-container {
     padding: 10px;

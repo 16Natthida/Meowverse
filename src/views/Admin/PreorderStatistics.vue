@@ -1,4 +1,5 @@
 <script setup>
+import AdminPageHeader from '../../components/AdminPageHeader.vue'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
@@ -135,21 +136,14 @@ onMounted(() => loadReport({ preserveOptions: false }))
   <div class="preorder-statistics-page">
 
     <!-- ── Hero ── -->
-    <section class="hero-panel">
-      <div class="hero-copy">
-        <p class="eyebrow">Admin · Preorder</p>
-        <h2>📊 สถิติสินค้าพรีออเดอร์ย้อนหลัง</h2>
-        <p>ตรวจสอบว่าสินค้าแต่ละรหัสถูกสั่งในรอบใดบ้าง จำนวนกี่ชิ้น และมียอดรวมเท่าไร</p>
-      </div>
-      <div class="hero-actions">
+    <AdminPageHeader title="สถิติสินค้าพรีออเดอร์ย้อนหลัง" description="ตรวจสอบว่าสินค้าแต่ละรหัสถูกสั่งในรอบใดบ้าง จำนวนกี่ชิ้น และมียอดรวมเท่าไร"><div class="hero-actions">
         <button class="ghost-btn" type="button" @click="router.push('/admin/preorder-rounds')">
           ← กลับไปรอบพรีออเดอร์
         </button>
         <button class="hero-btn--primary" type="button" :disabled="loading" @click="loadReport()">
           {{ loading ? '⏳ กำลังโหลด...' : '🔄 รีเฟรชข้อมูล' }}
         </button>
-      </div>
-    </section>
+      </div></AdminPageHeader>
 
     <!-- ── Filter Panel ── -->
     <section class="panel filter-card">

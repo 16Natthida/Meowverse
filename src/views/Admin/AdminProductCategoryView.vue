@@ -1,4 +1,5 @@
 <script setup>
+import AdminPageHeader from '../../components/AdminPageHeader.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 
 import { useAdminProductStore } from '@/stores/adminProductStore'
@@ -616,14 +617,7 @@ onMounted(async () => {
 
 <template>
   <section class="admin-page">
-    <header class="page-intro">
-      <div>
-        <p class="intro-overline">Product Control Center</p>
-        <h1>จัดการสต็อกสินค้า</h1>
-        <p class="intro-subtitle">เพิ่ม แก้ไข และจัดการสถานะสินค้าในหน้าจอเดียว</p>
-      </div>
-      <div class="intro-bubble">{{ productCount }} รายการ</div>
-    </header>
+    <AdminPageHeader title="จัดการสต็อกสินค้า" description="เพิ่ม แก้ไข และจัดการสถานะสินค้าในหน้าจอเดียว"><div class="intro-bubble">{{ productCount }} รายการ</div></AdminPageHeader>
 
     <header class="toolbar">
       <div class="summary-strip">

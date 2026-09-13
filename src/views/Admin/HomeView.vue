@@ -1,4 +1,5 @@
 <script setup>
+import AdminPageHeader from '../../components/AdminPageHeader.vue'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
@@ -227,6 +228,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="home-page">
+    <AdminPageHeader title="แดชบอร์ด" description="ภาพรวมคำสั่งซื้อ สินค้า และรายได้ของร้าน" />
     <!-- Hero removed per request -->
 
     <section class="kpi-grid">
