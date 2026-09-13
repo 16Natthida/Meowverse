@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
 
@@ -10,6 +10,10 @@ const currentUser = computed(() => getUser())
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 
 const order = ref(null)
+const reservationSeconds = ref(null)
+let reservationTimer = null
+// เวลาสำรองสต็อกฝั่ง client ก่อนออเดอร์จะถูกสร้างจริง (ต้องตรงกับ READY_RESERVATION_WINDOW_MS ฝั่ง backend)
+const READY_RESERVATION_WINDOW_MS = 60 * 60 * 1000
 // ── PRODUCT IMAGE MAP ──
 const productImageMap = ref({})
 
@@ -96,6 +100,56 @@ const totalPayable = computed(() => {
   const orderTotal = Number(order.value?.total_amount ?? itemsTotal.value)
   return orderTotal + (storedFee > 0 ? 0 : shippingFee.value)
 })
+
+const assignedShipping = computed(() => order.value?.saved_shipping || {})
+
+const reservationTimerLabel = computed(() => {
+  if (reservationSeconds.value === null) return ''
+  const minutes = Math.floor(Math.max(reservationSeconds.value, 0) / 60)
+  const seconds = Math.max(reservationSeconds.value, 0) % 60
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
+})
+
+const isReservationActive = computed(() =>
+  String(order.value?.Order_type || '').toLowerCase() === 'ready' &&
+  String(order.value?.status || '').toLowerCase() === 'pending' &&
+  reservationSeconds.value !== null &&
+  reservationSeconds.value > 0,
+)
+
+function updateReservationTimer() {
+  const deadline = new Date(order.value?.deadline || '').getTime()
+  if (!Number.isFinite(deadline)) {
+    reservationSeconds.value = null
+    return
+  }
+
+  reservationSeconds.value = Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
+  if (reservationSeconds.value === 0 && reservationTimer) {
+    clearInterval(reservationTimer)
+    reservationTimer = null
+
+    if (!order.value?.order_id) {
+      // ยังไม่มีออเดอร์จริงในระบบ แค่หมดเวลาสำรองสต็อกฝั่ง client เท่านั้น
+      sessionStorage.removeItem('pending_order_data')
+      sessionStorage.removeItem('pending_order_deadline')
+      showNotice('หมดเวลาทำรายการ กรุณาทำรายการใหม่อีกครั้ง', 'error')
+      setTimeout(() => router.push('/cart'), 1200)
+      return
+    }
+
+    showNotice('หมดเวลาชำระเงิน ระบบคืนสินค้าเข้าสต็อกแล้ว', 'error')
+    fetchOrder().finally(() => {
+      setTimeout(() => router.push('/dashboard'), 1200)
+    })
+  }
+}
+
+function startReservationTimer() {
+  if (reservationTimer) clearInterval(reservationTimer)
+  updateReservationTimer()
+  reservationTimer = window.setInterval(updateReservationTimer, 1000)
+}
 
 const slipFile = ref(null)
 const slipPreview = ref(null)
@@ -329,7 +383,6 @@ const saveShippingInfoOnly = async () => {
       shipping_name: shippingInfo.value.name,
       shipping_phone: shippingInfo.value.phone,
       shipping_address: shippingInfo.value.address,
-      shipping_carrier: shippingInfo.value.carrier,
       notes: shippingInfo.value.notes || '',
     }),
   })
@@ -350,6 +403,15 @@ const fetchOrder = async () => {
     }
     try {
       const pendingData = JSON.parse(pendingDataJson)
+
+      // ตั้งเวลานับถอยหลังฝั่ง client ทันทีที่เข้าหน้านี้ (ก่อนออเดอร์จะถูกสร้างจริงตอนกดยืนยัน)
+      // เก็บ deadline ไว้ใน sessionStorage คู่กับ pending_order_data เพื่อให้เวลาคงเดิมแม้รีเฟรชหน้า
+      let pendingDeadlineIso = sessionStorage.getItem('pending_order_deadline')
+      if (!pendingDeadlineIso) {
+        pendingDeadlineIso = new Date(Date.now() + READY_RESERVATION_WINDOW_MS).toISOString()
+        sessionStorage.setItem('pending_order_deadline', pendingDeadlineIso)
+      }
+
       order.value = {
         order_id: null,
         items: pendingData.items,
@@ -357,7 +419,10 @@ const fetchOrder = async () => {
         shipping_fee: pendingData.shipping_fee,
         Order_type: 'Ready',
         user_id: pendingData.user_id,
+        status: 'Pending',
+        deadline: pendingDeadlineIso,
       }
+      startReservationTimer()
       const pendingProdIds = (pendingData.items || []).map((i) => i.prod_id)
       await fetchProductImages(pendingProdIds)
     } catch {
@@ -383,6 +448,7 @@ const fetchOrder = async () => {
       }
     }
     order.value = data
+    startReservationTimer()
     const apiProdIds = (data.items || []).map((i) => i.prod_id)
     await fetchProductImages(apiProdIds)
 
@@ -406,7 +472,7 @@ const fetchOrder = async () => {
     }
 
     sessionStorage.removeItem('pending_order_data')
-  } catch (err) {
+    sessionStorage.removeItem('pending_order_deadline')
     error.value = err.message
   } finally {
     loading.value = false
@@ -420,8 +486,8 @@ const confirmPayment = async () => {
     showNotice('กรุณาแนบหลักฐานการโอนเงิน', 'error')
     return
   }
-  if (!shippingInfo.value.name || !shippingInfo.value.phone || !shippingInfo.value.address || !shippingInfo.value.carrier) {
-    showNotice('กรุณากรอกข้อมูลและเลือกบริษัทขนส่งให้ครบถ้วน', 'error')
+  if (!shippingInfo.value.name || !shippingInfo.value.phone || !shippingInfo.value.address) {
+    showNotice('กรุณากรอกข้อมูลจัดส่งให้ครบถ้วน', 'error')
     return
   }
 
@@ -458,7 +524,6 @@ const confirmPayment = async () => {
       slipFormData.append('shipping_name', shippingInfo.value.name)
       slipFormData.append('shipping_phone', shippingInfo.value.phone)
       slipFormData.append('shipping_address', shippingInfo.value.address)
-      slipFormData.append('shipping_carrier', shippingInfo.value.carrier)
       slipFormData.append('notes', shippingInfo.value.notes || '')
 
       const slipRes = await fetch(`${API_BASE_URL}/orders/${newOrderId}/payment`, {
@@ -472,6 +537,7 @@ const confirmPayment = async () => {
 
       showNotice('ส่งหลักฐานเรียบร้อย! รอการตรวจสอบจากทีมงาน', 'success')
       sessionStorage.removeItem('pending_order_data')
+      sessionStorage.removeItem('pending_order_deadline')
       setTimeout(() => router.push('/order-list'), 2000)
       return
     }
@@ -489,7 +555,6 @@ const confirmPayment = async () => {
     formData.append('shipping_name', shippingInfo.value.name)
     formData.append('shipping_phone', shippingInfo.value.phone)
     formData.append('shipping_address', shippingInfo.value.address)
-    formData.append('shipping_carrier', shippingInfo.value.carrier)
     formData.append('notes', shippingInfo.value.notes || '')
 
     const res = await fetch(`${API_BASE_URL}/orders/${order.value.order_id}/payment`, {
@@ -533,6 +598,10 @@ onMounted(async () => {
   }
 })
 
+onUnmounted(() => {
+  if (reservationTimer) clearInterval(reservationTimer)
+})
+
 </script>
 
 <template>
@@ -574,6 +643,19 @@ onMounted(async () => {
               <p class="hero-subtitle">
                 ตรวจรายการสินค้า แนบสลิป และกรอกข้อมูลจัดส่งให้ครบก่อนกดยืนยันคำสั่งซื้อ
               </p>
+              <div v-if="isReservationActive" class="reservation-banner">
+                <span class="reservation-banner__icon">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 15"></polyline></svg>
+                </span>
+                <div class="reservation-banner__text">
+                  <strong class="reservation-banner__title">กรุณาแนบสลิปและกรอกข้อมูลจัดส่งให้ครบภายในเวลาที่กำหนด</strong>
+                  <span class="reservation-banner__hint">หากเกินเวลาที่กำหนด ระบบจะยกเลิกคำสั่งซื้อของคุณ</span>
+                </div>
+                <div class="reservation-banner__timer">
+                  <span class="reservation-banner__timer-label">เวลาคงเหลือ</span>
+                  <strong>{{ reservationTimerLabel }}</strong>
+                </div>
+              </div>
               <div class="hero-meta">
                 <div class="hero-meta-item">
                   <span class="hero-meta-label">รายการ</span>
@@ -633,7 +715,7 @@ onMounted(async () => {
             </div>
           </div>
 
-          <div class="section-card form-panel">
+          <div class="section-card form-panel" :class="{ 'form-panel--locked': isShippingLocked }">
             <div class="section-header section-header--stacked">
               <h3 class="section-title" style="display: flex; align-items: center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg> ข้อมูลจัดส่ง</h3>
               <span class="section-caption">
@@ -661,18 +743,13 @@ onMounted(async () => {
                     :disabled="isShippingLocked"
                   />
                 </div>
-                <div>
-                  <label for="shipping-carrier">บริษัทขนส่ง</label>
-                  <select id="shipping-carrier" v-model="shippingInfo.carrier" :disabled="isShippingLocked">
-                    <option value="">-- เลือกบริษัทขนส่ง --</option>
-                    <option
-                      v-for="provider in shippingProviders"
-                      :key="provider.provider_id || provider.provider_code"
-                      :value="provider.provider_name"
-                    >
-                      {{ provider.provider_name }}
-                    </option>
-                  </select>
+                <div class="preorder-carrier-note">
+                  <label>บริษัทขนส่ง</label>
+                  <strong>{{ assignedShipping.provider_name || assignedShipping.carrier || 'ร้านเป็นผู้เลือกให้' }}</strong>
+                  <small v-if="assignedShipping.tracking_number">
+                    เลขพัสดุ: {{ assignedShipping.tracking_number }}
+                  </small>
+                  <small v-else>ทางร้านจะเลือกบริษัทขนส่งที่มีค่าจัดส่งเหมาะสมให้ภายหลัง</small>
                 </div>
               </div>
 
@@ -925,6 +1002,18 @@ onMounted(async () => {
 .form-panel {
   margin-top: 1rem;
 }
+.form-panel--locked {
+  border-color: #d8c9ed;
+  background: #fbf9ff;
+}
+.form-panel--locked input:disabled,
+.form-panel--locked textarea:disabled,
+.form-panel--locked select:disabled {
+  background: #f2eef8;
+  color: #75668c;
+  cursor: not-allowed;
+  opacity: 0.82;
+}
 .hero-card {
   padding: 1.45rem;
   border-radius: 24px;
@@ -967,6 +1056,82 @@ onMounted(async () => {
   color: #5f507f;
   max-width: 60ch;
   line-height: 1.65;
+}
+.reservation-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin-top: 1rem;
+  padding: 0.95rem 1.1rem;
+  border: 1px solid #f2c27d;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #fffaf0, #fff3dd);
+  box-shadow: 0 8px 20px rgba(197, 90, 22, 0.1);
+}
+.reservation-banner__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: rgba(197, 90, 22, 0.14);
+  color: #c55a16;
+}
+.reservation-banner__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.reservation-banner__title {
+  color: #8a531d;
+  font-size: 0.92rem;
+  font-weight: 800;
+  line-height: 1.4;
+}
+.reservation-banner__hint {
+  color: #a0793f;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.reservation-banner__timer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex: 0 0 auto;
+  padding-left: 0.95rem;
+  border-left: 1px solid rgba(197, 90, 22, 0.22);
+}
+.reservation-banner__timer-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #a0793f;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.reservation-banner__timer strong {
+  color: #c55a16;
+  font-size: 1.65rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+}
+@media (max-width: 560px) {
+  .reservation-banner {
+    flex-wrap: wrap;
+  }
+  .reservation-banner__timer {
+    flex: 1 1 100%;
+    align-items: flex-start;
+    padding-left: 0;
+    padding-top: 0.6rem;
+    margin-top: 0.4rem;
+    border-left: none;
+    border-top: 1px solid rgba(197, 90, 22, 0.22);
+  }
 }
 .hero-meta {
   display: flex;
@@ -1324,6 +1489,25 @@ onMounted(async () => {
 .field-group textarea {
   resize: vertical;
   min-height: 110px;
+}
+.preorder-carrier-note {
+  display: grid;
+  align-content: start;
+  gap: 0.25rem;
+  min-height: 100%;
+  padding: 0.85rem 0.95rem;
+  border: 1.5px dashed #d8c6f2;
+  border-radius: 12px;
+  background: #faf7ff;
+}
+.preorder-carrier-note strong {
+  color: #6f50a0;
+  font-size: 0.88rem;
+}
+.preorder-carrier-note small {
+  color: #7d6e9a;
+  font-size: 0.75rem;
+  line-height: 1.4;
 }
 .glass-card {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(249, 245, 255, 0.98));
