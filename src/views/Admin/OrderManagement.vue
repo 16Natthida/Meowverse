@@ -1,6 +1,6 @@
 <script setup>
 import AdminPageHeader from '../../components/AdminPageHeader.vue'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
 import translateError from '../../utils/translateError'
@@ -31,6 +31,16 @@ const statusFilter = ref('all')
 const selectedOrder = ref(null)
 const selectedOrderLoading = ref(false)
 const selectedOrderError = ref('')
+const previewImage = ref(null)
+
+function openImagePreview(url, title, subtitle) {
+  if (!url) return
+  previewImage.value = { url, title, subtitle }
+}
+
+function closeImagePreview() {
+  previewImage.value = null
+}
 
 function normalizeStatus(value) {
   return String(value || '')
@@ -459,8 +469,17 @@ function viewSlipList() {
   router.push('/admin/slips')
 }
 
+function handleKeydown(e) {
+  if (e.key === 'Escape') closeImagePreview()
+}
+
 onMounted(() => {
   refreshDashboard()
+  window.addEventListener('keydown', handleKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
 })
 </script>
 
@@ -642,13 +661,20 @@ onMounted(() => {
               :key="`prod-${item.prod_id}-${item.item_type}`"
             >
               <td class="image-col">
-                <img
+                <button
                   v-if="item.image_url"
-                  :src="item.image_url"
-                  :alt="item.name"
-                  class="summary-thumb"
-                  loading="lazy"
-                />
+                  type="button"
+                  class="thumb-btn"
+                  @click="openImagePreview(item.image_url, item.name, item.category_name)"
+                  :aria-label="`ดูรูป ${item.name}`"
+                >
+                  <img
+                    :src="item.image_url"
+                    :alt="item.name"
+                    class="summary-thumb"
+                    loading="lazy"
+                  />
+                </button>
                 <div v-else class="summary-thumb summary-thumb--placeholder">ไม่มีรูป</div>
               </td>
               <td>
@@ -846,13 +872,20 @@ onMounted(() => {
                 class="item-row"
               >
                 <div class="item-thumb-cell">
-                  <img
+                  <button
                     v-if="item.image"
-                    :src="item.image"
-                    :alt="item.name"
-                    class="item-thumb"
-                    loading="lazy"
-                  />
+                    type="button"
+                    class="thumb-btn"
+                    @click="openImagePreview(item.image, getItemLabel(item), item.category_name)"
+                    :aria-label="`ดูรูป ${getItemLabel(item)}`"
+                  >
+                    <img
+                      :src="item.image"
+                      :alt="item.name"
+                      class="item-thumb"
+                      loading="lazy"
+                    />
+                  </button>
                   <div v-else class="item-thumb item-thumb--placeholder">ไม่มีรูป</div>
                 </div>
                 <div>
@@ -933,6 +966,18 @@ onMounted(() => {
               </div>
             </div>
           </div>
+        </div>
+      </div>
+    </transition>
+
+    <transition name="fade">
+      <div v-if="previewImage" class="modal-overlay" @click.self="closeImagePreview">
+        <div class="image-modal-card">
+          <button type="button" class="close-btn image-modal-close" @click="closeImagePreview" aria-label="ปิด">✕</button>
+          <img :src="previewImage.url" :alt="previewImage.title" class="image-modal-img" />
+          <p class="image-modal-caption">
+            {{ previewImage.title }}<span v-if="previewImage.subtitle"> · {{ previewImage.subtitle }}</span>
+          </p>
         </div>
       </div>
     </transition>
@@ -1556,6 +1601,56 @@ onMounted(() => {
   font-size: 0.62rem;
   text-align: center;
   line-height: 1.2;
+}
+
+.thumb-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+  display: block;
+  line-height: 0;
+  border-radius: 10px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.thumb-btn:hover,
+.thumb-btn:focus-visible {
+  transform: scale(1.06);
+  box-shadow: 0 4px 14px rgba(140, 99, 174, 0.28);
+  outline: none;
+}
+
+.image-modal-card {
+  width: min(480px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  background: #fff;
+  border-radius: 20px;
+  padding: 1.1rem;
+  position: relative;
+  text-align: center;
+}
+
+.image-modal-close {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+}
+
+.image-modal-img {
+  width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  border-radius: 14px;
+  background: #f8f5ff;
+}
+
+.image-modal-caption {
+  margin: 0.75rem 0 0;
+  color: #2c2440;
+  font-weight: 600;
+  font-size: 0.9rem;
 }
 
 .items-list {

@@ -1,6 +1,6 @@
 <script setup>
 import AdminPageHeader from '../../components/AdminPageHeader.vue'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 
 import { useAdminProductStore } from '@/stores/adminProductStore'
 
@@ -17,6 +17,20 @@ const searchKeyword = ref('')
 const productPanelOpen = ref(false)
 const categoryPanelOpen = ref(false)
 const showAddStockModal = ref(false)
+const previewImage = ref(null)
+
+function openImagePreview(url, title, subtitle) {
+  if (!url) return
+  previewImage.value = { url, title, subtitle }
+}
+
+function closeImagePreview() {
+  previewImage.value = null
+}
+
+function handleProductPreviewKeydown(e) {
+  if (e.key === 'Escape') closeImagePreview()
+}
 const editingProductId = ref(null)
 const isSubmitting = ref(false)
 const isCategorySubmitting = ref(false)
@@ -596,6 +610,8 @@ function getStockLevelText(stock) {
 }
 
 onMounted(async () => {
+  window.addEventListener('keydown', handleProductPreviewKeydown)
+
   const [categoryResult, productResult] = await Promise.allSettled([
     store.fetchCategories(),
     store.fetchProducts(),
@@ -612,6 +628,10 @@ onMounted(async () => {
   }
 
   setNotice('success', 'โหลดข้อมูลสินค้าและหมวดหมู่เรียบร้อยแล้ว')
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleProductPreviewKeydown)
 })
 </script>
 
@@ -931,11 +951,15 @@ onMounted(async () => {
     <section class="product-grid" v-if="filteredProducts.length > 0">
       <article v-for="product in filteredProducts" :key="product.id" class="product-card">
         <div class="media">
-          <img
+          <button
             v-if="getPrimaryImage(product)"
-            :src="getPrimaryImage(product)"
-            alt="product image"
-          />
+            type="button"
+            class="media-thumb-btn"
+            @click="openImagePreview(getPrimaryImage(product), product.name, getCategoryName(product.categoryId))"
+            :aria-label="`ดูรูป ${product.name}`"
+          >
+            <img :src="getPrimaryImage(product)" alt="product image" />
+          </button>
           <div v-else class="placeholder">ไม่มีรูปภาพ</div>
         </div>
 
@@ -1062,6 +1086,17 @@ onMounted(async () => {
             </div>
           </form>
         </div>
+      </div>
+    </div>
+
+    <!-- Image Preview Modal -->
+    <div v-if="previewImage" class="modal-overlay" @click.self="closeImagePreview">
+      <div class="image-modal-card">
+        <button type="button" class="image-modal-close" @click="closeImagePreview" aria-label="ปิด">✕</button>
+        <img :src="previewImage.url" :alt="previewImage.title" class="image-modal-img" />
+        <p class="image-modal-caption">
+          {{ previewImage.title }}<span v-if="previewImage.subtitle"> · {{ previewImage.subtitle }}</span>
+        </p>
       </div>
     </div>
   </section>
@@ -1570,11 +1605,28 @@ onMounted(async () => {
   background: #f3effa;
 }
 
+.media-thumb-btn {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+  display: block;
+  transition: opacity 0.15s ease;
+}
+
+.media-thumb-btn:hover,
+.media-thumb-btn:focus-visible {
+  opacity: 0.85;
+  outline: none;
+}
+
 .media img {
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .placeholder {
@@ -2206,5 +2258,52 @@ textarea:focus {
 
 .form-actions button.ghost:hover {
   border-color: #999;
+}
+
+/* ── Image preview modal ── */
+.image-modal-card {
+  width: min(480px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  background: #fff;
+  border-radius: 20px;
+  padding: 1.1rem;
+  position: relative;
+  text-align: center;
+}
+
+.image-modal-close {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid #eadcf6;
+  background: #fff;
+  color: #6d3fa3;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.image-modal-close:hover {
+  background: #f5efff;
+}
+
+.image-modal-img {
+  width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  border-radius: 14px;
+  background: #f5efff;
+}
+
+.image-modal-caption {
+  margin: 0.75rem 0 0;
+  color: #45315f;
+  font-weight: 600;
+  font-size: 0.9rem;
 }
 </style>

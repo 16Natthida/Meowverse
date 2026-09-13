@@ -13,6 +13,7 @@ const searchQuery = ref('')
 const searchOpen = ref(false)
 const logoImage = ref('')
 const cartCount = ref(0)
+const orderNotifDot = ref('')
 const currentUser = computed(() => getUser() || {})
 
 const shopLinks = [
@@ -66,6 +67,46 @@ async function loadCartCount() {
   }
 }
 
+// ── ORDER NOTIFICATION DOT (mirrors Orderlist.vue's red/green priority logic) ──
+const NAV_RED_DOT_STATUSES = ['pending', 'pending_import_fee', 'cancelled', 'invalid_slip', 'invalid_import_slip', 'missing']
+const NAV_GREEN_DOT_STATUSES = ['paid', 'ready_to_ship']
+
+function normalizeStatus(status) {
+  return String(status || '').trim().toLowerCase().replace(/[\s]+/g, '_')
+}
+
+async function loadOrderNotifDot() {
+  const user = currentUser.value
+  const userId = user?.id ?? user?.user_id
+
+  if (!userId) {
+    orderNotifDot.value = ''
+    return
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/orders?user_id=${userId}`)
+    if (!response.ok) return
+
+    const data = await response.json()
+    const orders = Array.isArray(data) ? data : (data.orders ?? [])
+
+    const hasRed = orders.some(
+      (o) =>
+        NAV_RED_DOT_STATUSES.includes(normalizeStatus(o.status)) ||
+        (normalizeStatus(o.status) === 'delayed' && Number(o.import_fee_total) > 0),
+    )
+    if (hasRed) {
+      orderNotifDot.value = 'red'
+      return
+    }
+    const hasGreen = orders.some((o) => NAV_GREEN_DOT_STATUSES.includes(normalizeStatus(o.status)))
+    orderNotifDot.value = hasGreen ? 'green' : ''
+  } catch {
+    // Keep the previous state if the orders API is temporarily unavailable.
+  }
+}
+
 function toggleSidebar() {
   sidebarOpen.value = !sidebarOpen.value
 }
@@ -109,6 +150,7 @@ watch(
   () => {
     closeSidebar()
     loadCartCount()
+    loadOrderNotifDot()
   },
 )
 
@@ -119,6 +161,7 @@ function handleCartUpdated() {
 onMounted(() => {
   loadLogo()
   loadCartCount()
+  loadOrderNotifDot()
   window.addEventListener('meowverse:cart-updated', handleCartUpdated)
 })
 
@@ -161,6 +204,14 @@ onBeforeUnmount(() => {
               <svg v-else viewBox="0 0 24 24"><path d="M6 4h12M6 8h12M6 12h8M6 16h12M6 20h8"/><path d="M3 4h.01M3 8h.01M3 12h.01M3 16h.01M3 20h.01"/></svg>
             </span>
             <span class="user-shell__label">{{ item.label }}</span>
+            <span
+              v-if="item.path === '/order-list' && orderNotifDot === 'red'"
+              class="user-shell__notif-dot user-shell__notif-dot--red"
+            ></span>
+            <span
+              v-else-if="item.path === '/order-list' && orderNotifDot === 'green'"
+              class="user-shell__notif-dot user-shell__notif-dot--green"
+            ></span>
           </RouterLink>
 
           <p class="user-shell__section-title user-shell__section-title--account">บัญชีของฉัน</p>
@@ -221,6 +272,16 @@ onBeforeUnmount(() => {
           <span v-if="cartCount > 0" class="user-shell__cart-badge">{{ cartCount > 99 ? '99+' : cartCount }}</span>
         </RouterLink>
         <RouterLink to="/profile" class="user-shell__profile">
+          <span
+            v-if="orderNotifDot === 'red'"
+            class="user-shell__notif-dot user-shell__notif-dot--red user-shell__notif-dot--topbar"
+            aria-label="มีรายการออเดอร์ที่ต้องดำเนินการ"
+          ></span>
+          <span
+            v-else-if="orderNotifDot === 'green'"
+            class="user-shell__notif-dot user-shell__notif-dot--green user-shell__notif-dot--topbar"
+            aria-label="มีอัพเดทสถานะออเดอร์ใหม่"
+          ></span>
           <span class="user-shell__profile-avatar">{{ String(currentUser.username || 'U').slice(0, 1).toUpperCase() }}</span>
           <span class="user-shell__profile-name">{{ currentUser.username || 'ผู้ใช้' }}</span>
         </RouterLink>
@@ -365,6 +426,39 @@ onBeforeUnmount(() => {
 .user-shell__link--active {
   background: #f2e8ff;
   color: #7347a6;
+}
+
+.user-shell__notif-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.user-shell__notif-dot--red {
+  background: #ef4444;
+  animation: user-shell-pulse-red 2s infinite;
+}
+
+.user-shell__notif-dot--green {
+  background: #22c55e;
+  animation: user-shell-pulse-green 2s infinite;
+}
+
+.user-shell__notif-dot--topbar {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+@keyframes user-shell-pulse-red {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55); }
+  50% { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0); }
+}
+
+@keyframes user-shell-pulse-green {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55); }
+  50% { box-shadow: 0 0 0 4px rgba(34, 197, 94, 0); }
 }
 
 .user-shell__icon {

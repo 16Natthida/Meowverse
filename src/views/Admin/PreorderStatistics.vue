@@ -1,6 +1,6 @@
 <script setup>
 import AdminPageHeader from '../../components/AdminPageHeader.vue'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
@@ -14,6 +14,20 @@ const searchQuery = ref('')
 const selectedRoundId = ref('')
 const selectedProductId = ref('')
 const includeCancelled = ref(false)
+const previewImage = ref(null)
+
+function openImagePreview(url, title, subtitle) {
+  if (!url) return
+  previewImage.value = { url, title, subtitle }
+}
+
+function closeImagePreview() {
+  previewImage.value = null
+}
+
+function handleKeydown(e) {
+  if (e.key === 'Escape') closeImagePreview()
+}
 
 const summary = computed(() => report.value.summary || {})
 const history = computed(() => report.value.history || [])
@@ -129,7 +143,14 @@ function showRound(roundId) {
   loadReport()
 }
 
-onMounted(() => loadReport({ preserveOptions: false }))
+onMounted(() => {
+  loadReport({ preserveOptions: false })
+  window.addEventListener('keydown', handleKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
+})
 </script>
 
 <template>
@@ -263,13 +284,20 @@ onMounted(() => loadReport({ preserveOptions: false }))
             <tbody>
               <tr v-for="row in history" :key="`${row.round_id}-${row.prod_id}`">
                 <td class="image-cell">
-                  <img
+                  <button
                     v-if="row.image_url"
-                    :src="row.image_url"
-                    :alt="row.product_name"
-                    class="product-thumb"
-                    loading="lazy"
-                  />
+                    type="button"
+                    class="thumb-btn"
+                    @click="openImagePreview(row.image_url, row.product_name, row.round_name)"
+                    :aria-label="`ดูรูป ${row.product_name}`"
+                  >
+                    <img
+                      :src="row.image_url"
+                      :alt="row.product_name"
+                      class="product-thumb"
+                      loading="lazy"
+                    />
+                  </button>
                   <div v-else class="product-thumb product-thumb--placeholder">ไม่มีรูป</div>
                 </td>
                 <td><strong>{{ row.sku || `#${row.prod_id}` }}</strong></td>
@@ -295,13 +323,20 @@ onMounted(() => loadReport({ preserveOptions: false }))
               <section class="history-card__section history-card__product">
                 <p class="history-card__section-title">สินค้า / รอบ</p>
                 <div class="history-card__product-body">
-                  <img
+                  <button
                     v-if="row.image_url"
-                    :src="row.image_url"
-                    :alt="row.product_name"
-                    class="history-card__image"
-                    loading="lazy"
-                  />
+                    type="button"
+                    class="thumb-btn"
+                    @click="openImagePreview(row.image_url, row.product_name, row.round_name)"
+                    :aria-label="`ดูรูป ${row.product_name}`"
+                  >
+                    <img
+                      :src="row.image_url"
+                      :alt="row.product_name"
+                      class="history-card__image"
+                      loading="lazy"
+                    />
+                  </button>
                   <div v-else class="history-card__image history-card__image--placeholder">🖼️</div>
                   <div class="history-card__product-info">
                     <strong class="history-card__sku">{{ row.sku || `#${row.prod_id}` }}</strong>
@@ -380,6 +415,16 @@ onMounted(() => loadReport({ preserveOptions: false }))
         </div>
       </section>
     </template>
+
+    <div v-if="previewImage" class="modal-overlay" @click.self="closeImagePreview">
+      <div class="image-modal-card">
+        <button type="button" class="image-modal-close" @click="closeImagePreview" aria-label="ปิด">✕</button>
+        <img :src="previewImage.url" :alt="previewImage.title" class="image-modal-img" />
+        <p class="image-modal-caption">
+          {{ previewImage.title }}<span v-if="previewImage.subtitle"> · {{ previewImage.subtitle }}</span>
+        </p>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -552,6 +597,73 @@ tbody tr:hover { background: #fdfaff; }
   border-radius: 10px;
   border: 1px solid var(--panel-border);
   background: #f6f0fb;
+}
+.thumb-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+  display: block;
+  line-height: 0;
+  border-radius: 10px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.thumb-btn:hover,
+.thumb-btn:focus-visible {
+  transform: scale(1.06);
+  box-shadow: 0 4px 14px rgba(166, 109, 230, 0.28);
+  outline: none;
+}
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(67, 47, 97, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 50;
+}
+.image-modal-card {
+  width: min(480px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  background: #fff;
+  border-radius: 20px;
+  padding: 1.1rem;
+  position: relative;
+  text-align: center;
+}
+.image-modal-close {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--panel-border);
+  background: #fff;
+  color: var(--text-main);
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.image-modal-close:hover {
+  background: #f6f0fb;
+}
+.image-modal-img {
+  width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  border-radius: 14px;
+  background: #f6f0fb;
+}
+.image-modal-caption {
+  margin: 0.75rem 0 0;
+  color: var(--text-main);
+  font-weight: 600;
+  font-size: 0.9rem;
 }
 .product-thumb--placeholder {
   display: flex;

@@ -73,7 +73,26 @@
                 'row--locked': item.isFeeLocked || !item.canEnterImportFee,
               }"
             >
-              <td class="cell-product">{{ item.product_name }}</td>
+              <td class="cell-product">
+                <div class="product-cell">
+                  <button
+                    v-if="item.image_url"
+                    type="button"
+                    class="thumb-btn"
+                    @click="openImagePreview(item.image_url, item.product_name, item.flavorDisplay)"
+                    :aria-label="`ดูรูป ${item.product_name}`"
+                  >
+                    <img
+                      :src="item.image_url"
+                      :alt="item.product_name"
+                      class="product-cell-thumb"
+                      loading="lazy"
+                    />
+                  </button>
+                  <div v-else class="product-cell-thumb product-cell-thumb--placeholder">🐾</div>
+                  <span>{{ item.product_name }}</span>
+                </div>
+              </td>
               <td class="cell-flavor">
                 <span v-if="item.flavorDisplay" class="flavor-tag">{{ item.flavorDisplay }}</span>
                 <span v-else class="cell-muted">—</span>
@@ -227,6 +246,16 @@
       </svg>
       <p>เลือกรอบพรีออเดอร์เพื่อเริ่มกรอกค่านำเข้า</p>
     </div>
+
+    <div v-if="previewImage" class="modal-overlay" @click.self="closeImagePreview">
+      <div class="image-modal-card">
+        <button type="button" class="image-modal-close" @click="closeImagePreview" aria-label="ปิด">✕</button>
+        <img :src="previewImage.url" :alt="previewImage.title" class="image-modal-img" />
+        <p class="image-modal-caption">
+          {{ previewImage.title }}<span v-if="previewImage.subtitle"> · {{ previewImage.subtitle }}</span>
+        </p>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -247,6 +276,20 @@ const loading = ref(false)
 const saving = ref(false)
 const successMessage = ref('')
 const errorMessage = ref('')
+const previewImage = ref(null)
+
+function openImagePreview(url, title, subtitle) {
+  if (!url) return
+  previewImage.value = { url, title, subtitle }
+}
+
+function closeImagePreview() {
+  previewImage.value = null
+}
+
+function handleImagePreviewKeydown(e) {
+  if (e.key === 'Escape') closeImagePreview()
+}
 
 const selectedRound = computed(
   () => rounds.value.find((r) => r.round_key === selectedRoundId.value) || null,
@@ -280,6 +323,7 @@ const groupedProducts = computed(() => {
       key,
       prod_id: item.prod_id,
       product_name: item.product_name,
+      image_url: item.image_url || '',
       flavor: item.flavor,
       flavorDisplay: item.flavor || null,
       ordered_qty: orderedQty,
@@ -393,10 +437,12 @@ function handleInventoryIntakeUpdated() {
 
 onMounted(() => {
   window.addEventListener('meowverse:inventory-intake-updated', handleInventoryIntakeUpdated)
+  window.addEventListener('keydown', handleImagePreviewKeydown)
 })
 
 onUnmounted(() => {
   window.removeEventListener('meowverse:inventory-intake-updated', handleInventoryIntakeUpdated)
+  window.removeEventListener('keydown', handleImagePreviewKeydown)
 })
 
 // บันทึกค่านำเข้าโดยดึงจาก prod_id เป็นหลัก
@@ -711,6 +757,92 @@ async function saveImportFees() {
 .cell-product {
   font-weight: 500;
   color: #1a1a2e;
+}
+.product-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+.product-cell-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  object-fit: cover;
+  flex: 0 0 auto;
+  background: #f5efff;
+}
+.product-cell-thumb--placeholder {
+  display: grid;
+  place-items: center;
+  font-size: 1rem;
+}
+.thumb-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+  display: block;
+  line-height: 0;
+  border-radius: 10px;
+  flex: 0 0 auto;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.thumb-btn:hover,
+.thumb-btn:focus-visible {
+  transform: scale(1.08);
+  box-shadow: 0 4px 14px rgba(91, 33, 182, 0.25);
+  outline: none;
+}
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(44, 36, 64, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 50;
+}
+.image-modal-card {
+  width: min(480px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  background: #fff;
+  border-radius: 20px;
+  padding: 1.1rem;
+  position: relative;
+  text-align: center;
+}
+.image-modal-close {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid #eadcf6;
+  background: #fff;
+  color: #5b21b6;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.image-modal-close:hover {
+  background: #f5efff;
+}
+.image-modal-img {
+  width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  border-radius: 14px;
+  background: #f5efff;
+}
+.image-modal-caption {
+  margin: 0.75rem 0 0;
+  color: #3f2f5d;
+  font-weight: 600;
+  font-size: 0.9rem;
 }
 .cell-muted {
   color: #d1d5db;

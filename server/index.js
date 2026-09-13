@@ -12,6 +12,7 @@ import cartRouter from './cart.js'
 import orderRouter, { deductReadyOrderStock } from './order.js'
 import shippingRouter from './shipping.js'
 import { DEFAULT_PREORDER_TERMS, normalizePreorderTerms } from './preorderTerms.js'
+import { getShippingFeeSettings } from './shippingFees.js'
 
 dotenv.config()
 
@@ -37,8 +38,9 @@ const DEFAULT_BANNER_IMAGE_URL = '/images/cat.jpg'
 const DEFAULT_BRAND_LOGO_URL = ''
 const DEFAULT_THEME_PRIMARY = '#b673ee'
 const DEFAULT_THEME_ACCENT = '#ff93b8'
-const PREORDER_SHIPPING_FEE = 65
-const READY_SHIPPING_FEE = 49
+// หมายเหตุ: ค่าส่งจริงถูกอ่านแบบไดนามิกจาก site_settings ผ่าน getShippingFeeSettings()
+// (ตั้งค่าได้ที่หน้าแอดมิน "บริษัทขนส่ง") ดูจุดใช้งานที่ createPreorderOrdersForClosedRound
+// และ endpoint ยืนยันการชำระเงินด้านล่าง
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -271,6 +273,8 @@ async function createPreorderOrdersForClosedRound(connection, roundId) {
     byUser.get(row.user_id).push(row)
   }
 
+  const shippingFeeSettings = await getShippingFeeSettings(connection)
+
   for (const [userId, items] of byUser.entries()) {
     try {
       const subtotalAmount = items.reduce(
@@ -281,7 +285,7 @@ async function createPreorderOrdersForClosedRound(connection, roundId) {
         (sum, item) => sum + (Number(item.china_shipping_fee_thb) || 0) * Number(item.qty || 0),
         0,
       )
-      const shippingFee = PREORDER_SHIPPING_FEE
+      const shippingFee = shippingFeeSettings.preorder
       // Round 1 collects the product price plus China domestic shipping.
       // The Thai flat-rate shipping fee remains reserved for round 2.
       const totalAmount = subtotalAmount + chinaShippingTotalThb
@@ -3090,7 +3094,24 @@ app.get(
         SUM(od.qty) AS total_sold_qty,
         SUM(COALESCE(od.received_qty, 0)) AS total_received_qty,
         MIN(od.Price) AS unit_price,
-        COALESCE(SUM(od.Import_fee), 0) AS import_fee
+        COALESCE(SUM(od.Import_fee), 0) AS import_fee,
+        COALESCE(
+          (
+            SELECT pi.image_url
+            FROM product_images pi
+            WHERE pi.prod_id = od.prod_id
+            ORDER BY
+              CASE
+                WHEN pi.flavor = od.flavor THEN 1
+                WHEN pi.flavor IS NULL OR pi.flavor = '' THEN 2
+                ELSE 3
+              END ASC,
+              pi.sort_order ASC, pi.img_id ASC
+            LIMIT 1
+          ),
+          p.image_url,
+          ''
+        ) AS image_url
       FROM preorder_rounds pr
       JOIN order_details od ON od.preorder_round_id = pr.round_id
       JOIN orders o ON o.order_id = od.order_id
@@ -3106,6 +3127,7 @@ app.get(
         pr.end_date,
         od.prod_id,
         p.prod_name,
+        p.image_url,
         od.flavor,
         CASE
           WHEN COALESCE(od.received_qty, 0) >= od.qty
@@ -3155,6 +3177,7 @@ app.get(
           total_received_qty: Number(row.total_received_qty) || 0,
           unit_price: Number(row.unit_price) || 0,
           current_import_fee: Number(row.import_fee) || 0,
+          image_url: row.image_url || '',
         })
       }
       res.json(Array.from(roundMap.values()))
@@ -3397,13 +3420,14 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
       return res.status(409).json({ error: 'ออเดอร์นี้ถูกยกเลิกแล้ว' })
     }
 
+    const currentShippingFeeSettings = await getShippingFeeSettings(connection)
     const effectiveShippingFee =
       Number(orderData.shipping_fee) > 0
         ? Number(orderData.shipping_fee)
         : normalizedOrderType === 'ready'
-          ? READY_SHIPPING_FEE
+          ? currentShippingFeeSettings.ready
           : ['preorder', 'pending_import'].includes(normalizedOrderType)
-            ? PREORDER_SHIPPING_FEE
+            ? currentShippingFeeSettings.preorder
             : 0
     const importFeeStatuses = [
       'Wait_for_Import_Fee',

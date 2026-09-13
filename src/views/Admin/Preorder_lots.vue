@@ -207,11 +207,15 @@
             <div v-else class="products-grid">
               <div v-for="product in currentRound.products" :key="product.id" class="product-item">
                 <div class="product-image">
-                  <img
+                  <button
                     v-if="product.imageUrls && product.imageUrls[0]"
-                    :src="product.imageUrls[0]"
-                    :alt="product.name"
-                  />
+                    type="button"
+                    class="image-thumb-btn"
+                    @click="openImagePreview(product.imageUrls[0], product.name)"
+                    :aria-label="`ดูรูป ${product.name}`"
+                  >
+                    <img :src="product.imageUrls[0]" :alt="product.name" />
+                  </button>
                   <div v-else class="no-image">ไม่มีรูป</div>
                 </div>
                 <div class="product-info">
@@ -289,11 +293,15 @@
                     <span class="checkmark"></span>
                     
                     <div class="product-mini-image">
-                      <img
+                      <button
                         v-if="product.imageUrls && product.imageUrls[0]"
-                        :src="product.imageUrls[0]"
-                        :alt="product.name"
-                      />
+                        type="button"
+                        class="image-thumb-btn"
+                        @click.prevent.stop="openImagePreview(product.imageUrls[0], product.name)"
+                        :aria-label="`ดูรูป ${product.name}`"
+                      >
+                        <img :src="product.imageUrls[0]" :alt="product.name" />
+                      </button>
                       <div v-else class="no-image-mini">ไม่มีรูป</div>
                     </div>
 
@@ -372,11 +380,15 @@
         <div class="modal-body">
           <div class="product-detail">
             <div class="product-image-large">
-              <img
+              <button
                 v-if="selectedProduct.imageUrls && selectedProduct.imageUrls[0]"
-                :src="selectedProduct.imageUrls[0]"
-                :alt="selectedProduct.name"
-              />
+                type="button"
+                class="image-thumb-btn"
+                @click="openImagePreview(selectedProduct.imageUrls[0], selectedProduct.name)"
+                :aria-label="`ดูรูป ${selectedProduct.name}`"
+              >
+                <img :src="selectedProduct.imageUrls[0]" :alt="selectedProduct.name" />
+              </button>
               <div v-else class="no-image">ไม่มีรูป</div>
             </div>
             <div class="product-info-detail">
@@ -511,6 +523,15 @@
         </div>
       </div>
     </div>
+
+    <!-- Image Preview Modal -->
+    <div v-if="previewImage" class="modal-overlay" @click.self="closeImagePreview">
+      <div class="image-preview-card">
+        <button type="button" class="close-btn" @click="closeImagePreview" aria-label="ปิด">×</button>
+        <img :src="previewImage.url" :alt="previewImage.title" class="image-preview-img" />
+        <p v-if="previewImage.title" class="image-preview-caption">{{ previewImage.title }}</p>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -535,6 +556,16 @@ const productPriceChanges = reactive({})
 const productChinaShippingFeeChanges = reactive({})
 const showProductDetailModal = ref(false)
 const selectedProduct = ref(null)
+const previewImage = ref(null)
+
+function openImagePreview(url, title) {
+  if (!url) return
+  previewImage.value = { url, title }
+}
+
+function closeImagePreview() {
+  previewImage.value = null
+}
 const showDuplicateModal = ref(false)
 const roundToDuplicate = ref(null)
 const isDuplicating = ref(false)
@@ -1470,7 +1501,24 @@ onMounted(async () => {
 .product-image img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+}
+
+.image-thumb-btn {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+  display: block;
+  transition: opacity 0.15s ease;
+}
+
+.image-thumb-btn:hover,
+.image-thumb-btn:focus-visible {
+  opacity: 0.85;
+  outline: none;
 }
 
 .no-image {
@@ -1673,7 +1721,7 @@ onMounted(async () => {
 .product-mini-image img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .no-image-mini {
@@ -1840,17 +1888,19 @@ onMounted(async () => {
 }
 
 .product-detail {
-  display: grid;
-  grid-template-columns: minmax(220px, 280px) 1fr;
-  gap: 24px;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
 .product-image-large {
-  border-radius: 24px;
+  width: 100%;
+  max-width: 320px;
+  aspect-ratio: 4 / 3;
+  margin: 0 auto;
+  border-radius: 20px;
   overflow: hidden;
   background: #f7f0ff;
-  min-height: 280px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1859,27 +1909,28 @@ onMounted(async () => {
 .product-image-large img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .product-info-detail {
   background: #fbf5ff;
-  border-radius: 24px;
-  padding: 22px;
+  border-radius: 20px;
+  padding: 20px 22px;
   border: 1px solid rgba(218, 199, 242, 0.9);
 }
 
 .product-info-detail h3 {
   margin-top: 0;
   color: #3c1f59;
-  font-size: 22px;
-  margin-bottom: 18px;
+  font-size: 20px;
+  margin-bottom: 16px;
+  text-align: center;
 }
 
 .product-info-detail p {
-  margin: 12px 0;
+  margin: 10px 0;
   color: #534264;
-  font-size: 15px;
+  font-size: 14.5px;
   line-height: 1.7;
 }
 
@@ -2041,5 +2092,52 @@ onMounted(async () => {
   .preorder-table td::before { max-width: 40%; }
   .preorder-table td > * { min-width: 0; max-width: 58%; overflow-wrap: anywhere; }
   .preorder-table td:last-child > *, .preorder-table .actions, .preorder-table .btn-action { max-width: 100%; }
+}
+
+/* ── Image preview modal ── */
+.image-preview-card {
+  width: min(480px, 92vw);
+  max-height: 90vh;
+  overflow: auto;
+  background: #fff;
+  border-radius: 20px;
+  padding: 1.1rem;
+  position: relative;
+  text-align: center;
+}
+
+.image-preview-card .close-btn {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid #eadcf6;
+  background: #fff;
+  color: #6d3fa3;
+  font-size: 1.1rem;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.image-preview-card .close-btn:hover {
+  background: #f5efff;
+}
+
+.image-preview-img {
+  width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  border-radius: 14px;
+  background: #f5efff;
+}
+
+.image-preview-caption {
+  margin: 0.75rem 0 0;
+  color: #45315f;
+  font-weight: 600;
+  font-size: 0.9rem;
 }
 </style>

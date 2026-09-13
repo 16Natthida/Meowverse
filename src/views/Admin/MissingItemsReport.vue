@@ -51,6 +51,7 @@
          <table class="data-table data-table--items">
           <thead>
             <tr>
+              <th class="image-col">รูปภาพ</th>
               <th>สินค้า</th>
               <th>รสชาติ</th>
               <th class="num">ราคา/ชิ้น</th>
@@ -69,6 +70,23 @@
               :key="`${item.detail_id}-${item.order_id}`"
               class="missing-row"
             >
+              <td class="image-col">
+                <button
+                  v-if="item.image_url"
+                  type="button"
+                  class="item-thumb-btn"
+                  @click="openImagePreview(item)"
+                  :aria-label="`ดูรูป ${item.product_name}`"
+                >
+                  <img
+                    :src="item.image_url"
+                    :alt="item.product_name"
+                    class="item-thumb"
+                    loading="lazy"
+                  />
+                </button>
+                <div v-else class="item-thumb item-thumb--placeholder">🐾</div>
+              </td>
               <td class="product-name">{{ item.product_name }}</td>
               <td class="flavor">{{ item.flavor || '—' }}</td>
               <td class="num">฿{{ Number(item.unit_price).toLocaleString() }}</td>
@@ -137,6 +155,15 @@
         </table>
       </div>
     </section>
+
+    <!-- Image Preview Modal -->
+    <div v-if="previewImage" class="modal-overlay" @click.self="closeImagePreview">
+      <div class="image-modal-card">
+        <button type="button" class="image-modal-close" @click="closeImagePreview" aria-label="ปิด">✕</button>
+        <img :src="previewImage.image_url" :alt="previewImage.product_name" class="image-modal-img" />
+        <p class="image-modal-caption">{{ previewImage.product_name }}<span v-if="previewImage.flavor"> · {{ previewImage.flavor }}</span></p>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -254,6 +281,16 @@ const missingItemsList = computed(() => {
 })
 
 const itemActionLoading = ref({})
+const previewImage = ref(null)
+
+function openImagePreview(item) {
+  if (!item?.image_url) return
+  previewImage.value = item
+}
+
+function closeImagePreview() {
+  previewImage.value = null
+}
 
 const totalMissingItems = computed(() => missingItemsList.value.length)
 const totalRefundAmount = computed(() =>
@@ -339,6 +376,7 @@ async function fetchData() {
             order_status: order.status,
             refund_status: String(order.refund_status || 'pending').toLowerCase() === 'paid' ? 'paid' : 'pending',
             product_name: item.product_name,
+            image_url: item.image_url || '',
             flavor: item.flavor,
             unit_price: item.unit_price,
             ordered_qty: item.ordered_qty,
@@ -365,13 +403,19 @@ function handleInventoryIntakeUpdated() {
   fetchData()
 }
 
+function handleKeydown(e) {
+  if (e.key === 'Escape') closeImagePreview()
+}
+
 onMounted(() => {
   fetchData()
   window.addEventListener('meowverse:inventory-intake-updated', handleInventoryIntakeUpdated)
+  window.addEventListener('keydown', handleKeydown)
 })
 
 onUnmounted(() => {
   window.removeEventListener('meowverse:inventory-intake-updated', handleInventoryIntakeUpdated)
+  window.removeEventListener('keydown', handleKeydown)
 })
 </script>
 
@@ -565,6 +609,105 @@ onUnmounted(() => {
   color: #3f2f5d;
 }
 
+.image-col {
+  width: 60px;
+}
+
+.item-thumb-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+  display: block;
+  line-height: 0;
+  border-radius: 12px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.item-thumb-btn:hover,
+.item-thumb-btn:focus-visible {
+  transform: scale(1.05);
+  box-shadow: 0 4px 14px rgba(84, 54, 113, 0.25);
+  outline: none;
+}
+
+.item-thumb {
+  width: 44px;
+  height: 44px;
+  max-width: 44px;
+  max-height: 44px;
+  border-radius: 12px;
+  object-fit: cover;
+  display: block;
+  background: #f5efff;
+  flex-shrink: 0;
+}
+
+.item-thumb--placeholder {
+  display: grid;
+  place-items: center;
+  font-size: 1.05rem;
+}
+
+/* ── Image preview modal ── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(44, 36, 64, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 50;
+}
+
+.image-modal-card {
+  width: min(480px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  background: #fff;
+  border-radius: 20px;
+  padding: 1.1rem;
+  position: relative;
+  text-align: center;
+}
+
+.image-modal-close {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid #eadcf6;
+  background: #fff;
+  color: #6d5a8c;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  z-index: 1;
+}
+
+.image-modal-close:hover {
+  background: #f8f4ff;
+}
+
+.image-modal-img {
+  width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  border-radius: 14px;
+  background: #f5efff;
+}
+
+.image-modal-caption {
+  margin: 0.75rem 0 0;
+  color: #3f2f5d;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
 .flavor {
   color: #8b7ba8;
   font-size: 0.85rem;
@@ -738,6 +881,10 @@ onUnmounted(() => {
   .action-buttons {
     flex-direction: column;
   }
+  .image-modal-card {
+    width: 100%;
+    padding: 0.9rem;
+  }
 }
 
 @media (max-width: 720px) {
@@ -785,16 +932,18 @@ onUnmounted(() => {
     text-align: left;
   }
 
-  .data-table td:nth-child(1)::before { content: 'สินค้า / รอบ'; }
-  .data-table td:nth-child(2)::before { content: 'รสชาติ'; }
-  .data-table td:nth-child(3)::before { content: 'ราคา/ชิ้น'; }
-  .data-table td:nth-child(4)::before { content: 'สั่ง'; }
-  .data-table td:nth-child(5)::before { content: 'รับจริง'; }
-  .data-table td:nth-child(6)::before { content: 'ขาด'; }
-  .data-table td:nth-child(7)::before { content: 'ยอดคืน'; }
-  .data-table td:nth-child(8)::before { content: 'สถานะคืนเงิน'; }
-  .data-table td:nth-child(9)::before { content: 'จัดการ'; }
-  .data-table td:nth-child(10)::before { content: 'ลูกค้า'; }
+  .data-table--items td:nth-child(1) { display: block; }
+  .data-table--items td:nth-child(1)::before { display: none; }
+  .data-table--items td:nth-child(2)::before { content: 'สินค้า / รอบ'; }
+  .data-table--items td:nth-child(3)::before { content: 'รสชาติ'; }
+  .data-table--items td:nth-child(4)::before { content: 'ราคา/ชิ้น'; }
+  .data-table--items td:nth-child(5)::before { content: 'สั่ง'; }
+  .data-table--items td:nth-child(6)::before { content: 'รับจริง'; }
+  .data-table--items td:nth-child(7)::before { content: 'ขาด'; }
+  .data-table--items td:nth-child(8)::before { content: 'ยอดคืน'; }
+  .data-table--items td:nth-child(9)::before { content: 'สถานะคืนเงิน'; }
+  .data-table--items td:nth-child(10)::before { content: 'จัดการ'; }
+  .data-table--items td:nth-child(11)::before { content: 'ลูกค้า'; }
 
   .data-table--rounds td:nth-child(1)::before { content: 'รอบ'; }
   .data-table--rounds td:nth-child(2)::before { content: 'สินค้าขาด'; }
@@ -819,20 +968,20 @@ onUnmounted(() => {
     width: 100%;
   }
 
-  .data-table--items td:nth-child(9) {
+  .data-table--items td:nth-child(10) {
     display: block;
     padding-top: 0.7rem;
   }
 
-  .data-table--items td:nth-child(9)::before {
+  .data-table--items td:nth-child(10)::before {
     display: none;
   }
 
-  .data-table--items td:nth-child(10) {
+  .data-table--items td:nth-child(11) {
     display: flex;
   }
 
-  .data-table--items td:nth-child(10)::before,
+  .data-table--items td:nth-child(11)::before,
   .data-table--rounds td:last-child::before {
     display: block;
   }

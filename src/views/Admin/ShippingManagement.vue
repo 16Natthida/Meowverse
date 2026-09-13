@@ -1,6 +1,6 @@
 <script setup>
 import AdminPageHeader from '../../components/AdminPageHeader.vue'
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { printOrder } from '../../utils/printOrder'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api'
@@ -13,6 +13,34 @@ const filterType = ref('all')
 const providers = ref([])
 const drafts = ref({})
 const savingOrderId = ref(null)
+const detailOrder = ref(null)
+const previewImage = ref(null)
+
+function openOrderDetail(order) {
+  detailOrder.value = order
+}
+
+function closeOrderDetail() {
+  detailOrder.value = null
+}
+
+function openImagePreview(url, title, subtitle) {
+  if (!url) return
+  previewImage.value = { url, title, subtitle }
+}
+
+function closeImagePreview() {
+  previewImage.value = null
+}
+
+function handleShippingKeydown(e) {
+  if (e.key !== 'Escape') return
+  if (previewImage.value) {
+    closeImagePreview()
+  } else if (detailOrder.value) {
+    closeOrderDetail()
+  }
+}
 
 function getCurrentUser() {
   const raw = localStorage.getItem('meowverse-user') || sessionStorage.getItem('meowverse-user')
@@ -164,7 +192,14 @@ const filteredOrders = computed(() => {
   })
 })
 
-onMounted(fetchShippingOrders)
+onMounted(() => {
+  fetchShippingOrders()
+  window.addEventListener('keydown', handleShippingKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleShippingKeydown)
+})
 </script>
 
 <template>
@@ -303,6 +338,13 @@ onMounted(fetchShippingOrders)
                 >
                   พิมพ์ใบออเดอร์
                 </button>
+                <button
+                  type="button"
+                  class="btn-detail-order"
+                  @click="openOrderDetail(order)"
+                >
+                  รายละเอียด
+                </button>
                 <small class="shipment-status">{{ statusLabel(order.status) }}</small>
               </td>
             </tr>
@@ -310,6 +352,58 @@ onMounted(fetchShippingOrders)
         </table>
       </div>
     </section>
+
+    <!-- Order Detail Modal -->
+    <div v-if="detailOrder" class="modal-overlay" @click.self="closeOrderDetail">
+      <div class="detail-modal">
+        <div class="detail-modal__head">
+          <div>
+            <h3>รายละเอียดออเดอร์ #{{ detailOrder.order_id }}</h3>
+            <p>{{ detailOrder.name || '-' }} · {{ detailOrder.phone || '-' }}</p>
+          </div>
+          <button type="button" class="close-btn" @click="closeOrderDetail" aria-label="ปิด">✕</button>
+        </div>
+
+        <div class="detail-modal__items">
+          <div v-for="item in detailOrder.details" :key="item.detail_id" class="detail-item-row">
+            <button
+              v-if="item.image_url"
+              type="button"
+              class="thumb-btn"
+              @click="openImagePreview(item.image_url, item.prod_name, item.flavor)"
+              :aria-label="`ดูรูป ${item.prod_name}`"
+            >
+              <img :src="item.image_url" :alt="item.prod_name" class="detail-item-thumb" loading="lazy" />
+            </button>
+            <div v-else class="detail-item-thumb detail-item-thumb--placeholder">ไม่มีรูป</div>
+
+            <div class="detail-item-info">
+              <strong>{{ item.prod_name }}</strong>
+              <span v-if="item.flavor" class="detail-item-flavor">รสชาติ: {{ item.flavor }}</span>
+              <span class="detail-item-price">฿{{ Number(item.unit_price || 0).toLocaleString() }} / ชิ้น</span>
+            </div>
+
+            <div class="detail-item-qty">x{{ item.qty }}</div>
+          </div>
+        </div>
+
+        <div class="detail-modal__total">
+          <span>ยอดรวม</span>
+          <strong>฿{{ Number(detailOrder.total_amount).toLocaleString() }}</strong>
+        </div>
+      </div>
+    </div>
+
+    <!-- Image Preview Modal -->
+    <div v-if="previewImage" class="modal-overlay" @click.self="closeImagePreview">
+      <div class="image-modal-card">
+        <button type="button" class="image-modal-close" @click="closeImagePreview" aria-label="ปิด">✕</button>
+        <img :src="previewImage.url" :alt="previewImage.title" class="image-modal-img" />
+        <p class="image-modal-caption">
+          {{ previewImage.title }}<span v-if="previewImage.subtitle"> · {{ previewImage.subtitle }}</span>
+        </p>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -449,6 +543,209 @@ td { padding: 1rem; border-bottom: 1px solid #f3e8ff; font-size: 0.9rem; vertica
   background: var(--grape);
   color: #fff;
 }
+
+.btn-detail-order {
+  margin-top: 0.45rem;
+  margin-left: 0.4rem;
+  background: #fbf5ff;
+  border: 1px solid #ddc9f0;
+  color: #6d3fa3;
+  padding: 6px 12px;
+  border-radius: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.btn-detail-order:hover {
+  background: #ede0fb;
+}
+
+/* ── Order detail modal ── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(44, 36, 64, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 60;
+}
+
+.close-btn {
+  border: none;
+  background: none;
+  font-size: 1.1rem;
+  color: #6d3fa3;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.detail-modal {
+  width: min(520px, 100%);
+  max-height: 85vh;
+  overflow: auto;
+  background: #fff;
+  border-radius: 20px;
+  padding: 1.3rem;
+}
+
+.detail-modal__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.detail-modal__head h3 {
+  margin: 0 0 0.25rem;
+  color: #3c1f59;
+  font-size: 1.15rem;
+}
+
+.detail-modal__head p {
+  margin: 0;
+  color: #7c6a92;
+  font-size: 0.85rem;
+}
+
+.detail-modal__items {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.detail-item-row {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.7rem;
+  border: 1px solid #ede0fb;
+  border-radius: 14px;
+}
+
+.thumb-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+  display: block;
+  line-height: 0;
+  border-radius: 12px;
+  flex: 0 0 auto;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.thumb-btn:hover,
+.thumb-btn:focus-visible {
+  transform: scale(1.06);
+  box-shadow: 0 4px 14px rgba(166, 109, 230, 0.28);
+  outline: none;
+}
+
+.detail-item-thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  object-fit: cover;
+  background: #f5efff;
+  flex: 0 0 auto;
+}
+
+.detail-item-thumb--placeholder {
+  display: grid;
+  place-items: center;
+  color: #a996c9;
+  font-size: 0.65rem;
+  text-align: center;
+}
+
+.detail-item-info {
+  flex: 1;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.detail-item-info strong {
+  color: #3c1f59;
+  font-size: 0.92rem;
+}
+
+.detail-item-flavor,
+.detail-item-price {
+  color: #7c6a92;
+  font-size: 0.8rem;
+}
+
+.detail-item-qty {
+  font-weight: 800;
+  color: var(--grape);
+  flex: 0 0 auto;
+}
+
+.detail-modal__total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 1.1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid #ede0fb;
+  color: #3c1f59;
+  font-size: 0.95rem;
+}
+
+.detail-modal__total strong {
+  font-size: 1.1rem;
+}
+
+/* ── Image preview modal ── */
+.image-modal-card {
+  width: min(480px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  background: #fff;
+  border-radius: 20px;
+  padding: 1.1rem;
+  position: relative;
+  text-align: center;
+}
+
+.image-modal-close {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid #eadcf6;
+  background: #fff;
+  color: #6d3fa3;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.image-modal-close:hover {
+  background: #f5efff;
+}
+
+.image-modal-img {
+  width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  border-radius: 14px;
+  background: #f5efff;
+}
+
+.image-modal-caption {
+  margin: 0.75rem 0 0;
+  color: #3c1f59;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
 .recipient-info {
   display: grid;
   gap: 0.25rem;

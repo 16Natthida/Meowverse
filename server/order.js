@@ -2,17 +2,15 @@
 // Clean order router for checkout, listing, details, and import-fee updates.
 
 import express from 'express'
+import { getShippingFeeSettings } from './shippingFees.js'
 
 const router = express.Router()
 
-const SHIPPING_FEES = Object.freeze({
-  preorder: 65,
-  ready: 49,
-})
-function getShippingFee(items) {
+async function getShippingFee(items, runner) {
   const hasPreorder = items.some(isPreorderItem)
+  const fees = await getShippingFeeSettings(runner)
 
-  return hasPreorder ? SHIPPING_FEES.preorder : SHIPPING_FEES.ready
+  return hasPreorder ? fees.preorder : fees.ready
 }
 
 function isPreorderItem(item) {
@@ -404,7 +402,7 @@ router.post('/checkout-preview', async (req, res) => {
       (sum, item) => sum + (Number(item.china_shipping_fee_thb) || 0) * Number(item.qty || 0),
       0,
     )
-    const shippingFee = getShippingFee(cartItems)
+    const shippingFee = await getShippingFee(cartItems, connection)
     const totalAmount = subtotalAmount + (hasPreorder ? chinaShippingTotalThb : shippingFee)
 
     await connection.commit()
@@ -577,7 +575,7 @@ router.post('/confirm-payment', async (req, res) => {
       orderType = 'Pending_import'
     }
 
-    const shippingFee = getShippingFee(mergedItems)
+    const shippingFee = await getShippingFee(mergedItems, connection)
     const totalAmount = subtotalAmount + (hasPreorder ? chinaShippingTotalThb : shippingFee)
     const [orderResult] = await connection.query(
       `INSERT INTO orders

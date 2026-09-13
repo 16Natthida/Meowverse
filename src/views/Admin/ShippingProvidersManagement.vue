@@ -17,6 +17,15 @@ const form = ref({
   is_active: true,
 })
 
+const feeLoading = ref(false)
+const feeSaving = ref(false)
+const feeError = ref('')
+const feeSuccess = ref('')
+const feeForm = ref({
+  ready_fee: 0,
+  preorder_fee: 0,
+})
+
 function adminHeaders(extra = {}) {
   try {
     const user = JSON.parse(localStorage.getItem('meowverse-user') || '{}')
@@ -108,12 +117,104 @@ async function saveProvider() {
   }
 }
 
+async function loadShippingFees() {
+  feeLoading.value = true
+  feeError.value = ''
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/shipping-fees`, {
+      headers: adminHeaders(),
+    })
+    if (!response.ok) throw new Error('โหลดค่าส่งไม่สำเร็จ')
+    const data = await response.json()
+    feeForm.value = {
+      ready_fee: Number(data.ready_fee) || 0,
+      preorder_fee: Number(data.preorder_fee) || 0,
+    }
+  } catch (err) {
+    feeError.value = err.message || 'เกิดข้อผิดพลาดในการโหลดค่าส่ง'
+  } finally {
+    feeLoading.value = false
+  }
+}
+
+async function saveShippingFees() {
+  feeSaving.value = true
+  feeError.value = ''
+  feeSuccess.value = ''
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/shipping-fees`, {
+      method: 'PATCH',
+      headers: adminHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        ready_fee: Number(feeForm.value.ready_fee),
+        preorder_fee: Number(feeForm.value.preorder_fee),
+      }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.error || 'บันทึกค่าส่งไม่สำเร็จ')
+    feeForm.value = {
+      ready_fee: Number(data.ready_fee) || 0,
+      preorder_fee: Number(data.preorder_fee) || 0,
+    }
+    feeSuccess.value = 'บันทึกค่าส่งสำเร็จ'
+  } catch (err) {
+    feeError.value = err.message || 'เกิดข้อผิดพลาดในการบันทึกค่าส่ง'
+  } finally {
+    feeSaving.value = false
+  }
+}
+
 onMounted(loadProviders)
+onMounted(loadShippingFees)
 </script>
 
 <template>
   <div class="shipping-providers-page">
     <AdminPageHeader title="บริษัทขนส่ง" description="เพิ่มและจัดการบริษัทขนส่งที่ใช้ในระบบจัดส่ง"></AdminPageHeader>
+
+    <section class="panel provider-panel">
+      <header class="panel-head">
+        <div>
+          <h2>ค่าจัดส่งภายในประเทศ</h2>
+          <p>กำหนดค่าส่งสำหรับออเดอร์พร้อมส่ง และค่าส่งภายในไทยของออเดอร์พรีออเดอร์ (แสดงในหน้าชำระเงินค่านำเข้ารอบ 2)</p>
+        </div>
+        <button class="btn btn--ghost" type="button" :disabled="feeLoading" @click="loadShippingFees">รีเฟรช</button>
+      </header>
+
+      <form class="provider-form" @submit.prevent="saveShippingFees">
+        <div class="provider-form-grid">
+          <label class="field">
+            ค่าส่ง (พร้อมส่ง) บาท
+            <input
+              v-model.number="feeForm.ready_fee"
+              type="number"
+              min="0"
+              step="1"
+              :disabled="feeLoading || feeSaving"
+            />
+          </label>
+          <label class="field">
+            ค่าส่งภายในไทย (พรีออเดอร์) บาท
+            <input
+              v-model.number="feeForm.preorder_fee"
+              type="number"
+              min="0"
+              step="1"
+              :disabled="feeLoading || feeSaving"
+            />
+          </label>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn--primary" type="submit" :disabled="feeLoading || feeSaving">
+            {{ feeSaving ? 'กำลังบันทึก...' : 'บันทึกค่าส่ง' }}
+          </button>
+        </div>
+      </form>
+
+      <p v-if="feeError" class="notice notice--error">{{ feeError }}</p>
+      <p v-if="feeSuccess" class="notice notice--success">{{ feeSuccess }}</p>
+    </section>
 
     <section class="panel provider-panel">
       <header class="panel-head">

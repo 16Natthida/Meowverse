@@ -1,4 +1,5 @@
 import express from 'express'
+import { SHIPPING_FEE_SETTING_KEYS, DEFAULT_SHIPPING_FEES } from './shippingFees.js'
 
 const router = express.Router()
 
@@ -103,6 +104,65 @@ router.patch('/shipping-providers/:providerId', async (req, res) => {
 })
 
 // ─────────────────────────────────────────────
+// ค่าจัดส่งภายในประเทศ (ready-to-ship / preorder)
+// เก็บไว้ใน site_settings เพื่อให้แอดมินตั้งค่าได้จากหน้าบริษัทขนส่ง
+// ─────────────────────────────────────────────
+function parseFeeValue(value, fallback) {
+  const num = Number(value)
+  return Number.isFinite(num) && num >= 0 ? num : fallback
+}
+
+// GET /api/admin/shipping-fees
+router.get('/shipping-fees', async (req, res) => {
+  const pool = req.app.locals.db
+  try {
+    const [rows] = await pool.query(
+      `SELECT setting_key, setting_value FROM site_settings WHERE setting_key IN (?, ?)`,
+      [SHIPPING_FEE_SETTING_KEYS.ready, SHIPPING_FEE_SETTING_KEYS.preorder],
+    )
+    const map = new Map(rows.map((row) => [row.setting_key, row.setting_value]))
+    res.json({
+      ready_fee: parseFeeValue(map.get(SHIPPING_FEE_SETTING_KEYS.ready), DEFAULT_SHIPPING_FEES.ready),
+      preorder_fee: parseFeeValue(map.get(SHIPPING_FEE_SETTING_KEYS.preorder), DEFAULT_SHIPPING_FEES.preorder),
+    })
+  } catch (error) {
+    console.error('Get shipping fees error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// PATCH /api/admin/shipping-fees
+router.patch('/shipping-fees', async (req, res) => {
+  const pool = req.app.locals.db
+  const readyFee = Number(req.body.ready_fee)
+  const preorderFee = Number(req.body.preorder_fee)
+
+  if (!Number.isFinite(readyFee) || readyFee < 0) {
+    return res.status(400).json({ error: 'กรุณาระบุค่าส่งสำหรับสินค้าพร้อมส่งให้ถูกต้อง' })
+  }
+  if (!Number.isFinite(preorderFee) || preorderFee < 0) {
+    return res.status(400).json({ error: 'กรุณาระบุค่าส่งสำหรับสินค้าพรีออเดอร์ให้ถูกต้อง' })
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO site_settings (setting_key, setting_value) VALUES (?, ?), (?, ?)
+       ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP`,
+      [
+        SHIPPING_FEE_SETTING_KEYS.ready,
+        String(readyFee),
+        SHIPPING_FEE_SETTING_KEYS.preorder,
+        String(preorderFee),
+      ],
+    )
+    res.json({ ready_fee: readyFee, preorder_fee: preorderFee })
+  } catch (error) {
+    console.error('Update shipping fees error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ─────────────────────────────────────────────
 // GET /api/shipping/shipping-orders
 // ดึงรายการออเดอร์ที่พร้อมจัดส่ง / กำลังจัดส่ง / นำจ่ายแล้ว (Paid / Ready_to_Ship / Shipped / Delivered)
 // ─────────────────────────────────────────────
@@ -115,8 +175,25 @@ router.get('/shipping-orders', async (req, res) => {
         s.name, s.phone, s.notes, s.address, s.Shipping_Carrier,
         s.provider_id, sp.provider_code, sp.provider_name, s.tracking_number,
         s.tracking_url, s.shipping_status, s.shipped_at,
-        od.detail_id, od.flavor, od.Price AS unit_price, od.qty, od.received_qty, od.arrival_status,
-        p.prod_name
+        od.detail_id, od.prod_id, od.flavor, od.Price AS unit_price, od.qty, od.received_qty, od.arrival_status,
+        p.prod_name,
+        COALESCE(
+          (
+            SELECT pi.image_url
+            FROM product_images pi
+            WHERE pi.prod_id = od.prod_id
+            ORDER BY
+              CASE
+                WHEN pi.flavor = od.flavor THEN 1
+                WHEN pi.flavor IS NULL OR pi.flavor = '' THEN 2
+                ELSE 3
+              END ASC,
+              pi.sort_order ASC, pi.img_id ASC
+            LIMIT 1
+          ),
+          p.image_url,
+          ''
+        ) AS image_url
       FROM orders o
       JOIN shipping s ON o.order_id = s.order_id
       JOIN order_details od ON o.order_id = od.order_id
@@ -163,12 +240,14 @@ router.get('/shipping-orders', async (req, res) => {
       }
       order.details.push({
         detail_id: row.detail_id,
+        prod_id: row.prod_id,
         prod_name: row.prod_name,
         flavor: row.flavor,
         unit_price: row.unit_price,
         qty: row.qty,
         received_qty: row.received_qty,
         arrival_status: row.arrival_status,
+        image_url: row.image_url || '',
       })
       return acc
     }, [])

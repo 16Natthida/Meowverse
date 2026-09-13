@@ -1,6 +1,6 @@
 <script setup>
 import AdminPageHeader from '../../components/AdminPageHeader.vue'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useAuth } from '../../composables/useAuth'
 import translateError from '../../utils/translateError'
 
@@ -18,6 +18,20 @@ const intakeMessage = ref('')
 const intakeNote = ref('')
 const receivedDraft = ref({})
 const moveExcessToStock = ref(true)
+const previewImage = ref(null)
+
+function openImagePreview(url, title, subtitle) {
+  if (!url) return
+  previewImage.value = { url, title, subtitle }
+}
+
+function closeImagePreview() {
+  previewImage.value = null
+}
+
+function handleKeydown(e) {
+  if (e.key === 'Escape') closeImagePreview()
+}
 
 const selectedIntakeOrder = computed(() => {
   return (
@@ -253,6 +267,11 @@ async function processIntake() {
 
 onMounted(() => {
   fetchIntakeOrders()
+  window.addEventListener('keydown', handleKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
 })
 </script>
 
@@ -379,7 +398,21 @@ onMounted(() => {
                 :class="['items-row', { 'items-row--arrived': isArrivedItem(item) }]"
               >
                 <div class="product-col">
-                  <div class="product-thumb">{{ item.image_url ? '📦' : '🐾' }}</div>
+                  <button
+                    v-if="item.image_url"
+                    type="button"
+                    class="thumb-btn"
+                    @click="openImagePreview(item.image_url, item.product_name, item.flavor)"
+                    :aria-label="`ดูรูป ${item.product_name}`"
+                  >
+                    <img
+                      :src="item.image_url"
+                      :alt="item.product_name"
+                      class="product-thumb product-thumb--img"
+                      loading="lazy"
+                    />
+                  </button>
+                  <div v-else class="product-thumb">🐾</div>
                   <div>
                     <strong>{{ item.product_name }}</strong>
                     <p v-if="item.flavor">รสชาติ: {{ item.flavor }}</p>
@@ -466,6 +499,16 @@ onMounted(() => {
         </main>
       </div>
     </section>
+
+    <div v-if="previewImage" class="modal-overlay" @click.self="closeImagePreview">
+      <div class="image-modal-card">
+        <button type="button" class="image-modal-close" @click="closeImagePreview" aria-label="ปิด">✕</button>
+        <img :src="previewImage.url" :alt="previewImage.title" class="image-modal-img" />
+        <p class="image-modal-caption">
+          {{ previewImage.title }}<span v-if="previewImage.subtitle"> · {{ previewImage.subtitle }}</span>
+        </p>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -709,6 +752,87 @@ onMounted(() => {
   place-items: center;
   background: #f5efff;
   font-size: 1.1rem;
+  flex: 0 0 auto;
+}
+
+.product-thumb--img {
+  object-fit: cover;
+}
+
+.thumb-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+  display: block;
+  line-height: 0;
+  border-radius: 16px;
+  flex: 0 0 auto;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.thumb-btn:hover,
+.thumb-btn:focus-visible {
+  transform: scale(1.06);
+  box-shadow: 0 4px 14px rgba(84, 54, 113, 0.25);
+  outline: none;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(44, 36, 64, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 50;
+}
+
+.image-modal-card {
+  width: min(480px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  background: #fff;
+  border-radius: 20px;
+  padding: 1.1rem;
+  position: relative;
+  text-align: center;
+}
+
+.image-modal-close {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid #eadcf6;
+  background: #fff;
+  color: #6d5a8c;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.image-modal-close:hover {
+  background: #f5efff;
+}
+
+.image-modal-img {
+  width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  border-radius: 14px;
+  background: #f5efff;
+}
+
+.image-modal-caption {
+  margin: 0.75rem 0 0;
+  color: #3f2f5d;
+  font-weight: 600;
+  font-size: 0.9rem;
 }
 
 .product-col strong {
