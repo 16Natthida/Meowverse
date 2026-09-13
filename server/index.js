@@ -2048,11 +2048,12 @@ app.get('/api/products/public', async (req, res) => {
     // Get product IDs and fetch images
     const productIds = productRows.map((row) => row.id)
     let imageUrlMap = new Map()
+    let fullImageMap = new Map() // เก็บทั้ง url และ flavor ต่อรูป เพื่อให้ front-end จับคู่รสกับรูปได้
 
     if (productIds.length > 0) {
       const [imageRows] = await pool.query(
         `
-        SELECT prod_id AS productId, image_url AS imageUrl
+        SELECT prod_id AS productId, image_url AS imageUrl, flavor
         FROM product_images
         WHERE prod_id IN (?)
         ORDER BY sort_order ASC, img_id ASC
@@ -2064,6 +2065,10 @@ app.get('/api/products/public', async (req, res) => {
         const list = imageUrlMap.get(row.productId) || []
         list.push(row.imageUrl)
         imageUrlMap.set(row.productId, list)
+
+        const fullList = fullImageMap.get(row.productId) || []
+        fullList.push({ url: row.imageUrl, flavor: row.flavor || '' })
+        fullImageMap.set(row.productId, fullList)
       }
     }
 
@@ -2083,6 +2088,7 @@ app.get('/api/products/public', async (req, res) => {
       preorderRoundId: row.preorderRoundId ? Number(row.preorderRoundId) : null,
       chinaShippingFeeThb: Number(row.chinaShippingFeeThb) || 0,
       imageUrls: imageUrlMap.get(row.id) || [],
+      images: fullImageMap.get(row.id) || [],
       preorderEnabled: Boolean(row.preorderEnabled),
       readyToShipEnabled: Boolean(row.readyToShipEnabled),
       isRecommended: Boolean(row.isRecommended),

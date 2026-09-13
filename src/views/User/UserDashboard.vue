@@ -419,8 +419,10 @@ function goToOrders() {
 
 function openProductDetail(product) {
   selectedProduct.value = product
-  selectedFlavor.value = product.flavors?.[0] || ''
-  selectedPreviewIndex.value = 0
+  const firstFlavor = product.flavors?.[0] || ''
+  selectedFlavor.value = firstFlavor
+  const idx = findFlavorImageIndex(firstFlavor)
+  selectedPreviewIndex.value = idx !== -1 ? idx : 0
   detailQty.value = 1
 }
 
@@ -458,20 +460,41 @@ const detailImages = computed(() => {
     : (Array.isArray(product.imageUrls) ? product.imageUrls.map((url) => ({ url, flavor: '' })) : [])
 
   return rawImages
-    .map((img) => ({ url: img.url || img, flavor: img.flavor || '' }))
+    .map((img) => ({ url: img.url || img, flavor: String(img.flavor || '').trim() }))
     .filter((img) => img.url)
 })
 
-// รูปที่แสดงใน main — ใช้รูปของ thumb ที่กด
+// เทียบค่ารสชาติแบบ normalize (ตัดช่องว่าง + ไม่สนตัวพิมพ์เล็ก/ใหญ่)
+// เพื่อกันปัญหาข้อมูลใน product_images.flavor ไม่ตรงกับ products.flavors เป๊ะๆ
+function normalizeFlavorValue(value) {
+  return String(value || '').trim().toLowerCase()
+}
+
+// หา index ของรูปใน detailImages ที่ผูกกับรสที่ระบุ (อิงข้อมูลจริงใน product_images)
+function findFlavorImageIndex(flavor) {
+  const key = normalizeFlavorValue(flavor)
+  if (!key) return -1
+  return detailImages.value.findIndex((img) => normalizeFlavorValue(img.flavor) === key)
+}
+
+// ดึงรูปที่ผูกกับรสที่ระบุ (ใช้แสดงไอคอนเล็กบนปุ่มเลือกรส)
+function getFlavorImage(flavor) {
+  const idx = findFlavorImageIndex(flavor)
+  return idx !== -1 ? detailImages.value[idx] : null
+}
+
+// เลือกรส + sync รูปหลักให้ตรงกับรสที่เลือก (ใช้เป็น handler เดียวจากปุ่มเลือกรส)
+function selectFlavorAndPreview(flavor) {
+  selectedFlavor.value = flavor
+  const fi = findFlavorImageIndex(flavor)
+  selectedPreviewIndex.value = fi !== -1 ? fi : 0
+}
+
+// รูปที่แสดงใน main — อิงตาม index ของรูปที่ถูกเลือกไว้เท่านั้น (จาก thumb ที่กด หรือรสที่เลือก)
+// ไม่ยึด selectedFlavor ทับ index ที่ผู้ใช้กดเอง เพื่อไม่ให้รูปที่กดโดนแทนที่ผิดๆ
 const activeDetailImage = computed(() => {
   const list = detailImages.value
   if (list.length === 0) return ''
-
-  // ถ้าเลือกรสอยู่และมีรูปของรสนั้น ให้แสดงรูปรสก่อนเสมอ
-  if (selectedFlavor.value) {
-    const flavorImg = list.find((img) => img.flavor === selectedFlavor.value)
-    if (flavorImg) return flavorImg.url
-  }
 
   const safeIndex = Math.min(selectedPreviewIndex.value, list.length - 1)
   return list[safeIndex]?.url || ''
@@ -1290,7 +1313,7 @@ onMounted(async () => {
                     {
                       'detail-thumb--active':
                         selectedPreviewIndex === index ||
-                        (img.flavor && img.flavor === selectedFlavor),
+                        (img.flavor && normalizeFlavorValue(img.flavor) === normalizeFlavorValue(selectedFlavor)),
                     },
                   ]"
                   @click="selectedPreviewIndex = index; if (img.flavor) selectedFlavor = img.flavor"
@@ -1348,26 +1371,18 @@ onMounted(async () => {
                     type="button"
                     :class="[
                       'flavor-chip',
-                      { 'flavor-chip--active': selectedFlavor === flavor },
+                      { 'flavor-chip--active': normalizeFlavorValue(selectedFlavor) === normalizeFlavorValue(flavor) },
                       {
                         'flavor-chip--out':
                           getEffectiveItemType(selectedProduct) !== 'preorder' &&
                           getFlavorStock(flavor) === 0,
                       },
                     ]"
-                    :disabled="
-                      getEffectiveItemType(selectedProduct) !== 'preorder' &&
-                      getFlavorStock(flavor) === 0
-                    "
-                    @click="
-                      selectedFlavor = flavor;
-                      const fi = detailImages.findIndex((img) => img.flavor === flavor);
-                      if (fi !== -1) selectedPreviewIndex = fi;
-                    "
+                    @click="selectFlavorAndPreview(flavor)"
                   >
                     <img
-                      v-if="detailImages.find((img) => img.flavor === flavor)"
-                      :src="detailImages.find((img) => img.flavor === flavor).url"
+                      v-if="getFlavorImage(flavor)"
+                      :src="getFlavorImage(flavor).url"
                       :alt="flavor"
                       class="flavor-chip__img"
                     />
@@ -2806,7 +2821,7 @@ onMounted(async () => {
 
 .flavor-chip--out {
   opacity: 0.5;
-  cursor: not-allowed;
+  cursor: pointer;
   background: #f5f5f5;
   color: #999;
 }
