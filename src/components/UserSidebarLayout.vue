@@ -183,7 +183,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="user-shell__brand-copy">
             <strong>Meowverse</strong>
-            <small>ร้านค้าของเรา</small>
+            <!-- <small>ร้านค้าของเรา</small> -->
           </div>
           <button class="user-shell__close" type="button" aria-label="ปิดเมนู" @click="closeSidebar">×</button>
         </div>
@@ -272,18 +272,9 @@ onBeforeUnmount(() => {
           <span v-if="cartCount > 0" class="user-shell__cart-badge">{{ cartCount > 99 ? '99+' : cartCount }}</span>
         </RouterLink>
         <RouterLink to="/profile" class="user-shell__profile">
-          <span
-            v-if="orderNotifDot === 'red'"
-            class="user-shell__notif-dot user-shell__notif-dot--red user-shell__notif-dot--topbar"
-            aria-label="มีรายการออเดอร์ที่ต้องดำเนินการ"
-          ></span>
-          <span
-            v-else-if="orderNotifDot === 'green'"
-            class="user-shell__notif-dot user-shell__notif-dot--green user-shell__notif-dot--topbar"
-            aria-label="มีอัพเดทสถานะออเดอร์ใหม่"
-          ></span>
+
           <span class="user-shell__profile-avatar">{{ String(currentUser.username || 'U').slice(0, 1).toUpperCase() }}</span>
-          <span class="user-shell__profile-name">{{ currentUser.username || 'ผู้ใช้' }}</span>
+          <!-- <span class="user-shell__profile-name">{{ currentUser.username || 'ผู้ใช้' }}</span> -->
         </RouterLink>
       </header>
 
