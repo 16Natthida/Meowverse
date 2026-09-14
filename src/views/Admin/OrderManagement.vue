@@ -51,9 +51,13 @@ function normalizeStatus(value) {
 const statusConfig = {
   Pending: { label: 'รอดำเนินการ', color: '#f59e0b', bg: '#fffbeb' },
   Paid: { label: 'ชำระแล้ว', color: '#10b981', bg: '#ecfdf5' },
+  Slip_submitted: { label: 'รอตรวจสอบสลิป', color: '#0ea5e9', bg: '#f3e8ff' },
+  Import_slip_submitted: { label: 'รอตรวจสอบสลิปค่านำเข้า', color: '#0ea5e9', bg: '#f3e8ff' },
   Wait_for_Import_Fee: { label: 'รอนำเข้า', color: '#6366f1', bg: '#eef2ff' },
   Pending_import_fee: { label: 'รอชำระค่านำเข้า', color: '#7c3aed', bg: '#f3e8ff' },
   Ready_to_Ship: { label: 'พร้อมจัดส่ง', color: '#0ea5e9', bg: '#f0f9ff' },
+  Shipped: { label: 'กำลังจัดส่ง', color: '#0ea5e9', bg: '#f0f9ff' },
+  Delivered: { label: 'ลูกค้าได้รับแล้ว', color: '#10b981', bg: '#ecfdf5' },
   Delayed: { label: 'รอสินค้าที่แยกส่ง', color: '#d97706', bg: '#fff7ed' },
   Cancelled: { label: 'ยกเลิกแล้ว', color: '#ef4444', bg: '#fef2f2' },
 }
@@ -143,7 +147,7 @@ const filteredOrders = computed(() => {
       String(order.Order_type || '').toLowerCase() === typeFilter.value
     const matchesStatus =
       statusFilter.value === 'all' ||
-      String(order.status || '').toLowerCase() === statusFilter.value
+      String(order.status || '').toLowerCase() === statusFilter.value.toLowerCase()
     const query = searchQuery.value.trim().toLowerCase()
     const matchesSearch =
       !query ||
@@ -166,6 +170,14 @@ const orderStats = computed(() => ({
   preorder: orders.value.filter((order) => normalizeStatus(order.Order_type) === 'preorder').length,
   ready: orders.value.filter((order) => normalizeStatus(order.Order_type) === 'ready').length,
   pending: orders.value.filter((order) => normalizeStatus(order.status) === 'pending').length,
+  Shipped: orders.value.filter((order) => normalizeStatus(order.status) === 'shipped').length,
+  Delivered: orders.value.filter((order) => normalizeStatus(order.status) === 'delivered').length,
+  Slip_submitted: orders.value.filter(
+    (order) => normalizeStatus(order.status) === 'slip_submitted',
+  ).length,
+  Import_slip_submitted: orders.value.filter(
+    (order) => normalizeStatus(order.status) === 'import_slip_submitted',
+  ).length,
 }))
 
 const productSalesTotalQty = computed(() =>
@@ -540,6 +552,7 @@ onUnmounted(() => {
         <p class="kpi-label">ชำระแล้ว</p>
         <p class="kpi-value">{{ orderStats.paid }}</p>
       </article>
+      
       <article class="kpi-card">
         <p class="kpi-label">พรีออเดอร์</p>
         <p class="kpi-value">{{ orderStats.preorder }}</p>
@@ -728,10 +741,6 @@ onUnmounted(() => {
           @keyup.enter="fetchOrders"
         />
 
-        <button class="primary-btn order-filter-search-btn" type="button" @click="fetchOrders">
-          ค้นหา
-        </button>
-
         <div class="order-filter-section" style="margin-left: auto">
           <label class="order-filter-title" for="order-type-select">ประเภทสลิป</label>
           <select
@@ -755,11 +764,19 @@ onUnmounted(() => {
             <option value="all">ทั้งหมด</option>
             <option value="pending">รอดำเนินการ</option>
             <option value="paid">ชำระแล้ว</option>
+            <option value="Shipped">กำลังจัดส่ง</option>
+            <option value="Delivered">ลูกค้าได้รับแล้ว</option>
+            <option value="Slip_submitted">รอตรวจสอบสลิป</option>
+            <option value="Import_slip_submitted">รอตรวจสอบสลิปค่านำเข้า</option>
             <option value="wait_for_import_fee">รอนำเข้า</option>
             <option value="pending_import_fee">รอชำระค่านำเข้า</option>
             <option value="ready_to_ship">พร้อมจัดส่ง</option>
           </select>
         </div>
+
+        <button class="primary-btn order-filter-search-btn" type="button" @click="fetchOrders">
+          ค้นหา
+        </button>
       </div>
 
       <div v-if="loading" class="state-box">กำลังโหลดรายการออเดอร์...</div>
@@ -875,6 +892,9 @@ onUnmounted(() => {
               </div>
               <div>
                 <span>จำนวนสินค้า</span><strong>{{ selectedOrder.total_qty || 0 }} ชิ้น</strong>
+              </div>
+              <div>
+                <span>ค่าจัดส่ง</span><strong>{{ formatMoney(selectedOrder.shipping_fee || 0) }}</strong>
               </div>
             </div>
 

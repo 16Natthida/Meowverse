@@ -62,7 +62,8 @@ function renderPrintDocument(printWindow, order, logoUrl = '') {
   const items = normalizeItems(order)
   const subtotal = items.reduce((sum, item) => sum + item.total, 0)
   const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0)
-  const total = order?.total_amount != null ? numberValue(order.total_amount) : subtotal
+  const shippingFee = numberValue(order?.shipping_fee)
+  const total = order?.total_amount != null ? numberValue(order.total_amount) : subtotal + shippingFee
   const shipping = order?.saved_shipping || order?.shipping || {}
   const customerName =
     order?.full_name ||
@@ -169,8 +170,11 @@ function renderPrintDocument(printWindow, order, logoUrl = '') {
           .summary-stat strong { display: block; margin-top: 4px; color: #4f347e; font-size: 15px; }
           .totals { width: 68mm; padding: 13px 15px; border-radius: 12px; background: #f4edff; }
           .total-row { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center; }
+          .total-row + .total-row { margin-top: 8px; }
           .total-row span { color: #6f5a89; font-weight: 700; }
-          .total-row strong { color: #4f347e; font-size: 20px; text-align: right; white-space: nowrap; }
+          .total-row strong { color: #4f347e; font-size: 15px; text-align: right; white-space: nowrap; }
+          .total-row:last-child { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #d9c8f0; }
+          .total-row:last-child strong { font-size: 20px; }
           .note { margin: 34px 0 0; color: #8b7ba3; font-size: 11px; text-align: center; }
           @media print { .sheet { max-width: none; } }
         </style>
@@ -211,7 +215,9 @@ function renderPrintDocument(printWindow, order, logoUrl = '') {
               <div class="summary-stat"><span>จำนวนชิ้น</span><strong>${totalQuantity.toLocaleString('th-TH')} ชิ้น</strong></div>
             </div>
             <div class="totals">
-              <div class="total-row"><span>ยอดรวม</span><strong>${formatMoney(total)}</strong></div>
+              <div class="total-row"><span>ยอดรวมสินค้า</span><strong>${formatMoney(subtotal)}</strong></div>
+              <div class="total-row"><span>ค่าจัดส่ง</span><strong>${formatMoney(shippingFee)}</strong></div>
+              <div class="total-row"><span>ยอดรวมสุทธิ</span><strong>${formatMoney(total)}</strong></div>
             </div>
           </section>
           <p class="note">ขอบคุณที่อุดหนุน Meowverse</p>
