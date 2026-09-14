@@ -280,6 +280,9 @@ const checkout = async () => {
     const data = await res.json()
 
     // Save pending order data to sessionStorage
+    // ล้าง deadline เก่าทิ้งทุกครั้งที่เริ่ม checkout ใหม่ ไม่งั้นเวลานับถอยหลังของออเดอร์ก่อนหน้า
+    // (ที่ค้างอยู่ใน sessionStorage) จะถูกใช้ต่อทั้งที่เป็นคำสั่งซื้อคนละรายการกัน
+    sessionStorage.removeItem('pending_order_deadline')
     sessionStorage.setItem(
       'pending_order_data',
       JSON.stringify({

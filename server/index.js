@@ -9,7 +9,7 @@ import { mkdirSync } from 'node:fs'
 import { unlink } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import cartRouter from './cart.js'
-import orderRouter, { deductReadyOrderStock } from './order.js'
+import orderRouter, { deductReadyOrderStock, deleteOrder } from './order.js'
 import shippingRouter from './shipping.js'
 import { DEFAULT_PREORDER_TERMS, normalizePreorderTerms } from './preorderTerms.js'
 import { getShippingFeeSettings } from './shippingFees.js'
@@ -415,6 +415,37 @@ async function autoSyncPreorderRoundStatuses() {
   } catch (error) {
     await connection.rollback()
     console.error('[auto-sync] failed to update preorder round statuses:', error.message)
+  } finally {
+    connection.release()
+  }
+}
+
+// ─────────────────────────────────────────────
+// ยกเลิกออเดอร์ "พร้อมส่ง" (Ready) ที่ยังไม่ชำระเงินและเลยกำหนดเวลาที่ตั้งไว้ (deadline)
+// เนื่องจากออเดอร์สถานะ Pending ยังไม่ตัดสต็อก จึงลบออเดอร์ได้เลยโดยไม่ต้องคืนสต็อก
+// ─────────────────────────────────────────────
+async function autoCancelExpiredReadyOrders() {
+  const connection = await pool.getConnection()
+
+  try {
+    const [rows] = await connection.query(
+      `SELECT order_id FROM orders
+       WHERE Order_type = 'Ready' AND status = 'Pending'
+         AND deadline IS NOT NULL AND deadline < NOW()`,
+    )
+
+    for (const row of rows) {
+      await connection.beginTransaction()
+      try {
+        await deleteOrder(connection, row.order_id)
+        await connection.commit()
+      } catch (error) {
+        await connection.rollback()
+        console.error(`[auto-cancel] failed to cancel order #${row.order_id}:`, error.message)
+      }
+    }
+  } catch (error) {
+    console.error('[auto-cancel] failed to check expired ready orders:', error.message)
   } finally {
     connection.release()
   }
@@ -5338,7 +5369,22 @@ app.get('/api/admin/orders', authenticateToken, requireAdmin, async (req, res) =
         a.username,
         a.full_name,
         COUNT(od.detail_id) AS item_count,
-        COALESCE(SUM(od.qty), 0) AS total_qty
+        COALESCE(SUM(od.qty), 0) AS total_qty,
+        (
+          SELECT pr.round_name
+          FROM order_details od2
+          LEFT JOIN preorder_rounds pr ON pr.round_id = od2.preorder_round_id
+          WHERE od2.order_id = o.order_id AND od2.preorder_round_id IS NOT NULL
+          ORDER BY od2.detail_id
+          LIMIT 1
+        ) AS preorder_round_name,
+        (
+          SELECT od2.preorder_round_id
+          FROM order_details od2
+          WHERE od2.order_id = o.order_id AND od2.preorder_round_id IS NOT NULL
+          ORDER BY od2.detail_id
+          LIMIT 1
+        ) AS preorder_round_id
       FROM orders o
       LEFT JOIN accounts a ON o.user_id = a.user_id
       LEFT JOIN order_details od ON od.order_id = o.order_id
@@ -5393,6 +5439,8 @@ app.get('/api/admin/orders', authenticateToken, requireAdmin, async (req, res) =
         Order_date: row.Order_date || null,
         item_count: Number(row.item_count) || 0,
         total_qty: Number(row.total_qty) || 0,
+        preorder_round_id: row.preorder_round_id != null ? Number(row.preorder_round_id) : null,
+        preorder_round_name: row.preorder_round_name || null,
       })),
     )
   } catch (error) {
@@ -5414,6 +5462,8 @@ app.get('/api/admin/order-item-summary', authenticateToken, requireAdmin, async 
          od.flavor,
          LOWER(COALESCE(NULLIF(od.item_type, ''), CASE WHEN od.preorder_round_id IS NOT NULL THEN 'preorder' END, '')) AS item_type,
          od.Price AS unit_price,
+         od.preorder_round_id,
+         pr.round_name AS preorder_round_name,
          SUM(od.qty) AS sold_qty,
          COUNT(od.detail_id) AS line_count,
          COUNT(DISTINCT od.order_id) AS order_count,
@@ -5422,6 +5472,7 @@ app.get('/api/admin/order-item-summary', authenticateToken, requireAdmin, async 
        INNER JOIN orders o ON o.order_id = od.order_id
        LEFT JOIN products p ON p.prod_id = od.prod_id
        LEFT JOIN categories c ON c.cat_id = p.cat_id
+       LEFT JOIN preorder_rounds pr ON pr.round_id = od.preorder_round_id
        WHERE o.order_id IS NOT NULL
        GROUP BY
          od.prod_id,
@@ -5429,7 +5480,9 @@ app.get('/api/admin/order-item-summary', authenticateToken, requireAdmin, async 
          c.cat_name,
          od.flavor,
          LOWER(COALESCE(NULLIF(od.item_type, ''), CASE WHEN od.preorder_round_id IS NOT NULL THEN 'preorder' END, '')),
-         od.Price
+         od.Price,
+         od.preorder_round_id,
+         pr.round_name
        ORDER BY sold_qty DESC, name ASC, od.flavor ASC, item_type ASC, unit_price ASC`,
     )
 
@@ -5485,6 +5538,8 @@ app.get('/api/admin/order-item-summary', authenticateToken, requireAdmin, async 
         image_url: resolveRowImage(row),
         item_type: row.item_type || '',
         unit_price: Number(row.unit_price) || 0,
+        preorder_round_id: row.preorder_round_id != null ? Number(row.preorder_round_id) : null,
+        preorder_round_name: row.preorder_round_name || null,
         sold_qty: Number(row.sold_qty) || 0,
         line_count: Number(row.line_count) || 0,
         order_count: Number(row.order_count) || 0,
@@ -5891,6 +5946,19 @@ async function startServer() {
     }, 60 * 1000)
 
     preorderRoundAutoCloseTimer.unref?.()
+
+    autoCancelExpiredReadyOrders().catch((error) => {
+      console.error('[auto-cancel] initial run failed:', error.message)
+    })
+
+    // เช็คทุก 15 วินาทีเพื่อให้ออเดอร์ที่หมดเวลาถูกยกเลิกเร็วพอกับตัวนับถอยหลังฝั่งลูกค้า
+    const readyOrderAutoCancelTimer = setInterval(() => {
+      autoCancelExpiredReadyOrders().catch((error) => {
+        console.error('[auto-cancel] scheduled run failed:', error.message)
+      })
+    }, 15 * 1000)
+
+    readyOrderAutoCancelTimer.unref?.()
 
     app.listen(port, host, () => {
   console.log(`API server running at ${host}:${port}`)

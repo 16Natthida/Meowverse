@@ -101,7 +101,11 @@ async function getPostponeDeadlineColumn(connection) {
   return postponeDeadlineColumnName
 }
 
-async function deleteOrder(connection, orderId) {
+// เวลาที่ลูกค้าต้องชำระเงินให้เสร็จหลังสร้างออเดอร์ "พร้อมส่ง" (Ready)
+// ต้องตรงกับ READY_RESERVATION_WINDOW_MS ฝั่ง frontend (src/views/User/ReadyPayment.vue)
+export const READY_RESERVATION_WINDOW_MS = 60 * 60 * 1000
+
+export async function deleteOrder(connection, orderId) {
   await connection.query('DELETE FROM payment WHERE order_id = ?', [orderId])
   await connection.query('DELETE FROM shipping WHERE order_id = ?', [orderId])
   await connection.query('DELETE FROM order_details WHERE order_id = ?', [orderId])
@@ -577,17 +581,21 @@ router.post('/confirm-payment', async (req, res) => {
 
     const shippingFee = await getShippingFee(mergedItems, connection)
     const totalAmount = subtotalAmount + (hasPreorder ? chinaShippingTotalThb : shippingFee)
+    // ออเดอร์ "พร้อมส่ง" (Ready) ต้องชำระเงินภายในเวลาที่กำหนด ไม่งั้นระบบจะยกเลิกให้อัตโนมัติ
+    const readyDeadline =
+      orderType === 'Ready' ? new Date(Date.now() + READY_RESERVATION_WINDOW_MS) : null
     const [orderResult] = await connection.query(
       `INSERT INTO orders
-         (user_id, total_amount, shipping_fee, status, Order_type,
+         (user_id, total_amount, shipping_fee, status, Order_type, deadline,
           china_shipping_total_thb)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
         user_id,
         totalAmount,
         shippingFee,
         'Pending',
         orderType,
+        readyDeadline,
         chinaShippingTotalThb,
       ],
     )

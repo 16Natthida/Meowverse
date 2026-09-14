@@ -138,7 +138,7 @@ function updateReservationTimer() {
       return
     }
 
-    showNotice('หมดเวลาชำระเงิน ระบบคืนสินค้าเข้าสต็อกแล้ว', 'error')
+    showNotice('หมดเวลาชำระเงิน ระบบยกเลิกคำสั่งซื้อนี้ให้แล้ว', 'error')
     fetchOrder().finally(() => {
       setTimeout(() => router.push('/dashboard'), 1200)
     })

@@ -279,7 +279,8 @@ const aggregatedSelectedProductRows = computed(() => {
     const flavor = String(r.flavor || '').trim()
     const type = String(r.item_type || '').trim()
     const unitPrice = Number(r.unit_price || 0)
-    const key = `${flavor}|${type}|${unitPrice}`
+    const roundId = r.preorder_round_id != null ? String(r.preorder_round_id) : ''
+    const key = `${flavor}|${type}|${unitPrice}|${roundId}`
 
     if (!map.has(key)) {
       map.set(key, {
@@ -290,6 +291,8 @@ const aggregatedSelectedProductRows = computed(() => {
         total_amount: Number(r.sold_qty || 0) * unitPrice,
         category_name: r.category_name,
         name: r.name,
+        preorder_round_id: r.preorder_round_id ?? null,
+        preorder_round_name: r.preorder_round_name || '',
       })
       continue
     }
@@ -770,6 +773,7 @@ onUnmounted(() => {
               <th>ออเดอร์</th>
               <th>ลูกค้า</th>
               <th>ประเภท</th>
+              <th>รอบพรีออเดอร์</th>
               <th>ยอดเงิน</th>
               <th>สถานะ</th>
               <th>รายการ</th>
@@ -796,6 +800,12 @@ onUnmounted(() => {
                   ]"
                   >{{ getOrderTypeLabel(order.Order_type) }}</span
                 >
+              </td>
+              <td>
+                <span v-if="order.Order_type === 'Preorder' && order.preorder_round_name" class="round-badge">
+                  {{ order.preorder_round_name }}
+                </span>
+                <span v-else class="round-badge round-badge--empty">-</span>
               </td>
               <td>{{ formatMoney(order.total_amount) }}</td>
               <td>
@@ -830,6 +840,9 @@ onUnmounted(() => {
               <p>
                 {{ selectedOrder.full_name || selectedOrder.username || '-' }} ·
                 {{ getOrderTypeLabel(selectedOrder.Order_type) }}
+                <template v-if="selectedOrder.Order_type === 'Preorder' && selectedOrder.preorder_round_name">
+                  · รอบ: {{ selectedOrder.preorder_round_name }}
+                </template>
               </p>
             </div>
             <div class="modal-head__actions">
@@ -941,20 +954,26 @@ onUnmounted(() => {
 
           <div class="items-list">
             <div
-              class="item-row"
+              class="detail-row"
               v-for="row in aggregatedSelectedProductRows"
-              :key="(row.flavor || 'nof') + '-' + row.item_type"
+              :key="(row.flavor || 'nof') + '-' + row.item_type + '-' + (row.preorder_round_id ?? 'none')"
             >
-              <div>
+              <div class="detail-row__name">
                 <strong
                   >{{ row.name }} <small v-if="row.flavor">· {{ row.flavor }}</small></strong
                 >
                 <p v-if="row.category_name">{{ row.category_name }}</p>
               </div>
-              <div>{{ formatMoney(row.unit_price) }}</div>
-              <div>x{{ Number(row.sold_qty || 0) }}</div>
-              <div>{{ formatMoney(row.total_amount) }}</div>
-              <div>
+              <div class="detail-row__cell">{{ formatMoney(row.unit_price) }}</div>
+              <div class="detail-row__cell">x{{ Number(row.sold_qty || 0) }}</div>
+              <div class="detail-row__cell detail-row__cell--strong">{{ formatMoney(row.total_amount) }}</div>
+              <div class="detail-row__cell">
+                <span v-if="row.item_type === 'preorder' && row.preorder_round_name" class="round-badge">
+                  {{ row.preorder_round_name }}
+                </span>
+                <span v-else class="round-badge round-badge--empty">-</span>
+              </div>
+              <div class="detail-row__cell">
                 <span
                   :class="[
                     'type-chip',
@@ -1396,9 +1415,29 @@ onUnmounted(() => {
 
 .orders-table {
   width: 100%;
-  min-width: 880px;
+  min-width: 980px;
   border-collapse: collapse;
+  table-layout: fixed;
 }
+
+.orders-table th:nth-child(1),
+.orders-table td:nth-child(1) { width: 8%; }
+.orders-table th:nth-child(2),
+.orders-table td:nth-child(2) { width: 14%; }
+.orders-table th:nth-child(3),
+.orders-table td:nth-child(3) { width: 11%; }
+.orders-table th:nth-child(4),
+.orders-table td:nth-child(4) { width: 16%; }
+.orders-table th:nth-child(5),
+.orders-table td:nth-child(5) { width: 10%; }
+.orders-table th:nth-child(6),
+.orders-table td:nth-child(6) { width: 13%; }
+.orders-table th:nth-child(7),
+.orders-table td:nth-child(7) { width: 8%; }
+.orders-table th:nth-child(8),
+.orders-table td:nth-child(8) { width: 11%; }
+.orders-table th:nth-child(9),
+.orders-table td:nth-child(9) { width: 9%; }
 
 .orders-table th,
 .orders-table td {
@@ -1439,6 +1478,25 @@ onUnmounted(() => {
 .type-chip--ready {
   background: #e5f8ef;
   color: #15803d;
+}
+
+.round-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  background: #f1e9fb;
+  color: #6d4fa0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.round-badge--empty {
+  background: transparent;
+  color: #b7aecb;
+  font-weight: 500;
+  padding-left: 0;
 }
 
 .status-pill {
@@ -1704,6 +1762,50 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
+.detail-row {
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: 2fr 0.85fr 0.6fr 0.9fr 1fr 0.85fr;
+  align-items: center;
+  padding: 0.85rem;
+  border: 1px solid #ede4fb;
+  border-radius: 14px;
+}
+
+.detail-row__name strong {
+  display: block;
+  word-break: break-word;
+  line-height: 1.35;
+}
+
+.detail-row__name p {
+  margin: 0.2rem 0 0;
+  color: #8b7aa3;
+  font-size: 0.82rem;
+}
+
+.detail-row__cell {
+  font-size: 0.85rem;
+  color: #4a3d63;
+}
+
+.detail-row__cell--strong {
+  font-weight: 700;
+  color: #2c2440;
+}
+
+@media (max-width: 720px) {
+  .detail-row {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
+  }
+
+  .detail-row__cell {
+    display: flex;
+    justify-content: space-between;
+  }
+}
+
 @media (max-width: 960px) {
   .hero-panel {
     flex-direction: column;
@@ -1817,10 +1919,11 @@ onUnmounted(() => {
   .orders-table td:nth-child(1)::before { content: 'ออเดอร์'; }
   .orders-table td:nth-child(2)::before { content: 'ลูกค้า'; }
   .orders-table td:nth-child(3)::before { content: 'ประเภท'; }
-  .orders-table td:nth-child(4)::before { content: 'ยอดเงิน'; }
-  .orders-table td:nth-child(5)::before { content: 'สถานะ'; }
-  .orders-table td:nth-child(6)::before { content: 'รายการ'; }
-  .orders-table td:nth-child(7)::before { content: 'วันที่'; }
+  .orders-table td:nth-child(4)::before { content: 'รอบพรีออเดอร์'; }
+  .orders-table td:nth-child(5)::before { content: 'ยอดเงิน'; }
+  .orders-table td:nth-child(6)::before { content: 'สถานะ'; }
+  .orders-table td:nth-child(7)::before { content: 'รายการ'; }
+  .orders-table td:nth-child(8)::before { content: 'วันที่'; }
   .summary-table td:nth-child(1)::before { content: 'สินค้า'; }
   .summary-table td:nth-child(2)::before { content: 'ประเภท'; }
   .summary-table td:nth-child(3)::before { content: 'ราคา/ชิ้น'; }

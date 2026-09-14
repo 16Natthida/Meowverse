@@ -336,6 +336,7 @@ onMounted(() => {
             <tr>
               <th>รหัสชำระ</th>
               <th>ออเดอร์</th>
+              <th>รหัสสมาชิก</th>
               <th>ประเภท</th>
               <th>ประเภทสลิป</th>
               <th>ยอดเงิน</th>
@@ -351,6 +352,9 @@ onMounted(() => {
               <td>#{{ payment.pay_id }}</td>
               <td>
                 <strong>#{{ payment.order_id }}</strong>
+              </td>
+              <td>
+                <span class="member-code">{{ payment.username || '-' }}</span>
               </td>
               <td>
                 <span
@@ -434,7 +438,10 @@ onMounted(() => {
       <div v-if="selectedSlip" class="slip-modal-overlay" @click.self="closeSlip">
         <div class="slip-modal">
           <div class="slip-modal-head">
-            <h3>สลิปออเดอร์ #{{ selectedSlip.order_id }}</h3>
+            <div>
+              <h3>สลิปออเดอร์ #{{ selectedSlip.order_id }}</h3>
+              <p class="slip-modal-member">รหัสสมาชิก: {{ selectedSlip.username || '-' }}</p>
+            </div>
             <button class="close-btn" type="button" @click="closeSlip">✕</button>
           </div>
 
@@ -883,9 +890,33 @@ onMounted(() => {
 
 .slip-table {
   width: 100%;
-  min-width: 900px;
+  min-width: 980px;
   border-collapse: collapse;
+  table-layout: fixed;
 }
+
+.slip-table th:nth-child(1),
+.slip-table td:nth-child(1) { width: 8%; }
+.slip-table th:nth-child(2),
+.slip-table td:nth-child(2) { width: 8%; }
+.slip-table th:nth-child(3),
+.slip-table td:nth-child(3) { width: 9%; }
+.slip-table th:nth-child(4),
+.slip-table td:nth-child(4) { width: 10%; }
+.slip-table th:nth-child(5),
+.slip-table td:nth-child(5) { width: 11%; }
+.slip-table th:nth-child(6),
+.slip-table td:nth-child(6) { width: 9%; }
+.slip-table th:nth-child(7),
+.slip-table td:nth-child(7) { width: 9%; }
+.slip-table th:nth-child(8),
+.slip-table td:nth-child(8) { width: 12%; }
+.slip-table th:nth-child(9),
+.slip-table td:nth-child(9) { width: 9%; }
+.slip-table th:nth-child(10),
+.slip-table td:nth-child(10) { width: 8%; }
+.slip-table th:nth-child(11),
+.slip-table td:nth-child(11) { width: 7%; }
 
 .slip-table th,
 .slip-table td {
@@ -1020,9 +1051,25 @@ onMounted(() => {
 .slip-modal-head {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
   gap: 0.5rem;
   padding: 1rem;
   border-bottom: 1px solid #eee;
+}
+
+.slip-modal-member {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  color: #7c5db0;
+  font-weight: 600;
+}
+
+.member-code {
+  display: inline-block;
+  color: #6b7280;
+  font-weight: 600;
+  font-size: 0.85rem;
+  white-space: nowrap;
 }
 
 .slip-modal-body {
@@ -1143,13 +1190,14 @@ onMounted(() => {
 
   .slip-table td:nth-child(1)::before { content: 'รหัสชำระเงิน'; }
   .slip-table td:nth-child(2)::before { content: 'ออเดอร์'; }
-  .slip-table td:nth-child(3)::before { content: 'ประเภท'; }
-  .slip-table td:nth-child(4)::before { content: 'ยอดเงิน'; }
-  .slip-table td:nth-child(5)::before { content: 'วิธีชำระ'; }
-  .slip-table td:nth-child(6)::before { content: 'วันที่'; }
-  .slip-table td:nth-child(7)::before { content: 'สถานะ'; }
-  .slip-table td:nth-child(8)::before { content: 'หลักฐาน'; }
-  .slip-table td:nth-child(9)::before { content: 'จัดการ'; }
+  .slip-table td:nth-child(3)::before { content: 'รหัสสมาชิก'; }
+  .slip-table td:nth-child(4)::before { content: 'ประเภท'; }
+  .slip-table td:nth-child(5)::before { content: 'ยอดเงิน'; }
+  .slip-table td:nth-child(6)::before { content: 'วิธีชำระ'; }
+  .slip-table td:nth-child(7)::before { content: 'วันที่'; }
+  .slip-table td:nth-child(8)::before { content: 'สถานะ'; }
+  .slip-table td:nth-child(9)::before { content: 'หลักฐาน'; }
+  .slip-table td:nth-child(10)::before { content: 'จัดการ'; }
 
   .slip-table td:last-child {
     display: block;
