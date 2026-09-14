@@ -473,6 +473,7 @@ const fetchOrder = async () => {
 
     sessionStorage.removeItem('pending_order_data')
     sessionStorage.removeItem('pending_order_deadline')
+  } catch (err) {
     error.value = err.message
   } finally {
     loading.value = false
@@ -573,6 +574,51 @@ const confirmPayment = async () => {
     showNotice(err.message, 'error')
   } finally {
     loading.value = false
+  }
+}
+
+// ── ยกเลิกออเดอร์ ──
+// อนุญาตให้ยกเลิกได้เฉพาะก่อนที่แอดมินจะยืนยันการชำระเงิน (เหมือนเงื่อนไขฝั่ง backend)
+// เพื่อให้ลูกค้าที่กดสั่งซื้อแต่ไม่ได้ตั้งใจจะจ่ายจริง สามารถคืนสต็อกให้คนอื่นได้ทันที
+// โดยไม่ต้องรอให้ครบเวลานับถอยหลัง 1 ชั่วโมง
+const isCancelling = ref(false)
+const isCancellable = computed(() => {
+  if (!order.value?.order_id) return false
+  if (String(order.value?.Order_type || '').toLowerCase() !== 'ready') return false
+  const normalized = String(order.value?.status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, ' ')
+  return ['pending', 'slip submitted', 'invalid slip'].includes(normalized)
+})
+
+async function cancelOrder() {
+  if (!isCancellable.value || isCancelling.value) return
+
+  const confirmed = window.confirm(
+    'ยืนยันยกเลิกคำสั่งซื้อนี้ใช่ไหม?\nสต็อกสินค้าที่จองไว้จะถูกคืนทันทีเพื่อให้ลูกค้าท่านอื่นสั่งซื้อได้',
+  )
+  if (!confirmed) return
+
+  try {
+    isCancelling.value = true
+    const res = await fetch(`${API_BASE_URL}/orders/${order.value.order_id}/cancel`, {
+      method: 'PATCH',
+    })
+    const data = await res.json().catch(() => null)
+    if (!res.ok) throw new Error(data?.error || 'ยกเลิกคำสั่งซื้อไม่สำเร็จ')
+
+    if (reservationTimer) {
+      clearInterval(reservationTimer)
+      reservationTimer = null
+    }
+
+    showNotice('ยกเลิกคำสั่งซื้อเรียบร้อยแล้ว', 'success')
+    setTimeout(() => router.push('/order-list'), 1500)
+  } catch (err) {
+    showNotice(err.message || 'ยกเลิกคำสั่งซื้อไม่สำเร็จ', 'error')
+  } finally {
+    isCancelling.value = false
   }
 }
 
@@ -876,6 +922,15 @@ onUnmounted(() => {
               <hr class="divider" />
               <button type="button" class="btn-checkout" @click="onPrimaryAction" :disabled="loading || isShippingLocked">
                 {{ primaryButtonLabel }}
+              </button>
+              <button
+                v-if="isCancellable"
+                type="button"
+                class="btn-cancel-order"
+                @click="cancelOrder"
+                :disabled="isCancelling"
+              >
+                {{ isCancelling ? 'กำลังยกเลิก...' : 'ยกเลิกคำสั่งซื้อนี้' }}
               </button>
             </div>
           </div>
@@ -1573,6 +1628,27 @@ onUnmounted(() => {
 }
 .btn-checkout:disabled {
   opacity: 0.72;
+  cursor: not-allowed;
+}
+.btn-cancel-order {
+  margin-top: 10px;
+  padding: 12px 16px;
+  background: #fff;
+  color: #e04b4b;
+  border: 1.5px solid #f3c9c9;
+  border-radius: 14px;
+  font-weight: 700;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    opacity 0.2s ease;
+}
+.btn-cancel-order:hover:not(:disabled) {
+  background: #fff5f5;
+  border-color: #e04b4b;
+}
+.btn-cancel-order:disabled {
+  opacity: 0.6;
   cursor: not-allowed;
 }
 .state-wrap {

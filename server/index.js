@@ -9,7 +9,7 @@ import { mkdirSync } from 'node:fs'
 import { unlink } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import cartRouter from './cart.js'
-import orderRouter, { deductReadyOrderStock, deleteOrder } from './order.js'
+import orderRouter, { deleteOrder, restoreReadyOrderStock } from './order.js'
 import shippingRouter from './shipping.js'
 import { DEFAULT_PREORDER_TERMS, normalizePreorderTerms } from './preorderTerms.js'
 import { getShippingFeeSettings } from './shippingFees.js'
@@ -421,8 +421,11 @@ async function autoSyncPreorderRoundStatuses() {
 }
 
 // ─────────────────────────────────────────────
-// ยกเลิกออเดอร์ "พร้อมส่ง" (Ready) ที่ยังไม่ชำระเงินและเลยกำหนดเวลาที่ตั้งไว้ (deadline)
-// เนื่องจากออเดอร์สถานะ Pending ยังไม่ตัดสต็อก จึงลบออเดอร์ได้เลยโดยไม่ต้องคืนสต็อก
+// ยกเลิกออเดอร์ "พร้อมส่ง" (Ready) ที่ยังไม่ชำระเงินสำเร็จและเลยกำหนดเวลาที่ตั้งไว้ (deadline)
+// เนื่องจากตอนนี้สต็อกถูกตัดไปแล้วตั้งแต่ตอนสร้างออเดอร์ (กดสั่งซื้อ) จึงต้องคืนสต็อก
+// ก่อนลบออเดอร์เสมอ ครอบคลุมทั้งออเดอร์ที่ยังไม่แนบสลิป (Pending) และออเดอร์ที่แนบสลิป
+// แล้วแต่ถูกแอดมินปฏิเสธ (Invalid slip) เพราะถือว่ายังไม่ชำระเงินสำเร็จเช่นกัน
+// ส่วนออเดอร์ที่แนบสลิปรอตรวจสอบอยู่ (Slip_submitted) จะไม่ถูกยกเลิกอัตโนมัติ
 // ─────────────────────────────────────────────
 async function autoCancelExpiredReadyOrders() {
   const connection = await pool.getConnection()
@@ -430,13 +433,14 @@ async function autoCancelExpiredReadyOrders() {
   try {
     const [rows] = await connection.query(
       `SELECT order_id FROM orders
-       WHERE Order_type = 'Ready' AND status = 'Pending'
+       WHERE Order_type = 'Ready' AND status IN ('Pending', 'Invalid slip')
          AND deadline IS NOT NULL AND deadline < NOW()`,
     )
 
     for (const row of rows) {
       await connection.beginTransaction()
       try {
+        await restoreReadyOrderStock(connection, row.order_id)
         await deleteOrder(connection, row.order_id)
         await connection.commit()
       } catch (error) {
@@ -3516,12 +3520,8 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
         return res.status(409).json({ error: 'ออเดอร์นี้ส่งหลักฐานการชำระเงินไปแล้วหรืออยู่ระหว่างตรวจสอบ' })
       }
 
-      // พร้อมส่งจะตัดสต็อกเมื่อผู้ใช้แนบสลิปและกดบันทึกเท่านั้น
-      const stockResult = await deductReadyOrderStock(connection, order_id)
-      if (!stockResult.ok) {
-        await connection.rollback()
-        return res.status(409).json({ error: stockResult.error })
-      }
+      // สต็อกของออเดอร์พร้อมส่งถูกตัดไปแล้วตั้งแต่ตอนกดสั่งซื้อ (สร้างออเดอร์)
+      // จึงไม่ต้องตัดสต็อกซ้ำอีกครั้งตอนแนบสลิป
     }
 
     if (effectiveShippingFee > 0 && Number(orderData.shipping_fee) <= 0) {

@@ -278,37 +278,55 @@ const checkout = async () => {
     }
 
     const data = await res.json()
-
-    // Save pending order data to sessionStorage
-    // ล้าง deadline เก่าทิ้งทุกครั้งที่เริ่ม checkout ใหม่ ไม่งั้นเวลานับถอยหลังของออเดอร์ก่อนหน้า
-    // (ที่ค้างอยู่ใน sessionStorage) จะถูกใช้ต่อทั้งที่เป็นคำสั่งซื้อคนละรายการกัน
-    sessionStorage.removeItem('pending_order_deadline')
-    sessionStorage.setItem(
-      'pending_order_data',
-      JSON.stringify({
-        user_id: userId,
-        items: activeItems.value,
-        order_type: data.order_type,
-        shipping_fee: data.shipping_fee,
-        total_amount: data.total_amount,
-        item_count: data.item_count,
-        order_id: null,
-      }),
-    )
-
-    showNotice('กำลังไปหน้าชำระเงิน...', 'success')
-
-    // Redirect to temp payment pages (without order_id)
     const newOrderType = String(data.order_type || data.orderType || '').toLowerCase()
 
-    setTimeout(() => {
-      if (newOrderType === 'preorder') {
-        router.push('/preorder-payment-temp')
-      } else {
-        // Ready stock: create the order only after the user submits the slip.
-        router.push('/ready-payment-temp')
-      }
-    }, 1500)
+    if (newOrderType === 'preorder') {
+      // พรีออเดอร์: ยังคงสร้างออเดอร์จริงตอนแนบสลิปเหมือนเดิม (ไม่เปลี่ยนพฤติกรรม)
+      // ล้าง deadline เก่าทิ้งทุกครั้งที่เริ่ม checkout ใหม่ ไม่งั้นเวลานับถอยหลังของออเดอร์ก่อนหน้า
+      // (ที่ค้างอยู่ใน sessionStorage) จะถูกใช้ต่อทั้งที่เป็นคำสั่งซื้อคนละรายการกัน
+      sessionStorage.removeItem('pending_order_deadline')
+      sessionStorage.setItem(
+        'pending_order_data',
+        JSON.stringify({
+          user_id: userId,
+          items: activeItems.value,
+          order_type: data.order_type,
+          shipping_fee: data.shipping_fee,
+          total_amount: data.total_amount,
+          item_count: data.item_count,
+          order_id: null,
+        }),
+      )
+
+      showNotice('กำลังไปหน้าชำระเงิน...', 'success')
+      setTimeout(() => router.push('/preorder-payment-temp'), 1500)
+      return
+    }
+
+    // สินค้าพร้อมส่ง: สร้างออเดอร์จริงและตัดสต็อกทันทีตอนกดสั่งซื้อ
+    // (ไม่ต้องรอให้แนบสลิปก่อน) เพื่อให้เวลานับถอยหลัง 1 ชั่วโมงเริ่มนับทันที
+    // และยังคงนับต่อเนื่องแม้ลูกค้าจะออกจากหน้านี้แล้วกลับมาใหม่
+    const confirmRes = await fetch(`${API_BASE_URL}/orders/confirm-payment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+
+    if (!confirmRes.ok) {
+      const body = await confirmRes.json().catch(() => ({}))
+      throw new Error(body.error ?? body.message ?? `HTTP ${confirmRes.status}`)
+    }
+
+    const orderData = await confirmRes.json()
+    sessionStorage.removeItem('pending_order_data')
+    sessionStorage.removeItem('pending_order_deadline')
+
+    showNotice('สร้างออเดอร์สำเร็จ กำลังไปหน้าชำระเงิน...', 'success')
+    setTimeout(() => router.push(`/ready-payment/${orderData.order_id}`), 1500)
+
+    // อัปเดตตะกร้าฝั่ง client ให้ตรงกับฝั่งเซิร์ฟเวอร์ (รายการที่สั่งซื้อแล้วถูกลบออกจากตะกร้า)
+    const orderedCartIds = new Set(activeItems.value.map((it) => it.cart_id))
+    cartItems.value = cartItems.value.filter((it) => !orderedCartIds.has(it.cart_id))
   } catch (err) {
     console.error('[checkout] Error:', err)
     const msg = String(err?.message || err || '')

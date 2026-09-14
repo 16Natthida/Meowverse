@@ -659,6 +659,27 @@ router.post('/confirm-payment', async (req, res) => {
       }
     }
 
+    // ออเดอร์ "พร้อมส่ง" ต้องตัดสต็อกทันทีตอนสร้างออเดอร์ (ไม่ต้องรอแนบสลิป)
+    // เพื่อจองสินค้าไว้ตลอดช่วงเวลานับถอยหลัง 1 ชั่วโมง (READY_RESERVATION_WINDOW_MS)
+    // หากสต็อกไม่พอ ให้ rollback ทั้งออเดอร์ทันที
+    if (orderType === 'Ready') {
+      const stockResult = await deductReadyOrderStock(connection, orderId)
+      if (!stockResult.ok) {
+        await connection.rollback()
+        return res.status(409).json({ error: stockResult.error })
+      }
+
+      // ลบรายการที่เพิ่งสั่งซื้อออกจากตะกร้าทันที เพื่อไม่ให้กดสั่งซื้อรายการเดิมซ้ำ
+      // (ไม่ต้องรอให้แนบสลิปก่อนเหมือนเดิม เพราะออเดอร์ถูกสร้างจริงและตัดสต็อกไปแล้ว)
+      if (selectedCartIds.length > 0) {
+        const cartPlaceholders = selectedCartIds.map(() => '?').join(',')
+        await connection.query(
+          `DELETE FROM cart WHERE user_id = ? AND cart_id IN (${cartPlaceholders})`,
+          [user_id, ...selectedCartIds],
+        )
+      }
+    }
+
     await connection.commit()
 
     res.status(201).json({
@@ -1277,11 +1298,9 @@ router.patch('/:order_id/cancel', async (req, res) => {
       })
     }
 
-    // คืนสต็อกเฉพาะเมื่อเคยส่งสลิปแล้ว เพราะออเดอร์ Pending ยังไม่ตัดสต็อก
-    if (
-      String(order.Order_type || '').toLowerCase() === 'ready' &&
-      normalizedStatus === 'slip submitted'
-    ) {
+    // ออเดอร์ "พร้อมส่ง" ตัดสต็อกไปแล้วตั้งแต่ตอนสร้างออเดอร์ (ทุกสถานะที่ยกเลิกได้)
+    // จึงต้องคืนสต็อกทุกครั้งที่ยกเลิก ไม่ว่าจะเคยส่งสลิปแล้วหรือยังก็ตาม
+    if (String(order.Order_type || '').toLowerCase() === 'ready') {
       await restoreReadyOrderStock(connection, order.order_id)
     }
 
@@ -1412,16 +1431,12 @@ router.patch('/:order_id/reject-slip', async (req, res) => {
     }
 
     const currentStatus = String(rows[0].status || '').trim()
-    const normalizedStatus = currentStatus.toLowerCase().replace(/[_\s]+/g, ' ')
     const isImportFeeRound = ['Pending_import_fee', 'Import_slip_submitted'].includes(currentStatus)
     const nextStatus = isImportFeeRound ? 'Invalid import slip' : 'Invalid slip'
 
-    if (
-      String(rows[0].Order_type || '').toLowerCase() === 'ready' &&
-      normalizedStatus === 'slip submitted'
-    ) {
-      await restoreReadyOrderStock(connection, order_id)
-    }
+    // หมายเหตุ: ไม่คืนสต็อกตรงนี้แล้ว เพราะสต็อกของออเดอร์ "พร้อมส่ง" ถูกจองไว้
+    // ตั้งแต่ตอนสร้างออเดอร์ และยังต้องจองต่อไปจนกว่าลูกค้าจะยกเลิกเอง หรือหมดเวลา
+    // นับถอยหลัง (ซึ่ง autoCancelExpiredReadyOrders จะเป็นคนคืนสต็อกให้ตอนนั้น)
 
     await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [nextStatus, order_id])
     await connection.commit()

@@ -90,6 +90,8 @@ const searchQuery = ref('')
 const cartNotice = ref({ msg: '', type: '' })
 const cartLoading = ref({})
 const cartCount = ref(0) // จำนวนสินค้าใน cart badge
+const cartIconRef = ref(null)
+const cartBump = ref(false)
 const orderNotifDot = ref('') // 'red' | 'green' | ''
 const selectedProduct = ref(null)
 const selectedFlavor = ref('')
@@ -327,8 +329,52 @@ const fetchPreorderRounds = async () => {
   }
 }
 
+// ── ANIMATION: บินสินค้าไปที่ไอคอนตะกร้า ──
+function bumpCart() {
+  cartBump.value = true
+  setTimeout(() => {
+    cartBump.value = false
+  }, 380)
+}
+
+function flyToCart(sourceEl, imageUrl) {
+  if (!sourceEl || !cartIconRef.value || typeof document === 'undefined') return
+
+  const startRect = sourceEl.getBoundingClientRect()
+  const endRect = cartIconRef.value.getBoundingClientRect()
+
+  const flyer = document.createElement('div')
+  flyer.className = 'fly-to-cart-item'
+  if (imageUrl) {
+    flyer.style.backgroundImage = `url("${imageUrl}")`
+  }
+
+  const size = 44
+  flyer.style.left = `${startRect.left + startRect.width / 2 - size / 2}px`
+  flyer.style.top = `${startRect.top + startRect.height / 2 - size / 2}px`
+
+  const deltaX = endRect.left + endRect.width / 2 - (startRect.left + startRect.width / 2)
+  const deltaY = endRect.top + endRect.height / 2 - (startRect.top + startRect.height / 2)
+  flyer.style.setProperty('--fly-x', `${deltaX}px`)
+  flyer.style.setProperty('--fly-y', `${deltaY}px`)
+
+  document.body.appendChild(flyer)
+
+  const cleanup = () => {
+    flyer.remove()
+    bumpCart()
+  }
+  flyer.addEventListener('animationend', cleanup, { once: true })
+  // กันไว้เผื่อ animationend ไม่ยิง (เช่นถูกซ่อนแท็บระหว่างเล่นอนิเมชัน)
+  setTimeout(cleanup, 900)
+
+  requestAnimationFrame(() => {
+    flyer.classList.add('fly-to-cart-item--active')
+  })
+}
+
 // ── ADD TO CART ──
-const addToCart = async (product, flavor = '', qty = 1) => {
+const addToCart = async (product, flavor = '', qty = 1, sourceEvent = null) => {
   const user = currentUser.value
   if (!user?.id) {
     showNotice('กรุณาเข้าสู่ระบบก่อนหยิบสินค้า', 'warn')
@@ -398,6 +444,13 @@ const addToCart = async (product, flavor = '', qty = 1) => {
       `เพิ่ม "${product.name}${payload.flavor ? ` (${payload.flavor})` : ''}" ลงตะกร้าแล้ว!`,
       'success',
     )
+
+    if (sourceEvent?.currentTarget) {
+      flyToCart(sourceEvent.currentTarget, product.image || null)
+    } else {
+      bumpCart()
+    }
+
     await fetchCartCount() // อัปเดต badge
     window.dispatchEvent(new CustomEvent('meowverse:cart-updated'))
   } catch (err) {
@@ -532,14 +585,20 @@ function removeBatchSelection(index) {
   batchSelections.value.splice(index, 1)
 }
 
-async function addBatchToCart() {
+async function addBatchToCart(event) {
   if (!selectedProduct.value || batchSelections.value.length === 0) return
   for (const sel of batchSelections.value) {
     try {
-      await addToCart(selectedProduct.value, sel.flavor, sel.qty)
+      // ส่ง sourceEvent เป็น null ระหว่างวนลูป เพราะจะเล่นอนิเมชันบินแค่ครั้งเดียวหลังเพิ่มครบ
+      await addToCart(selectedProduct.value, sel.flavor, sel.qty, null)
     } catch (e) {
       console.error('addBatchToCart error', e)
     }
+  }
+  if (event?.currentTarget) {
+    flyToCart(event.currentTarget, selectedProduct.value.image || null)
+  } else {
+    bumpCart()
   }
   batchSelections.value = []
 }
@@ -916,7 +975,13 @@ onMounted(async () => {
           </svg>
         </button>
 
-        <button class="cart-icon-btn" @click="goToCart" title="ตะกร้าสินค้า">
+        <button
+          ref="cartIconRef"
+          class="cart-icon-btn"
+          :class="{ 'cart-icon-btn--bump': cartBump }"
+          @click="goToCart"
+          title="ตะกร้าสินค้า"
+        >
           <svg
             viewBox="0 0 24 24"
             fill="none"
@@ -1215,7 +1280,7 @@ onMounted(async () => {
               class="btn-cart"
               :disabled="cartLoading[product.id] || isOutOfStockForCurrentType(product)"
               @click.stop="
-                product.flavors?.length ? openProductDetail(product) : addToCart(product)
+                product.flavors?.length ? openProductDetail(product) : addToCart(product, '', 1, $event)
               "
             >
               <span v-if="cartLoading[product.id]" class="btn-cart__inner">
@@ -1478,7 +1543,7 @@ onMounted(async () => {
                   </div>
                 </div>
                 <div class="batch-actions">
-                  <button class="btn btn--primary" @click="addBatchToCart">
+                  <button class="btn btn--primary" @click="addBatchToCart($event)">
                     เพิ่มทั้งหมดลงตะกร้า
                   </button>
                   <button class="btn btn--outline" @click="batchSelections = []">ยกเลิกชุด</button>
@@ -1492,7 +1557,7 @@ onMounted(async () => {
                     getEffectiveItemType(selectedProduct) !== 'preorder' &&
                     Number(selectedFlavorStock) === 0
                   "
-                  @click="addToCart(selectedProduct, selectedFlavor, detailQty)"
+                  @click="addToCart(selectedProduct, selectedFlavor, detailQty, $event)"
                 >
                   {{
                     selectedProduct.flavors?.length
@@ -1825,6 +1890,72 @@ onMounted(async () => {
   }
   to {
     transform: scale(1);
+  }
+}
+
+/* ── ANIMATION: เพิ่มสินค้าลงตะกร้า ── */
+.cart-icon-btn--bump .cart-icon-svg {
+  animation: cart-icon-bump 0.38s ease;
+}
+.cart-icon-btn--bump .cart-badge {
+  animation: cart-badge-bump 0.38s ease;
+}
+@keyframes cart-icon-bump {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.35) rotate(-8deg);
+  }
+  65% {
+    transform: scale(0.92) rotate(4deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
+}
+@keyframes cart-badge-bump {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.5);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.fly-to-cart-item {
+  position: fixed;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background-color: #a17df2;
+  background-size: cover;
+  background-position: center;
+  box-shadow: 0 8px 20px rgba(111, 80, 160, 0.4);
+  border: 2px solid #fff;
+  z-index: 9999;
+  pointer-events: none;
+  transform: translate(0, 0) scale(1);
+  opacity: 1;
+  will-change: transform, opacity;
+}
+.fly-to-cart-item--active {
+  animation: fly-to-cart 0.75s cubic-bezier(0.4, 0, 0.55, 1) forwards;
+}
+@keyframes fly-to-cart {
+  0% {
+    transform: translate(0, 0) scale(1);
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(var(--fly-x), var(--fly-y)) scale(0.15);
+    opacity: 0.4;
   }
 }
 
