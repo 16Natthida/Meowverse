@@ -489,7 +489,11 @@ async function saveImportFees() {
       {
         method: 'PUT',
         headers: authHeaders(),
-        body: JSON.stringify({ fees, segment: selectedRound.value.arrival_status }),
+        body: JSON.stringify({
+          fees,
+          segment: selectedRound.value.arrival_status,
+          fee_segment: selectedRound.value.fee_segment || 'Main',
+        }),
       },
     )
     const data = await res.json().catch(() => ({}))

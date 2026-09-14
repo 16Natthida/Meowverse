@@ -919,7 +919,7 @@ onUnmounted(() => {
     </transition>
     <transition name="fade">
       <div v-if="showProductDetail" class="modal-overlay" @click.self="closeProductDetails">
-        <div class="modal-card">
+        <div class="modal-card modal-card--product">
           <div class="modal-head">
             <div>
               <h3>รายละเอียดสินค้า {{ selectedProductDetails?.name }}</h3>
@@ -941,20 +941,28 @@ onUnmounted(() => {
 
           <div class="items-list">
             <div
-              class="item-row"
+              class="item-row product-detail-row"
               v-for="row in aggregatedSelectedProductRows"
               :key="(row.flavor || 'nof') + '-' + row.item_type"
             >
-              <div>
-                <strong
-                  >{{ row.name }} <small v-if="row.flavor">· {{ row.flavor }}</small></strong
-                >
+              <div class="product-detail-name">
+                <strong>{{ row.name }}</strong>
+                <small v-if="row.flavor">รสชาติ: {{ row.flavor }}</small>
                 <p v-if="row.category_name">{{ row.category_name }}</p>
               </div>
-              <div>{{ formatMoney(row.unit_price) }}</div>
-              <div>x{{ Number(row.sold_qty || 0) }}</div>
-              <div>{{ formatMoney(row.total_amount) }}</div>
-              <div>
+              <div class="product-detail-metric">
+                <span>ราคา/ชิ้น</span>
+                <strong>{{ formatMoney(row.unit_price) }}</strong>
+              </div>
+              <div class="product-detail-metric">
+                <span>จำนวน</span>
+                <strong>x{{ Number(row.sold_qty || 0) }}</strong>
+              </div>
+              <div class="product-detail-metric product-detail-metric--total">
+                <span>รวมมูลค่า</span>
+                <strong>{{ formatMoney(row.total_amount) }}</strong>
+              </div>
+              <div class="product-detail-type">
                 <span
                   :class="[
                     'type-chip',
@@ -1458,24 +1466,36 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   padding: 1rem;
-  z-index: 50;
+  /* Keep order/product popups above the fixed admin sidebar. */
+  z-index: 1300;
 }
 
 .modal-card {
-  width: min(980px, 100%);
-  max-height: 90vh;
+  width: min(980px, calc(100vw - 2rem));
+  max-height: min(88vh, 820px);
   overflow: auto;
   background: #fff;
   border-radius: 20px;
-  padding: 1.1rem;
+  padding: 1.35rem;
+  scrollbar-gutter: stable;
+}
+
+.modal-card--product {
+  width: min(920px, calc(100vw - 2rem));
 }
 
 .modal-head {
+  position: sticky;
+  top: -1.35rem;
+  z-index: 3;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
-  margin-bottom: 1rem;
+  margin: -1.35rem -1.35rem 1.1rem;
+  padding: 1.1rem 1.35rem 0.9rem;
+  background: #fff;
+  border-bottom: 1px solid #f0e8fb;
 }
 
 .modal-head__actions {
@@ -1668,6 +1688,55 @@ onUnmounted(() => {
   border-radius: 14px;
 }
 
+.product-detail-row {
+  grid-template-columns: minmax(0, 1fr) 112px 90px 140px 116px;
+  min-width: 0;
+  padding: 1rem 1.05rem;
+  background: linear-gradient(135deg, #fff 0%, #fcf9ff 100%);
+}
+
+.product-detail-name {
+  min-width: 0;
+}
+
+.product-detail-name strong {
+  display: block;
+  color: #32234b;
+  font-size: 1rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.product-detail-name small {
+  display: block;
+  margin-top: 0.28rem;
+  color: #806b9d;
+  font-size: 0.8rem;
+}
+
+.product-detail-metric {
+  display: grid;
+  gap: 0.22rem;
+  color: #46335e;
+  font-size: 0.94rem;
+}
+
+.product-detail-metric span {
+  color: #917eaa;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.product-detail-metric--total strong {
+  color: #5f3ca0;
+  font-size: 1rem;
+}
+
+.product-detail-type {
+  display: flex;
+  align-items: center;
+}
+
 .item-thumb-cell {
   display: flex;
   align-items: center;
@@ -1712,6 +1781,14 @@ onUnmounted(() => {
 
   .item-row {
     grid-template-columns: 56px 1fr;
+  }
+
+  .product-detail-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .product-detail-name {
+    grid-column: 1 / -1;
   }
 
   .item-thumb-cell {

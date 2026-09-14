@@ -2,7 +2,7 @@
 // Helper to display the correct price (import fee or original price)
 function displayPrice(item) {
   // Use import_fee as the effective price when in import fee stage and fee is set
-  if (isImportFeePaymentStage.value) {
+  if (isImportFeePaymentStage.value || isMissingRound.value) {
     return Number(item.import_fee ?? item.Import_fee ?? 0)
   }
   return Number(item.price || item.Price || item.unit_price || 0)
@@ -13,7 +13,7 @@ function displayPrice(item) {
 // เป็น "ยอดรวมค่านำเข้าของรายการนั้นทั้งหมด" อยู่แล้ว (สัดส่วนจากยอดรวมค่านำเข้าทั้งรอบ)
 // ไม่ใช่ราคาต่อชิ้น จึงห้ามคูณ qty ซ้ำอีก มิฉะนั้นยอดรวมจะไม่ตรงกับ "ยอดรวม" ที่ต้องชำระจริง
 function itemLineTotal(item) {
-  if (isImportFeePaymentStage.value) {
+  if (isImportFeePaymentStage.value || isMissingRound.value) {
     return displayPrice(item)
   }
   return displayPrice(item) * Number(item.qty || 0)
@@ -128,6 +128,7 @@ const isPreorderOrder = computed(
 
 const isDelayedOrder = computed(() => normalizedOrderStatus.value === 'delayed')
 const isMissing = computed(() => normalizedOrderStatus.value === 'missing')
+const isMissingRound = computed(() => Number(order.value?.split_parent_order_id || 0) > 0)
 
 // Missing is the customer-facing refund stage, not an import-fee payment stage.
 const missingRefundAmount = computed(() => Number(order.value?.missing_amount || 0))
@@ -151,6 +152,12 @@ const isImportFeePaymentStage = computed(() => {
 const isImportFeeStage = computed(() => {
   return isImportFeePaymentStage.value || ['paid', 'ready to ship'].includes(normalizedOrderStatus.value)
 })
+
+// รอบตกหล่นยังต้องแสดงค่านำเข้าของรอบนั้นต่อ แม้สถานะออเดอร์จะเป็น Paid แล้ว
+// เพราะ Paid ของ child order หมายถึงชำระค่านำเข้ารอบตกหล่นเสร็จแล้ว ไม่ใช่ราคาสินค้ารอบหลัก
+const isImportFeeDisplayStage = computed(
+  () => isImportFeePaymentStage.value || isMissingRound.value,
+)
 
 // รอแอดมินแจ้งค่านำเข้า: ล็อกทุกอย่างยกเว้นขอเลื่อนเวลา
 const isWaitingForImportFee = computed(
@@ -202,10 +209,16 @@ const amountDue = computed(() => {
   const status = normalizedOrderStatus.value
   const orderType = String(order.value?.Order_type || '').trim().toLowerCase()
   const shippingFee =
-    Number(order.value?.shipping_fee || 0) ||
-    (['preorder', 'pending_import'].includes(orderType) ? 65 : 0)
+    isMissingRound.value
+      ? 0
+      : Number(order.value?.shipping_fee || 0) ||
+        (['preorder', 'pending_import'].includes(orderType) ? 65 : 0)
 
   if (isMissing.value) return 0
+
+  if (isMissingRound.value) {
+    return importFeeTotal.value + shippingFee
+  }
 
   // ✅ ออเดอร์ที่จ่ายค่าสินค้าครบแล้ว (Paid / Ready to Ship / Shipped / Delivered)
   // ให้นำค่าสินค้า + ค่านำเข้า + ค่าส่งในไทย (65 บาท) มารวมเป็นยอดรวม
@@ -232,12 +245,14 @@ const amountDue = computed(() => {
 
 const heroTotal = computed(() => {
   if (isMissing.value) return missingRefundAmount.value
-  if (isImportFeePaymentStage.value) return importFeeTotal.value
+  if (isImportFeePaymentStage.value || isMissingRound.value) return importFeeTotal.value
   if (isDelayedOrder.value) return itemsSubtotal.value
   return amountDue.value
 })
 
 const shippingFee = computed(() => {
+  if (isMissingRound.value) return 0
+
   const storedFee = Number(order.value?.shipping_fee || 0)
   if (storedFee > 0) return storedFee
 
@@ -1098,6 +1113,8 @@ onMounted(async () => {
                 {{
                   isMissing
                     ? 'แจ้งคืนเงินสินค้าที่ขาด'
+                    : isMissingRound
+                    ? 'ชำระค่านำเข้าสินค้าตกหล่น'
                     : isImportFeePaymentStage
                     ? 'ชำระเงินค่านำเข้า (รอบ 2)'
                     : 'ชำระเงินสำหรับคำสั่งพรีออเดอร์'
@@ -1107,6 +1124,9 @@ onMounted(async () => {
               <p class="hero-subtitle" v-if="isMissing">
                 <strong>สินค้าบางรายการขาดจากการรับเข้า:</strong> แอดมินกำลังดำเนินการคืนเงินให้คุณ
                 กรุณาแคปหน้าจอนี้แล้วส่งให้แอดมินทาง LINE OA ของร้าน
+              </p>
+              <p class="hero-subtitle" v-else-if="isMissingRound">
+                <strong>รอบตกหล่น:</strong> ค่านำเข้าจะคิดเฉพาะสินค้าที่มาถึงในรอบนี้
               </p>
               <p class="hero-subtitle" v-else-if="importFeeTotal === 0">
                 <strong>รอบ 1 (ชำระแรก):</strong> สินค้า Preorder จะถูกนำเข้าหลังได้รับการชำระเงิน
@@ -1125,7 +1145,7 @@ onMounted(async () => {
                 <div class="hero-meta-divider"></div>
                 <div class="hero-meta-item">
                   <span class="hero-meta-label">
-                    {{ isMissing ? 'ยอดคืน' : isImportFeePaymentStage ? 'ค่านำเข้าแจ้งแล้ว' : 'ยอดรวม' }}
+                    {{ isMissing ? 'ยอดคืน' : isMissingRound ? 'ค่านำเข้าตกหล่น' : isImportFeePaymentStage ? 'ค่านำเข้าแจ้งแล้ว' : 'ยอดรวม' }}
                   </span>
                   <strong>
                     ฿{{ heroTotal.toLocaleString() }}
@@ -1357,11 +1377,11 @@ onMounted(async () => {
                       </span>
                     </p>
                     <p
-                      v-if="isImportFeeStage"
+                      v-if="isImportFeeDisplayStage"
                       class="item-price-small"
                       style="color: #f59e42; font-weight: 600"
                     >
-                      ค่านำเข้ารวม: ฿{{ displayPrice(it).toLocaleString() }}
+                      {{ isMissingRound ? 'ค่านำเข้ารอบตกหล่น' : 'ค่านำเข้ารวม' }}: ฿{{ displayPrice(it).toLocaleString() }}
                     </p>
                     <p v-else class="item-price-small">
                       ราคา ฿{{ displayPrice(it).toLocaleString() }} / ชิ้น
@@ -2043,26 +2063,26 @@ onMounted(async () => {
                   padding-inline: 4px;
                 "
               >
-                <div v-if="!isImportFeePaymentStage" style="display: flex; justify-content: space-between">
+                <div v-if="!isImportFeeDisplayStage" style="display: flex; justify-content: space-between">
                   <span>ยอดรวมสินค้า</span>
                   <span>฿{{ itemsSubtotal.toLocaleString() }}</span>
                 </div>
                 <div
-                  v-if="!isImportFeePaymentStage && chinaShippingTotalThb > 0"
+                  v-if="!isImportFeeDisplayStage && chinaShippingTotalThb > 0"
                   style="display: flex; justify-content: space-between"
                 >
                   <span>ค่าส่งภายในประเทศจีน</span>
                   <span>฿{{ chinaShippingTotalThb.toLocaleString() }}</span>
                 </div>
                 <div
-                  v-if="isImportFeePaymentStage && importFeeTotal > 0"
+                  v-if="isImportFeeDisplayStage && importFeeTotal > 0"
                   style="display: flex; justify-content: space-between"
                 >
-                  <span>ค่านำเข้ารอบ 2</span>
+                  <span>{{ isMissingRound ? 'ค่านำเข้ารอบตกหล่น' : 'ค่านำเข้ารอบ 2' }}</span>
                   <span>฿{{ importFeeTotal.toLocaleString() }}</span>
                 </div>
                 <div
-                  v-if="isImportFeePaymentStage && shippingFee > 0"
+                  v-if="isImportFeeDisplayStage && shippingFee > 0"
                   style="display: flex; justify-content: space-between"
                 >
                   <span>ค่าส่งภายในไทย</span>
@@ -2070,7 +2090,7 @@ onMounted(async () => {
                 </div>
                 <div
                   style="display: flex; justify-content: space-between"
-                  v-if="!isImportFeePaymentStage && importFeeTotal > 0"
+                  v-if="!isImportFeeDisplayStage && importFeeTotal > 0"
                 >
                   <span>ค่านำเข้าแจ้งแล้ว</span>
                   <span>฿{{ importFeeTotal.toLocaleString() }}</span>
