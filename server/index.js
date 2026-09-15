@@ -213,14 +213,13 @@ async function splitDelayedItemsFromOrder(connection, orderId, sourceDetailId = 
     await connection.query(
       `INSERT INTO order_details
        (order_id, prod_id, flavor, Price, qty, received_qty, arrival_status, Import_fee, item_type, preorder_round_id)
-       VALUES (?, ?, ?, ?, ?, 0, 'Delayed', ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, 0, 'Delayed', 0, ?, ?)`,
       [
         childOrderId,
         detail.prod_id,
         detail.flavor || null,
         detail.unit_price,
         delayedQty,
-        detail.import_fee || 0,
         detail.item_type || null,
         detail.preorder_round_id || null,
       ],
@@ -3101,6 +3100,13 @@ function getImportFeeDisplayStatus(row) {
   return 'Arrived'
 }
 
+// Delayed items are moved to a child order while retaining the original
+// preorder round id. The child order is the separate import-fee round for
+// products that arrived later.
+function getImportFeeSegment(row) {
+  return Number(row.split_parent_order_id || 0) > 0 ? 'Missing' : 'Main'
+}
+
 // 1A. GET /api/admin/preorder-import-fee/rounds
 app.get(
   '/api/admin/preorder-import-fee/rounds',
@@ -3136,6 +3142,10 @@ app.get(
         SUM(COALESCE(od.received_qty, 0)) AS total_received_qty,
         MIN(od.Price) AS unit_price,
         COALESCE(SUM(od.Import_fee), 0) AS import_fee,
+        CASE
+          WHEN COALESCE(o.split_parent_order_id, 0) > 0 THEN 'Missing'
+          ELSE 'Main'
+        END AS fee_segment,
         COALESCE(
           (
             SELECT pi.image_url
@@ -3183,32 +3193,40 @@ app.get(
             THEN 'Pending'
           ELSE 'Arrived'
         END,
-        o.status
+        o.status,
+        CASE
+          WHEN COALESCE(o.split_parent_order_id, 0) > 0 THEN 'Missing'
+          ELSE 'Main'
+        END
       ORDER BY pr.round_id DESC, od.prod_id ASC, od.flavor ASC
     `)
 
-      // Split one preorder round into separate import-fee rounds by intake status.
+      // Split one preorder round into the main and delayed/missing import-fee rounds.
       const roundMap = new Map()
       for (const row of rows) {
         const arrivalStatus = row.arrival_status || 'Pending'
-        const roundKey = `${row.round_id}|${arrivalStatus}`
+        const feeSegment = row.fee_segment || 'Main'
+        const roundKey = `${row.round_id}|${feeSegment}`
         if (!roundMap.has(roundKey)) {
           roundMap.set(roundKey, {
             round_id: row.round_id,
             round_key: roundKey,
             round_name:
-              arrivalStatus === 'Arrived'
-                ? row.round_name
-                : `${row.round_name} (${arrivalStatus})`,
+              feeSegment === 'Missing'
+                ? `${row.round_name} (รอบตกหล่น)`
+                : arrivalStatus === 'Arrived'
+                  ? row.round_name
+                  : `${row.round_name} (${arrivalStatus})`,
             round_status: row.round_status,
             start_date: row.start_date,
             end_date: row.end_date,
             arrival_status: arrivalStatus,
+            fee_segment: feeSegment,
             products: [],
           })
         }
         roundMap.get(roundKey).products.push({
-          key: `${row.prod_id}|${String(row.flavor || '').trim()}|${arrivalStatus.toLowerCase()}`,
+          key: `${row.prod_id}|${String(row.flavor || '').trim()}|${arrivalStatus.toLowerCase()}|${feeSegment.toLowerCase()}`,
           prod_id: row.prod_id,
           product_name: row.product_name,
           flavor: row.flavor,
@@ -3219,6 +3237,7 @@ app.get(
           unit_price: Number(row.unit_price) || 0,
           current_import_fee: Number(row.import_fee) || 0,
           image_url: row.image_url || '',
+          fee_segment: feeSegment,
         })
       }
       res.json(Array.from(roundMap.values()))
@@ -3237,6 +3256,7 @@ app.put(
     const roundId = Number(req.params.roundId)
     const { fees } = req.body || {}
     const requestedSegment = String(req.body?.segment || '').trim()
+    const requestedFeeSegment = String(req.body?.fee_segment || 'Main').trim()
     if (requestedSegment && requestedSegment !== 'Arrived') {
       return res.status(400).json({
         success: false,
@@ -3244,6 +3264,9 @@ app.put(
       })
     }
     const segment = requestedSegment === 'Arrived' ? 'Arrived' : null
+    const feeSegment = ['Main', 'Missing'].includes(requestedFeeSegment)
+      ? requestedFeeSegment
+      : 'Main'
     if (!Array.isArray(fees) || fees.length === 0) {
       return res.status(400).json({ success: false, message: 'fees array is required' })
     }
@@ -3268,7 +3291,8 @@ app.put(
           COALESCE(od.received_qty, 0) AS received_qty,
           COALESCE(od.arrival_status, 'Pending') AS arrival_status,
           COALESCE(od.Import_fee, 0) AS current_import_fee,
-          o.status AS order_status
+          o.status AS order_status,
+          COALESCE(o.split_parent_order_id, 0) AS split_parent_order_id
          FROM order_details od
          JOIN orders o ON o.order_id = od.order_id
          WHERE od.preorder_round_id = ?
@@ -3281,24 +3305,36 @@ app.put(
       const totalOrderedQtyByKey = {}
       for (const row of detailRows) {
         const status = getImportFeeDisplayStatus(row)
+        if (getImportFeeSegment(row) !== feeSegment) continue
         if (segment && status !== segment) continue
         if ((Number(row.received_qty) || 0) < (Number(row.qty) || 0)) continue
-        const key = `${row.prod_id}|${String(row.flavor || '').trim()}|${status}`.toLowerCase()
+        const key = `${row.prod_id}|${String(row.flavor || '').trim()}|${status}|${feeSegment}`.toLowerCase()
         const orderedQty = Math.max(Number(row.qty) || 0, 0)
         totalOrderedQtyByKey[key] = (totalOrderedQtyByKey[key] || 0) + orderedQty
       }
 
+      const eligibleSegmentRows = detailRows.filter((row) => {
+        const status = getImportFeeDisplayStatus(row)
+        return (
+          getImportFeeSegment(row) === feeSegment &&
+          (!segment || status === segment) &&
+          (Number(row.received_qty) || 0) >= (Number(row.qty) || 0)
+        )
+      })
+      const affectedOrderIds = new Set(eligibleSegmentRows.map((row) => Number(row.order_id)))
       const orderTotals = {}
       for (const row of detailRows) {
+        if (!affectedOrderIds.has(Number(row.order_id))) continue
         orderTotals[row.order_id] =
           (orderTotals[row.order_id] || 0) + Number(row.current_import_fee || 0)
       }
       const rowsByKey = new Map()
       for (const row of detailRows) {
         const status = getImportFeeDisplayStatus(row)
+        if (getImportFeeSegment(row) !== feeSegment) continue
         if (segment && status !== segment) continue
         if ((Number(row.received_qty) || 0) < (Number(row.qty) || 0)) continue
-        const key = `${row.prod_id}|${String(row.flavor || '').trim()}|${status}`.toLowerCase()
+        const key = `${row.prod_id}|${String(row.flavor || '').trim()}|${status}|${feeSegment}`.toLowerCase()
         if (!rowsByKey.has(key)) rowsByKey.set(key, [])
         rowsByKey.get(key).push(row)
       }
@@ -3364,7 +3400,6 @@ app.put(
       )
 
       let updatedOrders = 0
-      const allOrderIds = [...new Set(detailRows.map((row) => Number(row.order_id)))]
       const orderIds = new Set()
       for (const [orderId, amount] of Object.entries(orderTotals)) {
         await connection.query(`UPDATE orders SET import_fee_total = ? WHERE order_id = ?`, [
@@ -3376,7 +3411,7 @@ app.put(
       }
 
       // รีเซ็ตออเดอร์ที่ไม่มีสินค้าที่รับครบ เพื่อไม่ให้ค่านำเข้ารอบเก่าค้างอยู่
-      for (const orderId of allOrderIds) {
+      for (const orderId of affectedOrderIds) {
         if (!Object.prototype.hasOwnProperty.call(orderTotals, orderId)) {
           await connection.query(`UPDATE orders SET import_fee_total = 0 WHERE order_id = ?`, [orderId])
         }
@@ -3394,7 +3429,10 @@ app.put(
                deadline = ?
            WHERE order_id IN (${placeholders})
              AND Order_type = 'Preorder'
-             AND status IN ('Wait_for_Import_Fee', 'Delayed', 'Paid')`,
+             AND (
+               status IN ('Wait_for_Import_Fee', 'Delayed', 'Paid')
+               OR (status = 'Ready_to_Ship' AND COALESCE(split_parent_order_id, 0) > 0)
+             )`,
            [deadline48h, ...orderIdList],
         )
       }
@@ -3433,6 +3471,7 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     // 1. ตรวจสอบข้อมูล Order เดิมเพื่อยอดเงินและประเภท พร้อมสถานะ
     const [orderRows] = await connection.query(
       `SELECT total_amount, shipping_fee, import_fee_total, Order_type, status,
+              COALESCE(split_parent_order_id, 0) AS split_parent_order_id,
               EXISTS(
                 SELECT 1
                 FROM order_details od_round
@@ -3462,8 +3501,10 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
     }
 
     const currentShippingFeeSettings = await getShippingFeeSettings(connection)
-    const effectiveShippingFee =
-      Number(orderData.shipping_fee) > 0
+    const isMissingRound = Number(orderData.split_parent_order_id || 0) > 0
+    const effectiveShippingFee = isMissingRound
+      ? 0
+      : Number(orderData.shipping_fee) > 0
         ? Number(orderData.shipping_fee)
         : normalizedOrderType === 'ready'
           ? currentShippingFeeSettings.ready
