@@ -102,6 +102,15 @@
               <td>
                 <div class="action-buttons">
                   <button
+                    v-if="!isDelayed(item) && !isRefundRequested(item)"
+                    class="delay-btn"
+                    type="button"
+                    :disabled="isItemActionPending(item) || Number(item.missing_qty) <= 0"
+                    @click="handleDelayAction(item)"
+                  >
+                    เลื่อนรอของ
+                  </button>
+                  <button
                     v-if="!isRefundPaid(item)"
                     class="refund-btn"
                     type="button"
@@ -273,6 +282,37 @@ async function handleRefundAction(item) {
   }
 }
 
+async function handleDelayAction(item) {
+  if (!item || isDelayed(item) || isRefundPaid(item) || Number(item.missing_qty) <= 0) return
+  itemActionLoading.value = {
+    ...itemActionLoading.value,
+    [item.detail_id]: true,
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/inventory-intake/item/${item.detail_id}`, {
+      method: 'PATCH',
+      headers: authHeaders(),
+      body: JSON.stringify({ action: 'delay' }),
+    })
+
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new Error(data.error || data.message || 'ไม่สามารถบันทึกสถานะเลื่อนรอของได้')
+    }
+
+    await fetchData()
+  } catch (error) {
+    console.error(error)
+    alert(error.message || 'เกิดข้อผิดพลาดในการบันทึกสถานะเลื่อนรอของ')
+  } finally {
+    itemActionLoading.value = {
+      ...itemActionLoading.value,
+      [item.detail_id]: false,
+    }
+  }
+}
+
 const missingItemsList = computed(() => {
   if (!selectedRoundId.value) return allMissingItems.value
   return allMissingItems.value.filter(
@@ -383,7 +423,10 @@ async function fetchData() {
             received_qty: item.received_qty,
             missing_qty: missingQty,
             arrival_status: arrivalStatus,
-            refund_amount: missingQty * Number(item.unit_price || 0),
+            refund_amount:
+              String(arrivalStatus).toLowerCase() === 'missing'
+                ? missingQty * Number(item.unit_price || 0)
+                : 0,
             round_id: roundInfo.round_id,
             round_name: roundInfo.round_name,
           })
@@ -822,6 +865,22 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
+.delay-btn {
+  width: 100%;
+  border: 1px solid #fed7aa;
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem;
+  background: #fff7ed;
+  color: #c2410c;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.delay-btn:hover:not(:disabled) {
+  background: #ffedd5;
+}
+
 .refund-btn:hover:not(:disabled) {
   background: #fce7f3;
 }
@@ -840,7 +899,8 @@ onUnmounted(() => {
 }
 
 .secondary-btn:disabled,
-.refund-btn:disabled {
+.refund-btn:disabled,
+.delay-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }

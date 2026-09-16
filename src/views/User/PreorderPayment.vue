@@ -18,6 +18,7 @@ function itemLineTotal(item) {
   }
   return displayPrice(item) * Number(item.qty || 0)
 }
+
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
@@ -351,10 +352,17 @@ function groupOrderItems(items) {
         flavorSet: new Set(),
         flavor: flavor || null,
         import_fee_total: 0,
+        awaiting_receipt: false,
       }
     }
 
     grouped[key].qty += Number(item.qty || 0)
+    const arrivalStatus = String(item.arrival_status || item.Arrival_status || '')
+      .trim()
+      .toLowerCase()
+    if (arrivalStatus === 'delayed' || arrivalStatus === 'missing') {
+      grouped[key].awaiting_receipt = true
+    }
     const itemImportFee = Number(item.import_fee || item.Import_fee || 0)
     grouped[key].import_fee_total += itemImportFee
     grouped[key].price = Number(item.price || item.Price || item.unit_price || grouped[key].price || 0)
@@ -364,7 +372,10 @@ function groupOrderItems(items) {
   return Object.values(grouped).map((item) => ({
     ...item,
     import_fee: item.import_fee_total,
-    flavor: item.flavorSet && item.flavorSet.size > 0 ? Array.from(item.flavorSet).join(', ') : item.flavor,
+    flavor:
+      item.flavorSet && item.flavorSet.size > 0
+        ? Array.from(item.flavorSet).join(', ')
+        : item.flavor,
   }))
 }
 
@@ -482,7 +493,7 @@ const orderStatusDisplay = computed(() => {
       ),
     },
     delayed: {
-      label: 'รอสินค้าที่แยกส่ง (นำเข้าล่าช้า)',
+      label: 'รอของเข้า',
       color: '#d97706',
       icon: getIcon(
         '<path d="M3 12h18"></path><path d="M12 3v18"></path>',
@@ -1381,14 +1392,19 @@ onMounted(async () => {
                       class="item-price-small"
                       style="color: #f59e42; font-weight: 600"
                     >
-                      {{ isMissingRound ? 'ค่านำเข้ารอบตกหล่น' : 'ค่านำเข้ารวม' }}: ฿{{ displayPrice(it).toLocaleString() }}
+                      <template v-if="it.awaiting_receipt">รอรับของ</template>
+                      <template v-else>
+                        {{ isMissingRound ? 'ค่านำเข้ารอบตกหล่น' : 'ค่านำเข้ารวม' }}: ฿{{ displayPrice(it).toLocaleString() }}
+                      </template>
                     </p>
                     <p v-else class="item-price-small">
                       ราคา ฿{{ displayPrice(it).toLocaleString() }} / ชิ้น
                     </p>
                   </div>
                   <div class="item-meta">
-                    <div class="item-qty">x{{ it.qty }}</div>
+                    <div class="item-qty">
+                      x{{ it.qty }}
+                    </div>
                     <div class="item-total">
                       ฿{{ itemLineTotal(it).toLocaleString() }}
                     </div>

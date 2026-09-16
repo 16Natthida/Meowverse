@@ -398,10 +398,13 @@ async function fetchRounds() {
     })
     if (!res.ok) throw new Error(`โหลดรอบพรีออเดอร์ไม่สำเร็จ (${res.status})`)
     const data = await res.json()
-    // Only fully received items are eligible for import-fee collection.
-    // Pending, Delayed, and Missing remain available in intake/report pages.
+    // Main rounds require fully received items. The missing segment remains
+    // visible here while it is waiting for late-arriving goods so the admin
+    // can see and process it from this page only.
     const visibleRounds = data.filter(
-      (round) => String(round.arrival_status || '').toLowerCase() === 'arrived',
+      (round) =>
+        String(round.fee_segment || 'Main').toLowerCase() === 'missing' ||
+        String(round.arrival_status || '').toLowerCase() === 'arrived',
     )
     rounds.value = visibleRounds
     const selectedStillExists = visibleRounds.some((round) => round.round_key === selectedRoundId.value)

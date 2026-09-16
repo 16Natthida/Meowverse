@@ -108,6 +108,8 @@ function getStatusMessage() {
     shipped: 'จัดส่งแล้ว - ตรวจสอบเลขพัสดุได้ด้านล่าง',
     delivered: 'นำจ่ายแล้ว - ขอบคุณที่ใช้บริการ',
     cancelled: 'ยกเลิกแล้ว',
+    delayed: 'รอของเข้า - สินค้าบางรายการยังมาไม่ถึง',
+    partially_received: 'รับสินค้าไม่ครบ - สินค้าส่วนที่เหลือกำลังรอเข้า',
     missing: 'สินค้าขาดบางรายการ',
   }
 
@@ -127,6 +129,8 @@ function getStatusLabel() {
     shipped: 'จัดส่งแล้ว',
     delivered: 'นำจ่ายแล้ว',
     cancelled: 'ยกเลิกแล้ว',
+    delayed: 'รอของเข้า',
+    partially_received: 'รับสินค้าไม่ครบ',
     missing: 'สินค้าขาดบางรายการ',
   }
 

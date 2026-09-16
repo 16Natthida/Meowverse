@@ -1719,7 +1719,21 @@ onUnmounted(() => {
   gap: 12px;
 }
 .summary-card--wide .summary-row {
-  font-size: 1rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #7d6e9a;
+  padding-inline: 4px;
+}
+.summary-card--wide .summary-row .summary-label {
+  font-size: inherit;
+  color: inherit;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.summary-card--wide .summary-row .summary-amount {
+  font-size: inherit;
+  line-height: normal;
+  font-weight: inherit;
 }
 .summary-card--wide .btn-checkout {
   margin-top: 0.2rem;

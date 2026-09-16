@@ -102,7 +102,7 @@ function resolveIntakeStatus(orderedQty, receivedQty) {
     return 'Arrived'
   }
 
-  return 'Pending'
+  return 'Delayed'
 }
 
 function resolveOrderStatusAfterIntake(currentStatus, fullReceived, allMissing) {
@@ -143,7 +143,10 @@ async function splitDelayedItemsFromOrder(connection, orderId, sourceDetailId = 
             od.Import_fee AS import_fee, od.item_type, od.preorder_round_id
      FROM order_details od
      WHERE od.order_id = ?
-       AND (od.detail_id = ? OR LOWER(COALESCE(od.arrival_status, '')) = 'delayed')
+       AND (
+         od.detail_id = ?
+         OR LOWER(COALESCE(od.arrival_status, '')) IN ('delayed', 'missing')
+       )
        AND od.qty > COALESCE(od.received_qty, 0)
      ORDER BY od.detail_id ASC`,
     [orderId, Number(sourceDetailId) || 0],
@@ -375,6 +378,11 @@ function resolvePreorderRoundStatus(statusValue, startDate, endDate, now = new D
 
   return 'active'
 }
+
+function isImportFeeOnlyRoundName(name) {
+  return /\((ตกหล่น|รอบตกหล่น)\)\s*$/i.test(String(name || '').trim())
+}
+
 async function autoSyncPreorderRoundStatuses() {
   const connection = await pool.getConnection()
 
@@ -2553,7 +2561,7 @@ app.get('/api/preorder-rounds', authenticateToken, requireAdmin, async (_req, re
       ORDER BY round_id DESC
     `)
 
-    res.json(rounds)
+    res.json(rounds.filter((round) => !isImportFeeOnlyRoundName(round.name)))
   } catch (error) {
     res.status(500).json({ message: error.message })
   }
@@ -2579,7 +2587,7 @@ app.get('/api/preorder-rounds/active', async (_req, res) => {
       ORDER BY end_date ASC
     `)
 
-    res.json(rounds)
+    res.json(rounds.filter((round) => !isImportFeeOnlyRoundName(round.round_name)))
   } catch (error) {
     res.status(500).json({ message: error.message })
   }
@@ -2723,6 +2731,11 @@ app.post('/api/preorder-rounds', authenticateToken, requireAdmin, async (req, re
     return
   }
 
+  if (isImportFeeOnlyRoundName(name)) {
+    res.status(400).json({ message: 'รอบตกหล่นจะแสดงเฉพาะหน้ากรอกค่านำเข้าเท่านั้น' })
+    return
+  }
+
   const statusValue =
     status && String(status).trim() ? String(status).trim().toLowerCase() : 'active'
   const normalizedStatus = resolvePreorderRoundStatus(statusValue, startDate, endDate, new Date())
@@ -2765,6 +2778,11 @@ app.put('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
 
   if (!name || !startDate || !endDate) {
     res.status(400).json({ message: 'name, startDate, and endDate are required' })
+    return
+  }
+
+  if (isImportFeeOnlyRoundName(name)) {
+    res.status(400).json({ message: 'รอบตกหล่นจะแสดงเฉพาะหน้ากรอกค่านำเข้าเท่านั้น' })
     return
   }
 
@@ -3100,9 +3118,9 @@ function getImportFeeDisplayStatus(row) {
   return 'Arrived'
 }
 
-// Delayed items are moved to a child order while retaining the original
-// preorder round id. The child order is the separate import-fee round for
-// products that arrived later.
+// Delayed/missing items stay linked to the original preorder round. The
+// import-fee page creates a virtual missing segment for the child order;
+// no separate preorder round is created in the database.
 function getImportFeeSegment(row) {
   return Number(row.split_parent_order_id || 0) > 0 ? 'Missing' : 'Main'
 }
@@ -3169,7 +3187,6 @@ app.get(
       LEFT JOIN products p ON p.prod_id = od.prod_id
       WHERE LOWER(o.Order_type) = 'preorder'
         AND od.qty > 0
-        AND COALESCE(od.received_qty, 0) >= od.qty
       GROUP BY
         pr.round_id,
         pr.round_name,
@@ -3213,7 +3230,7 @@ app.get(
             round_key: roundKey,
             round_name:
               feeSegment === 'Missing'
-                ? `${row.round_name} (รอบตกหล่น)`
+                ? `${row.round_name} (ตกหล่น)`
                 : arrivalStatus === 'Arrived'
                   ? row.round_name
                   : `${row.round_name} (${arrivalStatus})`,
@@ -3990,11 +4007,17 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
     const roundParams = []
 
     if (statusFilter) {
-      roundSql += ' WHERE LOWER(pr.status) = ?'
+      roundSql += `
+        WHERE TRIM(pr.round_name) NOT LIKE '%(ตกหล่น)'
+          AND TRIM(pr.round_name) NOT LIKE '%(รอบตกหล่น)'
+          AND LOWER(pr.status) = ?`
       roundParams.push(statusFilter.toLowerCase())
     } else {
       // Intake should only be done after the round is closed.
-      roundSql += ' WHERE LOWER(pr.status) = ?'
+      roundSql += `
+        WHERE TRIM(pr.round_name) NOT LIKE '%(ตกหล่น)'
+          AND TRIM(pr.round_name) NOT LIKE '%(รอบตกหล่น)'
+          AND LOWER(pr.status) = ?`
       roundParams.push('closed')
     }
 
@@ -4052,6 +4075,8 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
       LEFT JOIN products p ON p.prod_id = od.prod_id
       WHERE LOWER(o.Order_type) = 'preorder'
         AND od.preorder_round_id IS NOT NULL
+        AND TRIM(pr.round_name) NOT LIKE '%(ตกหล่น)'
+        AND TRIM(pr.round_name) NOT LIKE '%(รอบตกหล่น)'
     `
     const detailParams = []
 
@@ -4315,7 +4340,7 @@ app.post(
 
       const detailResults = []
       const orderSummaryMap = new Map()
-      const autoSplitOrderIds = new Set()
+      const splitOrderIds = new Set()
       let hasIntakeChange = false
       let totalExcessQty = 0
 
@@ -4386,7 +4411,15 @@ app.post(
           const excessQty = 0
           const missingQty = Math.max(orderedQty - finalReceivedQty, 0)
           const unitPrice = Number(detail.unit_price) || 0
-          const arrivalStatus = resolveIntakeStatus(orderedQty, finalReceivedQty)
+          // A partially received line is split below: the received quantity
+          // stays in the main order and the unreceived quantity moves to the
+          // missing-items child order.
+          const arrivalStatus =
+            finalReceivedQty >= orderedQty
+              ? 'Arrived'
+              : finalReceivedQty > 0
+                ? 'Delayed'
+                : 'Missing'
 
           remainingNew -= extraQty
 
@@ -4406,15 +4439,7 @@ app.post(
             await connection.query(`UPDATE order_details SET Import_fee = 0 WHERE detail_id = ?`, [
               detail.detail_id,
             ])
-
-            // Any incomplete line is moved to a separate delayed child order
-            // immediately. The received quantity remains on the original order.
-            const delayedOrderId = await splitDelayedItemsFromOrder(
-              connection,
-              Number(detail.order_id),
-              Number(detail.detail_id),
-            )
-            if (delayedOrderId) autoSplitOrderIds.add(Number(delayedOrderId))
+            splitOrderIds.add(Number(detail.order_id))
           }
 
           if (!orderSummaryMap.has(Number(detail.order_id))) {
@@ -4492,6 +4517,15 @@ app.post(
             firstDetail.flavor,
           )
         }
+      }
+
+      // Move only the unreceived quantity into a child order for a separate
+      // missing-items round. The received portion remains in the main order
+      // and can be charged import fees independently.
+      const delayedOrderIds = []
+      for (const orderId of splitOrderIds) {
+        const childOrderId = await splitDelayedItemsFromOrder(connection, orderId)
+        if (childOrderId) delayedOrderIds.push(childOrderId)
       }
 
       const [statusRows] = await connection.query(
@@ -4600,7 +4634,7 @@ app.post(
         ordered_amount: orderedAmount,
         received_amount: receivedAmount,
         refund_amount: refundAmount,
-        delayed_order_ids: Array.from(autoSplitOrderIds),
+        delayed_order_ids: delayedOrderIds,
         excess_qty: totalExcessQty,
         excess_stock_action:
           totalExcessQty > 0 ? (moveExcessToStock ? 'moved_to_stock' : 'not_moved') : 'none',
@@ -4693,6 +4727,7 @@ app.post(
       let refundAmount = 0
       let allReceived = true
       let allMissing = true
+      const splitOrderIds = []
 
       for (const detail of detailRows) {
         const orderedQty = Math.max(0, Number(detail.ordered_qty) || 0)
@@ -4709,6 +4744,7 @@ app.post(
         const lineReceivedAmount = appliedToOrder * unitPrice
         const lineRefundAmount = missingQty * unitPrice
         const arrivalStatus = resolveIntakeStatus(orderedQty, appliedToOrder)
+        const orderType = String(order.Order_type || '').toLowerCase()
 
         orderedAmount += lineOrderedAmount
         receivedAmount += lineReceivedAmount
@@ -4734,14 +4770,15 @@ app.post(
           await connection.query(`UPDATE order_details SET Import_fee = 0 WHERE detail_id = ?`, [
             detail.detail_id,
           ])
+          if (orderType === 'preorder') {
+            splitOrderIds.push(Number(detail.detail_id))
+          }
         }
 
         // Handle inventory movements:
         // - Preorder orders: no pool decrement (preorder is fulfilled after payment/round close)
         // - Ready orders: add appliedToOrder back into products.stock_qty (receive into warehouse)
         // - Excess (beyond ordered) can be optionally added to products.stock_qty
-        const orderType = String(order.Order_type || '').toLowerCase()
-
         if (orderType === 'preorder') {
           // For preorder, do not add appliedToOrder into products.stock_qty (it's allocated to orders)
           if (excessQty > 0 && moveExcessToStock) {
@@ -4768,6 +4805,14 @@ app.post(
           refund_amount: lineRefundAmount,
           arrival_status: arrivalStatus,
         })
+      }
+
+      let splitOrderId = null
+      if (String(order.Order_type || '').toLowerCase() === 'preorder') {
+        for (const detailId of splitOrderIds) {
+          splitOrderId =
+            (await splitDelayedItemsFromOrder(connection, orderId, detailId)) || splitOrderId
+        }
       }
 
       const newStatus = resolveOrderStatusAfterIntake(order.status, allReceived, allMissing)
@@ -4827,6 +4872,7 @@ app.post(
         ordered_amount: orderedAmount,
         received_amount: receivedAmount,
         refund_amount: refundAmount,
+        split_order_id: splitOrderId,
         items: processResults,
       })
     } catch (error) {
@@ -4972,16 +5018,25 @@ app.patch(
             String(row.arrival_status || '').toLowerCase() === 'missing' &&
             String(row.refund_status || '').toLowerCase() === 'paid',
         )
+      const hasDelayedShortage = shortageRows.some(
+        (row) => String(row.arrival_status || '').toLowerCase() === 'delayed',
+      )
+      const nextOrderStatus = hasDelayedShortage ? 'Delayed' : 'Missing'
+      const refundAmountToDeduct =
+        requestedStatus === 'pending' && currentArrivalStatus !== 'missing' ? refundAmount : 0
 
       await connection.query(
         `UPDATE orders
          SET refund_status = ?,
-             status = 'missing',
+             total_amount = GREATEST(COALESCE(total_amount, 0) - ?, 0),
+             status = ?,
              refund_completed_at = ?,
              refund_completed_by = ?
          WHERE order_id = ?`,
         [
           allRefundsPaid ? 'paid' : 'pending',
+          refundAmountToDeduct,
+          nextOrderStatus,
           allRefundsPaid ? new Date() : null,
           allRefundsPaid ? req.user?.id || null : null,
           orderId,
@@ -5075,10 +5130,13 @@ app.patch(
         })
       }
 
-      await connection.query(`UPDATE order_details SET arrival_status = ? WHERE detail_id = ?`, [
-        targetStatus,
-        detailId,
-      ])
+      await connection.query(
+        `UPDATE order_details
+         SET arrival_status = ?,
+             refund_status = CASE WHEN ? = 'Missing' THEN 'pending' ELSE refund_status END
+         WHERE detail_id = ?`,
+        [targetStatus, targetStatus, detailId],
+      )
 
       let delayedSplitOrderId = null
       if (targetStatus === 'Delayed') {
@@ -5119,11 +5177,14 @@ app.patch(
           (Number(item.received_qty) || 0) === 0 &&
           String(item.arrival_status || 'Pending').toLowerCase() === 'missing',
       )
-      const newStatus = resolveOrderStatusAfterIntake(
-        detail.order_status,
-        allReceived,
-        allMissing,
+      const hasDelayedItems = orderDetails.some(
+        (item) =>
+          (Number(item.ordered_qty) || 0) > (Number(item.received_qty) || 0) &&
+          String(item.arrival_status || 'Pending').toLowerCase() === 'delayed',
       )
+      const newStatus = hasDelayedItems
+        ? 'Delayed'
+        : resolveOrderStatusAfterIntake(detail.order_status, allReceived, allMissing)
 
       await connection.query(`UPDATE orders SET total_amount = ?, status = ? WHERE order_id = ?`, [
         Math.max(

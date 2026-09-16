@@ -80,6 +80,7 @@ function resolveIntakeStatusClass(status) {
   const key = String(status || '').toLowerCase()
   if (key.includes('ready')) return 'badge badge--ready'
   if (key.includes('partial')) return 'badge badge--partial'
+  if (key.includes('delayed')) return 'badge badge--missing'
   if (key.includes('missing')) return 'badge badge--missing'
   return 'badge badge--pending'
 }
@@ -88,6 +89,7 @@ function resolveIntakeStatusLabel(status) {
   const key = String(status || '').toLowerCase()
   if (key === 'ready_to_ship') return 'พร้อมจัดส่ง'
   if (key === 'partially_received') return 'รับไม่ครบ'
+  if (key === 'delayed') return 'ตกหล่น / รอของ'
   if (key === 'missing') return 'ขาดสินค้า'
   if (key === 'received') return 'รับครบ'
   if (key === 'partial') return 'รับบางส่วน'
