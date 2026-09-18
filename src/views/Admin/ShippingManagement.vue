@@ -249,7 +249,7 @@ onUnmounted(() => {
           <tbody>
             <tr v-for="order in filteredOrders" :key="order.order_id">
               <td>
-                <strong>#{{ order.order_id }}</strong><br/>
+                <strong>#{{ String(order.order_id).padStart(3, '0') }}</strong><br/>
                 <small>{{ formatDate(order.Order_date) }}</small>
               </td>
 
@@ -358,7 +358,7 @@ onUnmounted(() => {
       <div class="detail-modal">
         <div class="detail-modal__head">
           <div>
-            <h3>รายละเอียดออเดอร์ #{{ detailOrder.order_id }}</h3>
+            <h3>รายละเอียดออเดอร์ #{{ String(detailOrder.order_id).padStart(3, '0') }}</h3>
             <p>{{ detailOrder.name || '-' }} · {{ detailOrder.phone || '-' }}</p>
           </div>
           <button type="button" class="close-btn" @click="closeOrderDetail" aria-label="ปิด">✕</button>

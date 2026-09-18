@@ -3,6 +3,8 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { useAuth } from './composables/useAuth'
 import UserSidebarLayout from './components/UserSidebarLayout.vue'
+import GuideTourOverlay from './components/GuideTourOverlay.vue'
+import { GUIDE_ENABLED } from './config/guide'
 
 const route = useRoute()
 const router = useRouter()
@@ -382,6 +384,10 @@ onUnmounted(() => {
               <span class="menu-icon"><svg class="menu-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
               <span class="menu-label">เพิ่ม User</span>
             </RouterLink>
+            <RouterLink v-if="GUIDE_ENABLED" to="/admin/guide">
+              <span class="menu-icon"><svg class="menu-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h10l4 4v12H5z"/><path d="M15 4v5h4M8 13h8M8 17h6"/></svg></span>
+              <span class="menu-label">คู่มือการใช้งาน</span>
+            </RouterLink>
           </nav>
         </div>
 
@@ -494,6 +500,7 @@ onUnmounted(() => {
         </RouterView>
       </main>
     </section>
+    <GuideTourOverlay />
   </div>
 </template>
 

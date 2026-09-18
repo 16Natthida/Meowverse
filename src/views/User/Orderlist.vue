@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
+import { GUIDE_ORDERS, isGuideMode } from '../../utils/guideDemoData'
 
 defineOptions({
   name: 'UserOrderList',
@@ -232,9 +233,15 @@ const fetchOrders = async () => {
     const res = await fetch(`${API_BASE_URL}/orders?user_id=${userId}`)
     if (!res.ok) throw new Error(`ไม่สามารถโหลดข้อมูลออเดอร์ได้ (${res.status})`)
     const data = await res.json()
-    orders.value = Array.isArray(data) ? data : (data.orders ?? [])
+    const arr = Array.isArray(data) ? data : (data.orders ?? [])
+    orders.value = arr.length || !isGuideMode(route) ? arr : GUIDE_ORDERS
   } catch (err) {
-    error.value = err.message
+    if (isGuideMode(route)) {
+      error.value = null
+      orders.value = GUIDE_ORDERS
+    } else {
+      error.value = err.message
+    }
   } finally {
     loading.value = false
   }
@@ -654,7 +661,7 @@ onMounted(() => {
             <span v-else-if="hasGreenDot(order.status)" class="notif-dot notif-dot--green" aria-label="อัพเดทสถานะใหม่"></span>
 
             <div class="order-card__head">
-              <div class="order-card__id">เลขที่ใบสั่งซื้อ {{ order.order_id }}</div>
+              <div class="order-card__id">เลขที่ใบสั่งซื้อ {{ String(order.order_id).padStart(3, '0') }}</div>
               <div class="order-card__status">
                 <span class="status-label">สถานะคำสั่งซื้อ :</span>
                 <span class="status-value" :style="{ color: getStatus(order.status).color }">
@@ -674,7 +681,9 @@ onMounted(() => {
                   ขนส่ง: <strong>{{ order.shipping_provider_name }}</strong>
                 </span>
                 <span v-if="order.tracking_number" class="tracking-summary__number">
-                  เลขพัสดุ: <strong>{{ order.tracking_number }}</strong>
+                  <span class="tracking-number-label">
+                    เลขพัสดุ: <strong>{{ order.tracking_number }}</strong>
+                  </span>
                   <button
                     type="button"
                     class="tracking-copy-btn"
@@ -834,26 +843,6 @@ onMounted(() => {
             </div>
           </div>
         </div>
-      </div>
-    </div>
-
-    <!-- ── TRUST BADGES ── -->
-    <div class="trust-badges">
-      <div class="trust-item">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8M12 17v4M7 4h10l-1 8a4 4 0 0 1-8 0L7 4z"/><path d="M7 4H4a1 1 0 0 0-1 1c0 3 2 5 4 5M17 4h3a1 1 0 0 1 1 1c0 3-2 5-4 5"/></svg>
-        <div><p>Trusted Quality</p><span>สินค้าคัดสรรคุณภาพดีที่สุด</span></div>
-      </div>
-      <div class="trust-item">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
-        <div><p>Pre-order Protection</p><span>รับประกันเงินคืนหากสินค้ามีปัญหา</span></div>
-      </div>
-      <div class="trust-item">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="6" width="15" height="12" rx="2"/><path d="M16 10h3.5L22 13v5h-6"/><circle cx="6" cy="19" r="1.5"/><circle cx="18.5" cy="19" r="1.5"/></svg>
-        <div><p>Real Shipping Cost</p><span>คิดค่านำเข้าตามจริง ไม่บวกเพิ่ม</span></div>
-      </div>
-      <div class="trust-item">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
-        <div><p>Customer Support</p><span>ทีมงานพร้อมดูแลตลอดเวลา</span></div>
       </div>
     </div>
 
@@ -1510,6 +1499,11 @@ onMounted(() => {
   min-width: 0;
   flex: 1 1 auto;
 }
+.tracking-number-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .tracking-summary__number strong {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1916,5 +1910,30 @@ onMounted(() => {
   .order-card { padding: 1.1rem 1.1rem; }
   .order-item__subtotal { min-width: 60px; }
   .trust-badges { grid-template-columns: 1fr; }
+  .tracking-summary {
+    flex-wrap: wrap;
+    align-items: stretch;
+    overflow-x: visible;
+    white-space: normal;
+  }
+  .tracking-summary > span:first-child,
+  .tracking-summary__number {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+  .tracking-summary__number {
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+  .tracking-number-label {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+  .tracking-copy-btn,
+  .tracking-confirm-btn {
+    flex: 1 1 100%;
+    width: 100%;
+    margin-left: 0;
+  }
 }
 </style>

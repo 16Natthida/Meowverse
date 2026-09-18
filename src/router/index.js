@@ -4,6 +4,7 @@ import UserDashboard from '../views/User/UserDashboard.vue'
 import AdminDashboard from '../views/Admin/AdminDashboard.vue'
 import AdminHomeView from '../views/Admin/HomeView.vue'
 import SettingsView from '../views/Admin/SettingsView.vue'
+import { GUIDE_ENABLED } from '../config/guide'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -157,6 +158,12 @@ const router = createRouter({
       meta: { requiresAuth: true, roles: ['user', 'admin'] },
     },
     {
+      path: '/help/user',
+      name: 'user-guide',
+      component: () => import('../views/Guide/UserGuideView.vue'),
+      meta: { requiresAuth: true, roles: ['user', 'admin'], guidePage: true },
+    },
+    {
       path: '/admin',
       redirect: '/admin/home',
     },
@@ -171,6 +178,12 @@ const router = createRouter({
       name: 'admin-settings',
       component: SettingsView,
       meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/admin/guide',
+      name: 'admin-guide',
+      component: () => import('../views/Guide/AdminGuideView.vue'),
+      meta: { requiresAuth: true, roles: ['admin'], guidePage: true },
     },
     {
       path: '/admin/dashboard',
@@ -286,6 +299,11 @@ router.beforeEach((to, from, next) => {
     } else {
       next('/dashboard')
     }
+    return
+  }
+
+  if (to.meta.guidePage && !GUIDE_ENABLED) {
+    next(userRole === 'admin' ? '/admin/home' : '/dashboard')
     return
   }
 

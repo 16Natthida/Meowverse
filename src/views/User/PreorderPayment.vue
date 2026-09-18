@@ -1118,7 +1118,7 @@ onMounted(async () => {
             <div class="hero-copy">
               <div class="hero-badges">
                 <span class="hero-chip hero-chip--soft">Preorder stock</span>
-                <span class="hero-chip">Order #{{ order.order_id }}</span>
+                <span class="hero-chip">Order #{{ String(order.order_id).padStart(3, '0') }}</span>
               </div>
               <h1>
                 {{

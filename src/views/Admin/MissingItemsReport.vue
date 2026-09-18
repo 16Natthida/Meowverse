@@ -124,7 +124,7 @@
               </td>
               <td class="customer">
                 <div class="customer-name">{{ item.username }}</div>
-                <small class="order-id">คำสั่ง #{{ item.order_id }}</small>
+                <small class="order-id">คำสั่ง #{{ String(item.order_id).padStart(3, '0') }}</small>
               </td>
             </tr>
           </tbody>

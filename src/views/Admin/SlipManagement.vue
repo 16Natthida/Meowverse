@@ -351,7 +351,7 @@ onMounted(() => {
             <tr v-for="payment in filteredPayments" :key="payment.pay_id">
               <td>#{{ payment.pay_id }}</td>
               <td>
-                <strong>#{{ payment.order_id }}</strong>
+                <strong>#{{ String(payment.order_id).padStart(3, '0') }}</strong>
               </td>
               <td>
                 <span class="member-code">{{ payment.username || '-' }}</span>
@@ -439,7 +439,7 @@ onMounted(() => {
         <div class="slip-modal">
           <div class="slip-modal-head">
             <div>
-              <h3>สลิปออเดอร์ #{{ selectedSlip.order_id }}</h3>
+              <h3>สลิปออเดอร์ #{{ String(selectedSlip.order_id).padStart(3, '0') }}</h3>
               <p class="slip-modal-member">รหัสสมาชิก: {{ selectedSlip.username || '-' }}</p>
             </div>
             <button class="close-btn" type="button" @click="closeSlip">✕</button>

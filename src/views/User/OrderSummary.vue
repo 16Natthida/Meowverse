@@ -189,7 +189,7 @@ onMounted(() => {
           <div class="header-top">
             <div class="order-number">
               <span class="order-label">ออเดอร์ #</span>
-              <span class="order-id">{{ order.order_id }}</span>
+              <span class="order-id">{{ String(order.order_id).padStart(3, '0') }}</span>
             </div>
             <div :class="['status-badge', `status--${order.status.toLowerCase()}`]">
               {{ getStatusLabel() }}

@@ -1,9 +1,11 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
+import { GUIDE_CART_ITEMS, isGuideMode } from '../../utils/guideDemoData'
 
 const router = useRouter()
+const route = useRoute()
 const { getUser } = useAuth()
 const currentUser = computed(() => getUser())
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
@@ -90,7 +92,8 @@ const fetchCart = async () => {
     const data = await res.json()
     // รองรับทั้ง array และ { items: [...] }
     const arr = Array.isArray(data) ? data : (data.items ?? data.data ?? [])
-    cartItems.value = arr
+    const sourceItems = arr.length || !isGuideMode(route) ? arr : GUIDE_CART_ITEMS
+    cartItems.value = sourceItems
       // ตัดข้อมูลเสียหายออก (เช่น ข้อความเตือนหรือข้อมูลผิด)
       .filter((item) => {
         const itemQty = Number(item.qty) || 0
@@ -133,7 +136,13 @@ const fetchCart = async () => {
       activeCartView.value = 'preorder'
     }
   } catch (err) {
-    error.value = err.message
+    if (isGuideMode(route)) {
+      error.value = null
+      cartItems.value = GUIDE_CART_ITEMS.map((item) => ({ ...item }))
+      activeCartView.value = 'ready'
+    } else {
+      error.value = err.message
+    }
   } finally {
     loading.value = false
   }
@@ -147,6 +156,12 @@ const updateQty = async (item, newQty) => {
     return
   }
   updatingId.value = item.cart_id
+  if (isGuideMode(route)) {
+    item.qty = newQty
+    updatingId.value = null
+    showNotice('โหมดสาธิต: เปลี่ยนจำนวนให้ดูตัวอย่างแล้ว (ยังไม่บันทึกจริง)', 'success')
+    return
+  }
   try {
     const res = await fetch(`${API_BASE_URL}/cart/${item.cart_id}`, {
       method: 'PUT',
@@ -169,6 +184,12 @@ const updateQty = async (item, newQty) => {
 // ── REMOVE ITEM ──
 const removeItem = async (item) => {
   deletingId.value = item.cart_id
+  if (isGuideMode(route)) {
+    cartItems.value = cartItems.value.filter((cartItem) => cartItem.cart_id !== item.cart_id)
+    deletingId.value = null
+    showNotice('โหมดสาธิต: ลบรายการตัวอย่างแล้ว (ยังไม่ลบข้อมูลจริง)', 'success')
+    return
+  }
   try {
     console.debug('[removeItem] Removing cart item', item.cart_id, 'item:', item)
     const deleteUrl = `${API_BASE_URL}/cart/${item.cart_id}`

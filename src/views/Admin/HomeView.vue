@@ -395,7 +395,7 @@ onBeforeUnmount(() => {
           <tbody>
             <tr v-for="pay in payments" :key="pay.pay_id">
               <td>#{{ pay.pay_id }}</td>
-              <td>#{{ pay.order_id }}</td>
+              <td>#{{ String(pay.order_id).padStart(3, '0') }}</td>
               <td>{{ pay.type }}</td>
               <td>
                 ฿{{ Number(pay.amount).toLocaleString('th-TH', { minimumFractionDigits: 2 }) }}
@@ -441,7 +441,7 @@ onBeforeUnmount(() => {
       <div v-if="selectedSlip" class="slip-modal-overlay" @click.self="closeSlip">
         <div class="slip-modal">
           <div class="slip-modal-head">
-            <h3>สลิปออเดอร์ #{{ selectedSlip.order_id }}</h3>
+            <h3>สลิปออเดอร์ #{{ String(selectedSlip.order_id).padStart(3, '0') }}</h3>
             <button class="close-btn" @click="closeSlip">✕</button>
           </div>
           <div class="slip-modal-body">

@@ -244,7 +244,7 @@ async function processIntake() {
 
     intakeMessage.value = `บันทึกสำเร็จ ยอดคืน: ${formatMoney(data.refund_amount || 0)}`
     if (Array.isArray(data.delayed_order_ids) && data.delayed_order_ids.length > 0) {
-      intakeMessage.value += ` แยกรายการที่รับไม่ครบเป็นออเดอร์ Delayed แล้ว (#${data.delayed_order_ids.join(', #')})`
+      intakeMessage.value += ` แยกรายการที่รับไม่ครบเป็นออเดอร์ Delayed แล้ว (#${data.delayed_order_ids.map((id) => String(id).padStart(3, '0')).join(', #')})`
     }
     if (Number(data.excess_qty) > 0) {
       intakeMessage.value += data.excess_stock_action === 'moved_to_stock'

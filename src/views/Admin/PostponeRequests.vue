@@ -239,7 +239,7 @@ onMounted(() => {
 
               <!-- ออเดอร์ -->
               <td>
-                <strong>#{{ request.order_id }}</strong><br />
+                <strong>#{{ String(request.order_id).padStart(3, '0') }}</strong><br />
                 <small class="text-muted">{{ formatDate(request.created_at) }}</small>
               </td>
 

@@ -32,6 +32,11 @@ function formatDate(value) {
   })
 }
 
+function formatOrderId(value, fallback = '') {
+  if (value == null || value === '') return fallback
+  return String(value).padStart(3, '0')
+}
+
 function resolveImageUrl(value) {
   const url = String(value || '').trim()
   if (!url) return ''
@@ -97,7 +102,7 @@ function renderPrintDocument(printWindow, order, logoUrl = '') {
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>ใบออเดอร์ #${escapeHtml(order?.order_id || '')} - Meowverse</title>
+        <title>ใบออเดอร์ #${escapeHtml(formatOrderId(order?.order_id))} - Meowverse</title>
         <style>
           @page { size: A4; margin: 12mm; }
           * { box-sizing: border-box; }
@@ -187,7 +192,7 @@ function renderPrintDocument(printWindow, order, logoUrl = '') {
               <div class="subtitle">ใบสรุปรายการสั่งซื้อ</div>
             </div>
             <div class="order-meta">
-              <strong>ออเดอร์ #${escapeHtml(order?.order_id || '-')}</strong>
+              <strong>ออเดอร์ #${escapeHtml(formatOrderId(order?.order_id, '-'))}</strong>
               <span>${escapeHtml(formatDate(order?.Order_date || order?.order_date))}</span>
             </div>
           </header>

@@ -241,14 +241,14 @@ const displayStatus = computed(() => {
   const raw = String(order.value?.status || '').trim()
   const status = raw.toLowerCase()
   const normalized = status.replace(/[_\s]+/g, ' ')
- 
+
   if (normalized === 'pending') {
     const hasPaymentEvidence = Boolean(
       order.value?.saved_shipping?.slip_url || order.value?.saved_shipping?.payment_status,
     )
     return hasPaymentEvidence ? 'รอแอดมินตรวจสอบ' : 'รอชำระเงิน'
   }
-  
+
   if (normalized === 'slip submitted') return 'แนบสลิปแล้วรอตรวจสอบ'
   if (normalized === 'paid') return 'จ่ายเงินสำเร็จ รอแอดมินตรวจสอบและจัดส่ง'
 
@@ -439,9 +439,30 @@ const fetchOrder = async () => {
   try {
     loading.value = true
     error.value = null
-    const res = await fetch(`${API_BASE_URL}/orders/${orderId}`)
+
+    // 1. ดึง user_id ของคนที่กำลังเปิดหน้าเว็บ
+    const userId = currentUser.value?.id ?? currentUser.value?.user_id
+
+    // 2. ส่ง user_id แนบไปใน query string
+    const res = await fetch(`${API_BASE_URL}/orders/${orderId}?user_id=${userId || ''}`)
+
+    // 3. ดักจับกรณีไม่มีสิทธิ์ (403)
+    if (res.status === 403) {
+      showNotice('คุณไม่มีสิทธิ์เข้าถึงออเดอร์นี้', 'error')
+      setTimeout(() => router.replace('/order-list'), 1500)
+      return
+    }
+
     if (!res.ok) throw new Error(`ไม่พบข้อมูลออเดอร์ (${res.status})`)
     const data = await res.json()
+
+    // 4. Double check ฝั่ง client: ถ้า ID ไม่ตรงกัน ให้ดีดออกทันที
+    if (userId && data.user_id && Number(data.user_id) !== Number(userId)) {
+      showNotice('คุณไม่มีสิทธิ์เข้าถึงออเดอร์นี้', 'error')
+      setTimeout(() => router.replace('/order-list'), 1500)
+      return
+    }
+
     if (data.Order_type && data.Order_type !== 'Ready') {
       if (String(data.Order_type).toLowerCase() === 'preorder') {
         router.replace(`/preorder-payment/${orderId}`)
@@ -684,7 +705,7 @@ onUnmounted(() => {
             <div class="hero-copy">
               <div class="hero-badges">
                 <span class="hero-chip hero-chip--soft">Ready stock</span>
-                <span class="hero-chip">Order #{{ order.order_id }}</span>
+                <span class="hero-chip">Order #{{ String(order.order_id).padStart(3, '0') }}</span>
               </div>
               <h1>ชำระเงินสำหรับคำสั่งพร้อมส่ง</h1>
               <p class="hero-subtitle">

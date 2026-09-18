@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
+import { GUIDE_CART_ITEMS, GUIDE_CATEGORIES, GUIDE_PRODUCTS, isGuideMode } from '../../utils/guideDemoData'
 
 const router = useRouter()
 const route = useRoute()
@@ -97,6 +98,7 @@ const selectedProduct = ref(null)
 const selectedFlavor = ref('')
 const selectedPreviewIndex = ref(0)
 const detailQty = ref(1)
+const detailDescriptionExpanded = ref(false)
 const batchSelections = ref([]) // [{ flavor, qty }]
 const detailTouchStart = ref({ x: 0, y: 0 })
 const imageViewerOpen = ref(false)
@@ -152,18 +154,31 @@ watch(
 )
 
 const iconMap = [
-  { keyword: 'ขนม', icon: '🍬' },
-  { keyword: 'เตียง', icon: '🛏️' },
-  { keyword: 'บ้าน', icon: '🏠' },
-  { keyword: 'ของเล่น', icon: '🎮' },
-  { keyword: 'รูมมิ่ง', icon: '✂️' },
-  { keyword: 'อาหาร', icon: '🥫' },
-  { keyword: 'อุปกรณ์', icon: '🔧' },
+  { keyword: 'อาหารเปียก', icon: '/images/category-icons/wet-cat-food.png' },
+  { keyword: 'อาหารเม็ด', icon: '/images/category-icons/dry-cat-food.png' },
+  { keyword: 'ขนมเลีย', icon: '/images/category-icons/lickable-cat-treats.png' },
+  { keyword: 'ขนม', icon: '/images/category-icons/cat-treats.png' },
+  { keyword: 'ทูน่า', icon: '/images/category-icons/tuna-fish-food.png' },
+  { keyword: 'ปลา', icon: '/images/category-icons/tuna-fish-food.png' },
+  { keyword: 'ไก่', icon: '/images/category-icons/chicken-flavor.png' },
+  { keyword: 'แซลมอน', icon: '/images/category-icons/salmon-flavor.png' },
+  { keyword: 'นม', icon: '/images/category-icons/goat-cat-milk.png' },
+  { keyword: 'ลูกแมว', icon: '/images/category-icons/kitten-food.png' },
+  { keyword: 'แมวโต', icon: '/images/category-icons/adult-cat-food.png' },
+  { keyword: 'แมวสูงวัย', icon: '/images/category-icons/senior-cat-food.png' },
+  { keyword: 'บำรุงขน', icon: '/images/category-icons/hair-skin-care.png' },
+  { keyword: 'ย่อยอาหาร', icon: '/images/category-icons/digestive-care.png' },
+  { keyword: 'ควบคุมน้ำหนัก', icon: '/images/category-icons/weight-control.png' },
+  { keyword: 'อาหารเสริม', icon: '/images/category-icons/supplements.png' },
+  { keyword: 'สินค้าใหม่', icon: '/images/category-icons/new-products.png' },
+  { keyword: 'โปรโมชั่น', icon: '/images/category-icons/promotion.png' },
+  { keyword: 'ขายดี', icon: '/images/category-icons/best-seller.png' },
+  { keyword: 'อาหาร', icon: '/images/category-icons/dry-cat-food.png' },
 ]
 
 function getCatIcon(name) {
   const match = iconMap.find((i) => name?.includes(i.keyword))
-  return match ? match.icon : '🐾'
+  return match ? match.icon : '/images/category-icons/all-products.png'
 }
 
 function parseFlavorList(value) {
@@ -264,13 +279,15 @@ const fetchCategories = async () => {
     if (!res.ok) throw new Error(`categories API ${res.status}`)
     const data = await res.json()
     const arr = Array.isArray(data) ? data : (data.data ?? data.categories ?? [])
-    categories.value = arr.map((c) => ({
+    const normalizedCategories = arr.map((c) => ({
       id: c.cat_id ?? c.id ?? c.categoryId,
       name: c.cat_name ?? c.name ?? c.categoryName ?? '',
       icon: getCatIcon(c.cat_name ?? c.name ?? ''),
     }))
+    categories.value = normalizedCategories.length || !isGuideMode(route) ? normalizedCategories : GUIDE_CATEGORIES
   } catch (err) {
     console.error('fetchCategories:', err)
+    if (isGuideMode(route)) categories.value = GUIDE_CATEGORIES
   }
 }
 
@@ -283,7 +300,8 @@ const fetchProducts = async () => {
     if (!res.ok) throw new Error('Failed to fetch products')
     const data = await res.json()
     const arr = Array.isArray(data) ? data : (data.data ?? data.products ?? [])
-    products.value = arr.map((p) => ({
+    const sourceProducts = arr.length || !isGuideMode(route) ? arr : GUIDE_PRODUCTS
+    products.value = sourceProducts.map((p) => ({
       preorderRoundId:
         p.preorderRoundId != null
           ? Number(p.preorderRoundId)
@@ -325,7 +343,12 @@ const fetchProducts = async () => {
       isRecommended: Boolean(p.isRecommended ?? p.is_recommended ?? false),
     }))
   } catch (err) {
-    error.value = err.message
+    if (isGuideMode(route)) {
+      error.value = null
+      products.value = GUIDE_PRODUCTS
+    } else {
+      error.value = err.message
+    }
   } finally {
     loading.value = false
   }
@@ -340,7 +363,8 @@ const fetchCartCount = async () => {
     if (!res.ok) return
     const data = await res.json()
     const arr = Array.isArray(data) ? data : (data.items ?? [])
-    cartCount.value = arr.reduce((sum, item) => sum + (Number(item.qty) || 1), 0)
+    const sourceItems = arr.length || !isGuideMode(route) ? arr : GUIDE_CART_ITEMS
+    cartCount.value = sourceItems.reduce((sum, item) => sum + (Number(item.qty) || 1), 0)
   } catch (err) {
     console.error('fetchCartCount:', err)
   }
@@ -535,6 +559,7 @@ function openProductDetail(product) {
   const idx = findFlavorImageIndex(firstFlavor)
   selectedPreviewIndex.value = idx !== -1 ? idx : 0
   detailQty.value = 1
+  detailDescriptionExpanded.value = false
 }
 
 function closeProductDetail() {
@@ -542,6 +567,7 @@ function closeProductDetail() {
   selectedFlavor.value = ''
   selectedPreviewIndex.value = 0
   detailQty.value = 1
+  detailDescriptionExpanded.value = false
   imageViewerOpen.value = false
 }
 
@@ -1259,7 +1285,9 @@ onMounted(async () => {
           :class="['cat-btn', { 'cat-btn--active': activeCategory === null }]"
           @click="handleCategoryClick(null)"
         >
-          <span class="cat-btn__icon">🐾</span>
+          <span class="cat-btn__icon">
+            <img src="/images/category-icons/all-products.png" alt="" />
+          </span>
           <span class="cat-btn__label">ทั้งหมด</span>
         </button>
 
@@ -1269,7 +1297,9 @@ onMounted(async () => {
           :class="['cat-btn', { 'cat-btn--active': activeCategory === cat.id }]"
           @click="handleCategoryClick(cat.id)"
         >
-          <span class="cat-btn__icon">{{ cat.icon }}</span>
+          <span class="cat-btn__icon">
+            <img :src="cat.icon" :alt="cat.name" />
+          </span>
           <span class="cat-btn__label">{{ cat.name }}</span>
         </button>
       </div>
@@ -1523,14 +1553,7 @@ onMounted(async () => {
             </div>
 
             <div class="detail-content">
-              <p class="detail-eyebrow">รายละเอียดสินค้า</p>
               <h3 class="detail-title">{{ selectedProduct.name }}</h3>
-              <p class="detail-desc">
-                <span>{{ detailDescription.general }}</span>
-                <span v-if="detailDescription.flavor" class="detail-desc__flavor">
-                  {{ detailDescription.flavor }}
-                </span>
-              </p>
 
               <div class="detail-price-band">
                 <span class="detail-price-band__price">
@@ -1541,6 +1564,31 @@ onMounted(async () => {
                   :class="['detail-badge', getCardBadge(selectedProduct).className]"
                 >{{ getCardBadge(selectedProduct).label }}</span>
               </div>
+
+              <section class="detail-description-section detail-description-section--summary">
+                <div class="detail-description-header">
+                  <h4 class="detail-description-title">รายละเอียดสินค้า</h4>
+                  <button
+                    type="button"
+                    class="detail-description-toggle"
+                    :aria-expanded="detailDescriptionExpanded"
+                    @click="detailDescriptionExpanded = !detailDescriptionExpanded"
+                  >
+                    {{ detailDescriptionExpanded ? 'ย่อรายละเอียด' : 'อ่านเพิ่มเติม' }}
+                  </button>
+                </div>
+                <div
+                  class="detail-description-body"
+                  :class="{ 'detail-description-body--collapsed': !detailDescriptionExpanded }"
+                >
+                  <p class="detail-desc">
+                    <span>{{ detailDescription.general }}</span>
+                    <span v-if="detailDescription.flavor" class="detail-desc__flavor">
+                      {{ detailDescription.flavor }}
+                    </span>
+                  </p>
+                </div>
+              </section>
 
               <div
                 v-if="getEffectiveItemType(selectedProduct) === 'preorder'"
@@ -1697,9 +1745,6 @@ onMounted(async () => {
                       ? 'เพิ่มลงตะกร้า (ตัวเลือกนี้)'
                       : 'เพิ่มลงตะกร้า'
                   }}
-                </button>
-                <button class="btn btn--outline detail-action-btn" @click="closeProductDetail">
-                  ปิดหน้าต่าง
                 </button>
               </div>
             </div>
@@ -2452,6 +2497,13 @@ onMounted(async () => {
     box-shadow 0.2s;
   box-shadow: 0 4px 10px rgba(89, 61, 125, 0.08);
 }
+.cat-btn__icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: inherit;
+}
 .cat-btn--active .cat-btn__icon {
   background: linear-gradient(180deg, #cda2fb, #bc8aed);
   border-color: #b788ea;
@@ -3126,6 +3178,76 @@ onMounted(async () => {
 .detail-desc__flavor {
   display: block;
   margin-top: 0.2rem;
+}
+
+.detail-description-section {
+  margin-top: 1.1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid #eadff5;
+}
+
+.detail-description-section--summary {
+  margin-top: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid #eadff5;
+  border-radius: 12px;
+  background: rgba(251, 248, 255, 0.9);
+}
+
+.detail-description-section--summary .detail-description-header {
+  margin-bottom: 0.2rem;
+}
+
+.detail-description-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.detail-description-title {
+  margin: 0;
+  color: var(--primary-dark);
+  font-size: 0.98rem;
+  font-weight: 900;
+}
+
+.detail-description-toggle {
+  border: 0;
+  padding: 0.25rem 0;
+  background: transparent;
+  color: #8b5fc2;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.detail-description-toggle:hover {
+  color: var(--primary-dark);
+  text-decoration: underline;
+}
+
+.detail-description-body {
+  position: relative;
+  overflow: hidden;
+}
+
+.detail-description-body--collapsed {
+  max-height: 5.1rem;
+}
+
+.detail-description-body--collapsed::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2.1rem;
+  background: linear-gradient(transparent, #fffaff);
+  content: '';
+  pointer-events: none;
 }
 
 .detail-price-band {

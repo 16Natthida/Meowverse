@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
+import GuideTourOverlay from './GuideTourOverlay.vue'
+import { GUIDE_ENABLED } from '../config/guide'
 
 const route = useRoute()
 const router = useRouter()
@@ -26,6 +28,7 @@ const shopLinks = [
 const accountLinks = [
   { label: 'ตะกร้าสินค้า', path: '/cart', icon: 'cart' },
   { label: 'บัญชีของฉัน', path: '/profile', icon: 'user' },
+  { label: 'คู่มือการใช้งาน', path: '/help/user', icon: 'book' },
 ]
 
 function resolveImageUrl(value) {
@@ -216,7 +219,7 @@ onBeforeUnmount(() => {
 
           <p class="user-shell__section-title user-shell__section-title--account">บัญชีของฉัน</p>
           <RouterLink
-            v-for="item in accountLinks"
+            v-for="item in accountLinks.filter((link) => GUIDE_ENABLED || link.path !== '/help/user')"
             :key="item.path"
             :to="item.path"
             class="user-shell__link"
@@ -224,7 +227,8 @@ onBeforeUnmount(() => {
           >
             <span class="user-shell__icon" aria-hidden="true">
               <svg v-if="item.icon === 'cart'" viewBox="0 0 24 24"><circle cx="9" cy="20" r="1"/><circle cx="19" cy="20" r="1"/><path d="M2 3h3l2.2 11h11.2L21 7H6"/></svg>
-              <svg v-else viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>
+              <svg v-else-if="item.icon === 'user'" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>
+              <svg v-else viewBox="0 0 24 24"><path d="M5 4h10l4 4v12H5z"/><path d="M15 4v5h4M8 13h8M8 17h6"/></svg>
             </span>
             <span class="user-shell__label">{{ item.label }}</span>
           </RouterLink>
@@ -282,6 +286,7 @@ onBeforeUnmount(() => {
         <slot />
       </main>
     </section>
+    <GuideTourOverlay />
   </div>
 </template>
 
