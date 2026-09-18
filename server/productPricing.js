@@ -45,6 +45,15 @@ export function serializeFlavorPrices(value) {
   return Object.keys(prices).length > 0 ? JSON.stringify(prices) : null
 }
 
+export function getLowestFlavorPrice(value, type, fallback) {
+  const prices = parseFlavorPricesMap(value)
+  const values = Object.values(prices)
+    .map((entry) => (type === 'preorder' ? entry.preorderPrice : entry.readyPrice))
+    .filter((price) => price != null && Number.isFinite(Number(price)) && Number(price) >= 0)
+
+  return values.length > 0 ? Math.min(...values.map(Number)) : Number(fallback) || 0
+}
+
 export function getFlavorPrice(value, flavor, type, fallback) {
   const flavorKey = String(flavor || '').trim().toLowerCase()
   if (!flavorKey) return Number(fallback) || 0

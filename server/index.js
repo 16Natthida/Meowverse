@@ -13,7 +13,11 @@ import orderRouter, { deleteOrder, restoreReadyOrderStock } from './order.js'
 import shippingRouter from './shipping.js'
 import { DEFAULT_PREORDER_TERMS, normalizePreorderTerms } from './preorderTerms.js'
 import { getShippingFeeSettings } from './shippingFees.js'
-import { parseFlavorPricesMap, serializeFlavorPrices } from './productPricing.js'
+import {
+  getLowestFlavorPrice,
+  parseFlavorPricesMap,
+  serializeFlavorPrices,
+} from './productPricing.js'
 
 dotenv.config()
 
@@ -1906,6 +1910,16 @@ app.post('/api/products', async (req, res) => {
   try {
     await connection.beginTransaction()
 
+    const flavorPrices = serializeFlavorPrices(payload.flavorPrices)
+    const basePrice = getLowestFlavorPrice(flavorPrices, 'ready', payload.basePrice)
+    const preorderPrice = getLowestFlavorPrice(
+      flavorPrices,
+      'preorder',
+      payload.preorderPrice == null || payload.preorderPrice === ''
+        ? basePrice
+        : payload.preorderPrice,
+    )
+
     const [insertResult] = await connection.query(
       `
         INSERT INTO products
@@ -1919,12 +1933,10 @@ app.post('/api/products', async (req, res) => {
         payload.description ? String(payload.description).trim() : null,
         serializeFlavorList(payload.flavors),
         payload.flavorStock ? JSON.stringify(payload.flavorStock) : '{}',
-        serializeFlavorPrices(payload.flavorPrices),
+        flavorPrices,
         Number(payload.stock) || 0,
-        Number(payload.basePrice) || 0,
-        payload.preorderPrice == null || payload.preorderPrice === ''
-          ? Number(payload.basePrice) || 0
-          : Number(payload.preorderPrice) || 0,
+        basePrice,
+        preorderPrice,
         payload.sku ? String(payload.sku).trim() : null,
         toBooleanNumber(payload.preorderEnabled),
         toBooleanNumber(payload.readyToShipEnabled ?? true),
@@ -1962,6 +1974,16 @@ app.put('/api/products/:id', async (req, res) => {
   try {
     await connection.beginTransaction()
 
+    const flavorPrices = serializeFlavorPrices(payload.flavorPrices)
+    const basePrice = getLowestFlavorPrice(flavorPrices, 'ready', payload.basePrice)
+    const preorderPrice = getLowestFlavorPrice(
+      flavorPrices,
+      'preorder',
+      payload.preorderPrice == null || payload.preorderPrice === ''
+        ? basePrice
+        : payload.preorderPrice,
+    )
+
     const [result] = await connection.query(
       `
         UPDATE products
@@ -1987,12 +2009,10 @@ app.put('/api/products/:id', async (req, res) => {
         payload.description ? String(payload.description).trim() : null,
         serializeFlavorList(payload.flavors),
         payload.flavorStock ? JSON.stringify(payload.flavorStock) : '{}',
-        serializeFlavorPrices(payload.flavorPrices),
+        flavorPrices,
         Number(payload.stock) || 0,
-        Number(payload.basePrice) || 0,
-        payload.preorderPrice == null || payload.preorderPrice === ''
-          ? Number(payload.basePrice) || 0
-          : Number(payload.preorderPrice) || 0,
+        basePrice,
+        preorderPrice,
         payload.sku ? String(payload.sku).trim() : null,
         toBooleanNumber(payload.preorderEnabled),
         toBooleanNumber(payload.readyToShipEnabled ?? true),

@@ -1,6 +1,6 @@
 <script setup>
 import AdminPageHeader from '../../components/AdminPageHeader.vue'
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 
 import { useAdminProductStore } from '@/stores/adminProductStore'
 
@@ -126,6 +126,36 @@ const totalFlavorStock = computed(() => {
   }
   return Object.values(form.flavorStock).reduce((sum, qty) => sum + Number(qty || 0), 0)
 })
+
+function getLowestFlavorFormPrice(type) {
+  const values = flavorItems.value
+    .map((flavor) => form.flavorPrices[flavor]?.[type])
+    .filter(
+      (price) =>
+        price !== '' &&
+        price != null &&
+        Number.isFinite(Number(price)) &&
+        Number(price) >= 0,
+    )
+
+  return values.length > 0 ? Math.min(...values.map(Number)) : null
+}
+
+function syncMainPricesFromFlavorPrices() {
+  if (flavorItems.value.length === 0) return
+
+  const lowestReadyPrice = getLowestFlavorFormPrice('readyPrice')
+  const lowestPreorderPrice = getLowestFlavorFormPrice('preorderPrice')
+
+  if (lowestReadyPrice != null) form.basePrice = lowestReadyPrice
+  if (lowestPreorderPrice != null) form.preorderPrice = lowestPreorderPrice
+}
+
+watch(
+  [() => form.flavorsText, () => form.flavorPrices],
+  syncMainPricesFromFlavorPrices,
+  { deep: true },
+)
 
 function setNotice(type, message) {
   notice.type = type
@@ -259,6 +289,7 @@ function clearImage(index) {
 
 async function submitForm() {
   addFlavorFromInput()
+  syncMainPricesFromFlavorPrices()
 
   if (!form.name.trim() || !form.sku.trim() || !form.categoryId) {
     setNotice('error', 'กรอกข้อมูลที่จำเป็นให้ครบก่อนบันทึกสินค้า')
@@ -841,6 +872,9 @@ onUnmounted(() => {
         <label>
           ราคาพร้อมส่ง * ราคา *
           <input v-model.number="form.basePrice" min="0" step="1" type="number" />
+          <p v-if="flavorItems.length > 0" class="compact input-hint">
+            หากกรอกราคาแยกตามรสชาติ ระบบจะใช้ราคาที่ต่ำที่สุดเป็นราคาหลักให้อัตโนมัติ
+          </p>
         </label>
 
         <label>
@@ -852,6 +886,9 @@ onUnmounted(() => {
             type="number"
             placeholder="ถ้าไม่กรอกจะใช้ราคาพร้อมส่ง"
           />
+          <p v-if="flavorItems.length > 0" class="compact input-hint">
+            ราคาพรีออเดอร์หลักจะเชื่อมกับราคาพรีออเดอร์ของรสชาติที่ต่ำที่สุด
+          </p>
           จำนวนคงเหลือ
           <input
             v-model.number="form.stock"
