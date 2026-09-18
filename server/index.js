@@ -13,6 +13,7 @@ import orderRouter, { deleteOrder, restoreReadyOrderStock } from './order.js'
 import shippingRouter from './shipping.js'
 import { DEFAULT_PREORDER_TERMS, normalizePreorderTerms } from './preorderTerms.js'
 import { getShippingFeeSettings } from './shippingFees.js'
+import { parseFlavorPricesMap, serializeFlavorPrices } from './productPricing.js'
 
 dotenv.config()
 
@@ -235,6 +236,43 @@ async function splitDelayedItemsFromOrder(connection, orderId, sourceDetailId = 
 const PREORDER_PAYMENT_WINDOW_MS = 48 * 60 * 60 * 1000
 
 async function createPreorderOrdersForClosedRound(connection, roundId) {
+  const [minimumRows] = await connection.query(
+    `SELECT
+       prp.prod_id,
+       p.prod_name AS name,
+       COALESCE(prp.minimum_order_qty, 0) AS minimum_order_qty,
+       COALESCE(SUM(c.qty), 0) AS quantity_reserved
+     FROM preorder_round_products prp
+     LEFT JOIN products p ON p.prod_id = prp.prod_id
+     LEFT JOIN cart c
+       ON c.preorder_round_id = prp.round_id
+      AND c.prod_id = prp.prod_id
+      AND c.item_type = 'preorder'
+     WHERE prp.round_id = ?
+     GROUP BY prp.prod_id, p.prod_name, prp.minimum_order_qty
+     ORDER BY prp.prod_id`,
+    [roundId],
+  )
+
+  const minimumNotReached = minimumRows
+    .filter((row) => Number(row.quantity_reserved) < Number(row.minimum_order_qty))
+    .map((row) => ({
+      prod_id: Number(row.prod_id),
+      name: row.name || '',
+      minimum_order_qty: Number(row.minimum_order_qty) || 0,
+      quantity_reserved: Number(row.quantity_reserved) || 0,
+      shortfall: Math.max(
+        (Number(row.minimum_order_qty) || 0) - (Number(row.quantity_reserved) || 0),
+        0,
+      ),
+    }))
+
+  const eligibleProductIds = new Set(
+    minimumRows
+      .filter((row) => Number(row.quantity_reserved) >= Number(row.minimum_order_qty))
+      .map((row) => Number(row.prod_id)),
+  )
+
   const [cartRows] = await connection.query(
     `SELECT
        c.cart_id,
@@ -244,6 +282,7 @@ async function createPreorderOrdersForClosedRound(connection, roundId) {
        c.flavor,
        c.item_type,
        c.preorder_round_id,
+       COALESCE(prp.minimum_order_qty, 0) AS minimum_order_qty,
        COALESCE(
          NULLIF(c.round_price, 0),
          NULLIF(prp.round_price, 0),
@@ -263,14 +302,16 @@ async function createPreorderOrdersForClosedRound(connection, roundId) {
     [roundId],
   )
 
-  const autoOrderSummary = { created: 0, skipped: 0, errors: [] }
+  const autoOrderSummary = { created: 0, skipped: 0, errors: [], minimumNotReached }
 
-  if (cartRows.length === 0) {
+  const eligibleCartRows = cartRows.filter((row) => eligibleProductIds.has(Number(row.prod_id)))
+
+  if (eligibleCartRows.length === 0) {
     return autoOrderSummary
   }
 
   const byUser = new Map()
-  for (const row of cartRows) {
+  for (const row of eligibleCartRows) {
     if (!byUser.has(row.user_id)) byUser.set(row.user_id, [])
     byUser.get(row.user_id).push(row)
   }
@@ -869,6 +910,7 @@ function mapProductRow(row, imageUrlMap) {
     categoryName: row.categoryName || '',
     stock: Number(row.stock) || 0,
     flavorStock: flavorStockMap,
+    flavorPrices: parseFlavorPricesMap(row.flavorPrices),
     basePrice: Number(row.basePrice) || 0,
     preorderPrice: Number(row.preorderPrice) || 0,
     chinaShippingFeeThb: Number(row.chinaShippingFeeThb) || 0,
@@ -988,6 +1030,7 @@ async function queryProductsByIds(productIds, connection = pool) {
         p.description AS description,
         p.flavors AS flavors,
         p.flavor_stock AS flavorStock,
+        p.flavor_prices AS flavorPrices,
         p.cat_id AS categoryId,
         c.cat_name AS categoryName,
         p.stock_qty AS stock,
@@ -1108,6 +1151,7 @@ async function ensureAdminSchema() {
     ADD COLUMN IF NOT EXISTS description TEXT DEFAULT NULL,
     ADD COLUMN IF NOT EXISTS flavors TEXT DEFAULT NULL,
     ADD COLUMN IF NOT EXISTS sku VARCHAR(100) DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS flavor_prices TEXT DEFAULT NULL,
     ADD COLUMN IF NOT EXISTS preorder_enabled TINYINT(1) NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS ready_to_ship_enabled TINYINT(1) NOT NULL DEFAULT 1,
     ADD COLUMN IF NOT EXISTS is_recommended TINYINT(1) NOT NULL DEFAULT 0
@@ -1210,6 +1254,7 @@ async function ensureAdminSchema() {
       prod_id INT NOT NULL,
       quantity_available INT NOT NULL DEFAULT 0,
       quantity_sold INT NOT NULL DEFAULT 0,
+      minimum_order_qty INT NOT NULL DEFAULT 0,
       round_price DECIMAL(10, 2) NULL,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -1299,6 +1344,11 @@ async function ensureAdminSchema() {
   await pool.query(`
     ALTER TABLE preorder_round_products
     ADD COLUMN IF NOT EXISTS quantity_sold INT NOT NULL DEFAULT 0
+  `)
+
+  await pool.query(`
+    ALTER TABLE preorder_round_products
+    ADD COLUMN IF NOT EXISTS minimum_order_qty INT NOT NULL DEFAULT 0
   `)
 
   await pool.query(`
@@ -1859,9 +1909,9 @@ app.post('/api/products', async (req, res) => {
     const [insertResult] = await connection.query(
       `
         INSERT INTO products
-          (cat_id, prod_name, description, flavors, flavor_stock, stock_qty, base_price, preorder_price, sku, preorder_enabled, ready_to_ship_enabled, is_recommended)
+          (cat_id, prod_name, description, flavors, flavor_stock, flavor_prices, stock_qty, base_price, preorder_price, sku, preorder_enabled, ready_to_ship_enabled, is_recommended)
         VALUES
-          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         Number(payload.categoryId),
@@ -1869,6 +1919,7 @@ app.post('/api/products', async (req, res) => {
         payload.description ? String(payload.description).trim() : null,
         serializeFlavorList(payload.flavors),
         payload.flavorStock ? JSON.stringify(payload.flavorStock) : '{}',
+        serializeFlavorPrices(payload.flavorPrices),
         Number(payload.stock) || 0,
         Number(payload.basePrice) || 0,
         payload.preorderPrice == null || payload.preorderPrice === ''
@@ -1920,6 +1971,7 @@ app.put('/api/products/:id', async (req, res) => {
           description = ?,
           flavors = ?,
           flavor_stock = ?,
+          flavor_prices = ?,
           stock_qty = ?,
           base_price = ?,
           preorder_price = ?,
@@ -1935,6 +1987,7 @@ app.put('/api/products/:id', async (req, res) => {
         payload.description ? String(payload.description).trim() : null,
         serializeFlavorList(payload.flavors),
         payload.flavorStock ? JSON.stringify(payload.flavorStock) : '{}',
+        serializeFlavorPrices(payload.flavorPrices),
         Number(payload.stock) || 0,
         Number(payload.basePrice) || 0,
         payload.preorderPrice == null || payload.preorderPrice === ''
@@ -2034,6 +2087,7 @@ app.get('/api/products/public', async (req, res) => {
         c.cat_name AS categoryName,
         p.stock_qty AS stock,
         p.flavor_stock AS flavorStock,
+        p.flavor_prices AS flavorPrices,
         p.base_price AS basePrice,
         p.preorder_price AS preorderPrice,
         (
@@ -2124,6 +2178,7 @@ app.get('/api/products/public', async (req, res) => {
       categoryName: row.categoryName || '',
       stock: Number(row.stock) || 0,
       flavorStock: parseFlavorStockMap(row.flavorStock),
+      flavorPrices: parseFlavorPricesMap(row.flavorPrices),
       basePrice: Number(row.basePrice) || 0,
       preorderPrice: Number(row.preorderPrice) || 0,
       price: Number(row.price ?? row.basePrice) || 0,
@@ -2157,6 +2212,7 @@ app.get('/api/products/ready-to-ship', async (req, res) => {
         c.cat_name AS categoryName,
         p.stock_qty AS stock,
         p.flavor_stock AS flavorStock,
+        p.flavor_prices AS flavorPrices,
         p.base_price AS basePrice,
         p.preorder_price AS preorderPrice,
         p.preorder_enabled AS preorderEnabled,
@@ -2208,6 +2264,7 @@ app.get('/api/products/ready-to-ship', async (req, res) => {
       categoryName: row.categoryName || '',
       stock: Number(row.stock) || 0,
       flavorStock: parseFlavorStockMap(row.flavorStock),
+      flavorPrices: parseFlavorPricesMap(row.flavorPrices),
       basePrice: Number(row.basePrice) || 0,
       preorderPrice: Number(row.preorderPrice) || 0,
       imageUrls: imageUrlMap.get(row.id) || [],
@@ -2236,6 +2293,7 @@ app.get('/api/products/preorder', async (req, res) => {
         c.cat_name AS categoryName,
         p.stock_qty AS stock,
         p.flavor_stock AS flavorStock,
+        p.flavor_prices AS flavorPrices,
         p.base_price AS basePrice,
         p.preorder_price AS preorderPrice,
         COALESCE((
@@ -2298,6 +2356,7 @@ app.get('/api/products/preorder', async (req, res) => {
       categoryName: row.categoryName || '',
       stock: Number(row.stock) || 0,
       flavorStock: parseFlavorStockMap(row.flavorStock),
+      flavorPrices: parseFlavorPricesMap(row.flavorPrices),
       basePrice: Number(row.basePrice) || 0,
       preorderPrice: Number(row.preorderPrice) || 0,
       chinaShippingFeeThb: Number(row.chinaShippingFeeThb) || 0,
@@ -2325,6 +2384,7 @@ app.get('/api/products/preorder', async (req, res) => {
         c.cat_name AS categoryName,
         p.stock_qty AS stock,
         p.flavor_stock AS flavorStock,
+        p.flavor_prices AS flavorPrices,
         p.base_price AS basePrice,
         p.preorder_price AS preorderPrice,
         COALESCE(prp.round_price, p.base_price) AS price,
@@ -2379,6 +2439,7 @@ app.get('/api/products/preorder', async (req, res) => {
       categoryName: row.categoryName || '',
       stock: Number(row.stock) || 0,
       flavorStock: parseFlavorStockMap(row.flavorStock),
+      flavorPrices: parseFlavorPricesMap(row.flavorPrices),
       basePrice: Number(row.basePrice) || 0,
       preorderPrice: Number(row.preorderPrice) || 0,
       price: Number(row.price) || Number(row.basePrice) || 0,
@@ -2593,6 +2654,83 @@ app.get('/api/preorder-rounds/active', async (_req, res) => {
   }
 })
 
+// Admin API: Live preorder progress across every round and product.
+app.get('/api/admin/preorder-progress', authenticateToken, requireAdmin, async (_req, res) => {
+  try {
+    await autoSyncPreorderRoundStatuses()
+
+    const [rows] = await pool.query(`
+      SELECT
+        r.round_id AS roundId,
+        r.round_name AS roundName,
+        r.status AS roundStatus,
+        r.start_date AS startDate,
+        r.end_date AS endDate,
+        prp.prod_id AS productId,
+        p.prod_name AS productName,
+        p.sku AS sku,
+        COALESCE(prp.minimum_order_qty, 0) AS minimumOrderQty,
+        COALESCE(SUM(c.qty), 0) AS quantityReserved,
+        COALESCE(prp.quantity_sold, 0) AS quantitySold,
+        GREATEST(
+          COALESCE(SUM(c.qty), 0),
+          COALESCE(prp.quantity_sold, 0)
+        ) AS committedQty
+      FROM preorder_rounds r
+      JOIN preorder_round_products prp ON prp.round_id = r.round_id
+      JOIN products p ON p.prod_id = prp.prod_id
+      LEFT JOIN cart c
+        ON c.preorder_round_id = r.round_id
+       AND c.prod_id = prp.prod_id
+       AND c.item_type = 'preorder'
+      GROUP BY
+        r.round_id,
+        r.round_name,
+        r.status,
+        r.start_date,
+        r.end_date,
+        prp.prod_id,
+        p.prod_name,
+        p.sku,
+        prp.minimum_order_qty,
+        prp.quantity_sold
+      ORDER BY r.end_date ASC, r.round_id ASC, p.prod_name ASC
+    `)
+
+    const progress = rows
+      .filter((row) => !isImportFeeOnlyRoundName(row.roundName))
+      .map((row) => {
+        const minimumOrderQty = Number(row.minimumOrderQty) || 0
+        const committedQty = Number(row.committedQty) || 0
+        return {
+          roundId: Number(row.roundId),
+          roundName: row.roundName || '',
+          roundStatus: row.roundStatus || '',
+          startDate: row.startDate,
+          endDate: row.endDate,
+          productId: Number(row.productId),
+          productName: row.productName || '',
+          sku: row.sku || '',
+          minimumOrderQty,
+          quantityReserved: Number(row.quantityReserved) || 0,
+          quantitySold: Number(row.quantitySold) || 0,
+          committedQty,
+          shortfall: Math.max(minimumOrderQty - committedQty, 0),
+          minimumStatus:
+            minimumOrderQty <= 0
+              ? 'no-minimum'
+              : committedQty >= minimumOrderQty
+                ? 'reached'
+                : 'not-reached',
+        }
+      })
+
+    res.json({ progress })
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
+
 // Get single preorder round with products
 app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req, res) => {
   const roundId = Number(req.params.id)
@@ -2634,6 +2772,14 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
         p.preorder_price AS preorderPrice,
         prp.quantity_available AS quantityAvailable,
         COALESCE(prp.quantity_sold, 0) AS quantitySold,
+        COALESCE(prp.minimum_order_qty, 0) AS minimumOrderQty,
+        COALESCE((
+          SELECT SUM(c.qty)
+          FROM cart c
+          WHERE c.preorder_round_id = prp.round_id
+            AND c.prod_id = prp.prod_id
+            AND c.item_type = 'preorder'
+        ), 0) AS quantityReserved,
         (prp.quantity_available - COALESCE(prp.quantity_sold, 0)) AS quantityRemaining,
         prp.round_price AS roundPrice,
         prp.china_shipping_fee_thb AS chinaShippingFeeThb,
@@ -2658,6 +2804,14 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
         p.preorder_price AS preorderPrice,
         prp.quantity_available AS quantityAvailable,
         0 AS quantitySold,
+        COALESCE(prp.minimum_order_qty, 0) AS minimumOrderQty,
+        COALESCE((
+          SELECT SUM(c.qty)
+          FROM cart c
+          WHERE c.preorder_round_id = prp.round_id
+            AND c.prod_id = prp.prod_id
+            AND c.item_type = 'preorder'
+        ), 0) AS quantityReserved,
         prp.quantity_available AS quantityRemaining,
         prp.round_price AS roundPrice,
         prp.china_shipping_fee_thb AS chinaShippingFeeThb,
@@ -2705,6 +2859,8 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
       basePrice: Number(row.basePrice) || 0,
       quantityAvailable: Number(row.quantityAvailable) || 0,
       quantitySold: Number(row.quantitySold) || 0,
+      minimumOrderQty: Number(row.minimumOrderQty) || 0,
+      quantityReserved: Number(row.quantityReserved) || 0,
       quantityRemaining: Number(row.quantityRemaining) || 0,
       roundPrice: row.roundPrice ? Number(row.roundPrice) : Number(row.basePrice) || 0,
       chinaShippingFeeThb: Number(row.chinaShippingFeeThb) || 0,
@@ -2887,7 +3043,7 @@ app.delete('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (r
 // Add product to preorder round
 app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, async (req, res) => {
   const roundId = Number(req.params.id)
-  const { productIds, quantities, roundPrices, chinaShippingFeesThb } = req.body || {}
+  const { productIds, quantities, minimumOrderQtys, roundPrices, chinaShippingFeesThb } = req.body || {}
 
   if (!Array.isArray(productIds) || productIds.length === 0) {
     res.status(400).json({ message: 'productIds array is required' })
@@ -2932,6 +3088,10 @@ app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, a
     for (const [index, pid] of productIds.entries()) {
       const quantityValue =
         quantities && quantities[index] !== undefined ? Number(quantities[index]) : 0
+      const minimumOrderQtyValue =
+        minimumOrderQtys && minimumOrderQtys[index] !== undefined
+          ? Number(minimumOrderQtys[index])
+          : 0
       const roundPriceValue =
         roundPrices && roundPrices[index] !== undefined && roundPrices[index] !== null
           ? Number(roundPrices[index])
@@ -2946,19 +3106,33 @@ app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, a
         return
       }
 
+      if (!Number.isInteger(minimumOrderQtyValue) || minimumOrderQtyValue < 0) {
+        res.status(400).json({ message: 'minimumOrderQty must be a non-negative integer' })
+        return
+      }
+
       await pool.query(
         `
         INSERT INTO preorder_round_products
-          (round_id, prod_id, quantity_available, round_price, china_shipping_fee_thb)
-        SELECT ?, ?, ?, ?, ?
+          (round_id, prod_id, quantity_available, minimum_order_qty, round_price, china_shipping_fee_thb)
+        SELECT ?, ?, ?, ?, ?, ?
         FROM preorder_rounds
         WHERE round_id = ?
         ON DUPLICATE KEY UPDATE
           quantity_available = VALUES(quantity_available),
+          minimum_order_qty = VALUES(minimum_order_qty),
           round_price = COALESCE(VALUES(round_price), round_price),
           china_shipping_fee_thb = VALUES(china_shipping_fee_thb)
       `,
-        [resolvedRoundId, Number(pid), quantityValue, roundPriceValue, chinaShippingFeeValue, resolvedRoundId],
+        [
+          resolvedRoundId,
+          Number(pid),
+          quantityValue,
+          minimumOrderQtyValue,
+          roundPriceValue,
+          chinaShippingFeeValue,
+          resolvedRoundId,
+        ],
       )
     }
 
@@ -3007,16 +3181,30 @@ app.put(
   async (req, res) => {
     const roundId = Number(req.params.id)
     const productId = Number(req.params.productId)
-    const { quantity, price, roundPrice, chinaShippingFeeThb } = req.body || {}
+    const { quantity, minimumOrderQty, price, roundPrice, chinaShippingFeeThb } = req.body || {}
     const resolvedPrice = roundPrice !== undefined ? roundPrice : price
 
-    if (quantity === undefined && resolvedPrice === undefined && chinaShippingFeeThb === undefined) {
-      res.status(400).json({ message: 'quantity, price, or chinaShippingFeeThb must be provided' })
+    if (
+      quantity === undefined &&
+      minimumOrderQty === undefined &&
+      resolvedPrice === undefined &&
+      chinaShippingFeeThb === undefined
+    ) {
+      res.status(400).json({ message: 'quantity, minimumOrderQty, price, or chinaShippingFeeThb must be provided' })
       return
     }
 
     if (quantity !== undefined && quantity !== null && Number(quantity) < 0) {
       res.status(400).json({ message: 'quantity must be null or a non-negative number' })
+      return
+    }
+
+    if (
+      minimumOrderQty !== undefined &&
+      minimumOrderQty !== null &&
+      (!Number.isInteger(Number(minimumOrderQty)) || Number(minimumOrderQty) < 0)
+    ) {
+      res.status(400).json({ message: 'minimumOrderQty must be null or a non-negative integer' })
       return
     }
 
@@ -3037,6 +3225,11 @@ app.put(
       if (quantity !== undefined) {
         updateFields.push('quantity_available = ?')
         values.push(quantity === null ? null : Number(quantity))
+      }
+
+      if (minimumOrderQty !== undefined) {
+        updateFields.push('minimum_order_qty = ?')
+        values.push(minimumOrderQty === null ? 0 : Number(minimumOrderQty))
       }
 
       if (resolvedPrice !== undefined) {

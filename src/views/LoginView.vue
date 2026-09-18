@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 
@@ -12,8 +12,32 @@ const memberId = ref('')
 const password = ref('')
 const remember = ref(true)
 const error = ref('')
+const logoImage = ref('')
 
 const BACKEND_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
+
+function resolveImageUrl(value) {
+  const url = String(value || '').trim()
+  if (!url) return ''
+  if (/^(https?:)?\/\//i.test(url) || url.startsWith('/') || url.startsWith('data:')) {
+    return url
+  }
+  return `/${url}`
+}
+
+async function fetchLogoSettings() {
+  try {
+    const response = await fetch(`${BACKEND_URL}/site-settings/logo`)
+    if (!response.ok) return
+
+    const data = await response.json()
+    logoImage.value = resolveImageUrl(data.imageUrl)
+  } catch (fetchError) {
+    console.error('fetchLogoSettings:', fetchError)
+  }
+}
+
+onMounted(fetchLogoSettings)
 
 async function onSubmit() {
   error.value = ''
@@ -80,7 +104,9 @@ async function onSubmit() {
   <main class="login-page">
     <section class="login-panel">
       <div class="brand-area">
-        <div class="brand-mark"></div>
+        <div class="brand-mark">
+          <img v-if="logoImage" :src="logoImage" alt="Meowverse logo" />
+        </div>
         <div class="brand-copy">
           <h1>Meowverse</h1>
           <p>Pet Shop Portal</p>
@@ -171,6 +197,14 @@ async function onSubmit() {
   background: url('/images/IMG_3644.JPG') center/cover no-repeat;
   background-color: #eee;
   box-shadow: 0 8px 20px rgba(156, 120, 210, 0.24);
+}
+
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
 }
 
 .brand-copy h1 {

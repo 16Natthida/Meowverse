@@ -133,6 +133,24 @@ export function useAdminProductStore() {
       categoryId: Number(payload.categoryId),
       stock: Number(payload.stock) || 0,
       flavorStock,
+      flavorPrices:
+        payload.flavorPrices && typeof payload.flavorPrices === 'object'
+          ? Object.fromEntries(
+              Object.entries(payload.flavorPrices).map(([flavor, prices]) => [
+                String(flavor || '').trim(),
+                {
+                  readyPrice:
+                    prices?.readyPrice === '' || prices?.readyPrice == null
+                      ? null
+                      : Number(prices.readyPrice) || 0,
+                  preorderPrice:
+                    prices?.preorderPrice === '' || prices?.preorderPrice == null
+                      ? null
+                      : Number(prices.preorderPrice) || 0,
+                },
+              ]),
+            )
+          : {},
       basePrice: Number(payload.basePrice) || 0,
       preorderPrice:
         payload.preorderPrice === '' || payload.preorderPrice == null

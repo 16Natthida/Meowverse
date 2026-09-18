@@ -149,6 +149,7 @@ export function usePreorderStore() {
     roundId,
     productIds,
     quantities = [],
+    minimumOrderQtys = [],
     roundPrices = [],
     chinaShippingFeesThb = [],
   ) {
@@ -157,6 +158,7 @@ export function usePreorderStore() {
       body: JSON.stringify({
         productIds: productIds.map((id) => Number(id)),
         quantities: quantities.map((quantity) => Number(quantity) || 0),
+        minimumOrderQtys: minimumOrderQtys.map((quantity) => Number(quantity) || 0),
         roundPrices: roundPrices.map((price) =>
           price === '' || price == null ? null : Number(price),
         ),
@@ -187,12 +189,14 @@ export function usePreorderStore() {
     quantity,
     roundPrice = null,
     chinaShippingFeeThb = null,
+    minimumOrderQty = 0,
   ) {
     const quantityPayload = quantity === null || quantity === '' ? null : Number(quantity)
     await requestJson(`/preorder-rounds/${roundId}/products/${productId}`, {
       method: 'PUT',
       body: JSON.stringify({
         quantity: quantityPayload,
+        minimumOrderQty: Number(minimumOrderQty) || 0,
         roundPrice: roundPrice === '' || roundPrice == null ? null : Number(roundPrice),
         chinaShippingFeeThb:
           chinaShippingFeeThb === '' || chinaShippingFeeThb == null
@@ -212,11 +216,18 @@ export function usePreorderStore() {
     })
   }
 
-  async function updateProductPriceInRound(roundId, productId, price, chinaShippingFeeThb) {
+  async function updateProductPriceInRound(
+    roundId,
+    productId,
+    price,
+    chinaShippingFeeThb,
+    minimumOrderQty = 0,
+  ) {
     await requestJson(`/preorder-rounds/${roundId}/products/${productId}`, {
       method: 'PUT',
       body: JSON.stringify({
         price: price === '' || price == null ? null : Number(price),
+        minimumOrderQty: Number(minimumOrderQty) || 0,
         ...(chinaShippingFeeThb !== undefined
           ? {
               chinaShippingFeeThb:

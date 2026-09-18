@@ -213,6 +213,12 @@ const router = createRouter({
       meta: { requiresAuth: true, roles: ['admin'] },
     },
     {
+      path: '/admin/preorder-progress',
+      name: 'admin-preorder-progress',
+      component: () => import('../views/Admin/PreorderProgress.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
       path: '/admin/preorder-statistics',
       name: 'admin-preorder-statistics',
       component: () => import('../views/Admin/PreorderStatistics.vue'),

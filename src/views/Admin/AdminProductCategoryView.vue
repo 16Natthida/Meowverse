@@ -4,7 +4,7 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 
 import { useAdminProductStore } from '@/stores/adminProductStore'
 
-const MAX_IMAGE_COUNT = 6
+const MAX_IMAGE_COUNT = 20
 const LOW_STOCK_THRESHOLD = 5
 const CATEGORY_NAME_MAX_LENGTH = 100
 const CATEGORY_DETAIL_MAX_LENGTH = 255
@@ -41,6 +41,7 @@ const selectedProductForStock = ref(null)
 const stockForm = reactive({
   quantity: 0,
   flavorStock: {},
+  flavorPrices: {},
   readyToShipEnabled: true,
 })
 
@@ -58,6 +59,7 @@ const form = reactive({
   basePrice: 0,
   preorderPrice: 0,
   flavorStock: {},
+  flavorPrices: {},
   imageUrls: [],
   images: [],
   preorderEnabled: false,
@@ -187,6 +189,9 @@ function addFlavorFromInput() {
       if (!(value in form.flavorStock)) {
         form.flavorStock[value] = 0
       }
+      if (!(value in form.flavorPrices)) {
+        form.flavorPrices[value] = { readyPrice: null, preorderPrice: null }
+      }
     }
   }
 
@@ -201,6 +206,9 @@ function removeFlavor(index) {
   currentItems.splice(index, 1)
   if (removedFlavor in form.flavorStock) {
     delete form.flavorStock[removedFlavor]
+  }
+  if (removedFlavor in form.flavorPrices) {
+    delete form.flavorPrices[removedFlavor]
   }
   setFlavorItems(currentItems)
 }
@@ -279,6 +287,7 @@ async function submitForm() {
       basePrice: Number(form.basePrice) || 0,
       preorderPrice: Number(form.preorderPrice) || 0,
       flavorStock: { ...form.flavorStock },
+      flavorPrices: { ...form.flavorPrices },
       images: processedImages,
       imageUrls: processedImages.map((img) => img.url),
       preorderEnabled: form.preorderEnabled,
@@ -418,6 +427,13 @@ function editProduct(product) {
   form.basePrice = Number(product.basePrice) || 0
   form.preorderPrice = Number(product.preorderPrice ?? product.basePrice) || 0
   form.flavorStock = typeof product.flavorStock === 'object' ? { ...product.flavorStock } : {}
+  form.flavorPrices = product.flavorPrices ? JSON.parse(JSON.stringify(product.flavorPrices)) : {}
+
+  for (const flavor of parseFlavorsText(form.flavorsText)) {
+    if (!form.flavorPrices[flavor]) {
+      form.flavorPrices[flavor] = { readyPrice: null, preorderPrice: null }
+    }
+  }
 
   const safeImages = product.images
     ? JSON.parse(JSON.stringify(product.images))
@@ -445,6 +461,7 @@ function resetForm() {
   form.basePrice = 0
   form.preorderPrice = 0
   form.flavorStock = {}
+  form.flavorPrices = {}
   form.imageUrls = []
   form.images = []
   form.preorderEnabled = false
@@ -498,6 +515,7 @@ async function submitAddStock() {
           ? Object.values(stockForm.flavorStock).reduce((sum, qty) => sum + Number(qty || 0), 0)
           : Number(stockForm.quantity) || 0,
       flavorStock: { ...stockForm.flavorStock },
+      flavorPrices: selectedProductForStock.value.flavorPrices || {},
       images: Array.isArray(selectedProductForStock.value.images)
         ? selectedProductForStock.value.images
         : (selectedProductForStock.value.imageUrls || []).map((item) => ({
@@ -772,6 +790,9 @@ onUnmounted(() => {
             rows="4"
             placeholder="เช่น กลิ่น, รสชาติ, สเปก, จุดเด่น หรือรายละเอียดเพิ่มเติม"
           ></textarea>
+          <p class="compact input-hint">
+            แนะนำให้ขึ้นบรรทัดใหม่ เช่น รสชาติ: แล้วใช้ * นำหน้าแต่ละรายการ
+          </p>
         </label>
 
         <label>
@@ -858,6 +879,33 @@ onUnmounted(() => {
                 placeholder="0"
               />
               <span class="flavor-unit">ชิ้น</span>
+            </div>
+          </div>
+        </label>
+
+        <label v-if="flavorItems.length > 0">
+          ราคาแยกตามรสชาติ
+          <p class="compact input-hint">ถ้าไม่กรอก ระบบจะใช้ราคาหลักด้านบนของสินค้า</p>
+          <div class="flavor-price-inputs">
+            <div v-for="flavor in flavorItems" :key="`price-${flavor}`" class="flavor-price-row">
+              <span class="flavor-label">{{ flavor }}</span>
+              <input
+                v-model.number="form.flavorPrices[flavor].readyPrice"
+                min="0"
+                step="1"
+                type="number"
+                :placeholder="`พร้อมส่ง ${form.basePrice || 0}`"
+              />
+              <input
+                v-model.number="form.flavorPrices[flavor].preorderPrice"
+                min="0"
+                step="1"
+                type="number"
+                :placeholder="`พรีออเดอร์ ${form.preorderPrice || form.basePrice || 0}`"
+              />
+            </div>
+            <div class="flavor-price-headings">
+              <span></span><span>พร้อมส่ง</span><span>พรีออเดอร์</span>
             </div>
           </div>
         </label>
@@ -1996,6 +2044,41 @@ button:disabled {
 }
 
 .flavor-stock-row input {
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #decdf1;
+  border-radius: 6px;
+  font-size: 0.8rem;
+}
+
+.flavor-price-inputs {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.4rem;
+}
+
+.flavor-price-row,
+.flavor-price-headings {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) minmax(100px, 0.8fr) minmax(100px, 0.8fr);
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.flavor-price-row {
+  padding: 0.5rem 0.6rem;
+  background: #fdf8ff;
+  border: 1px solid #e6d6f8;
+  border-radius: 8px;
+}
+
+.flavor-price-headings {
+  color: #9a7dbf;
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.flavor-price-row input {
   width: 100%;
   padding: 0.35rem 0.5rem;
   border: 1px solid #decdf1;

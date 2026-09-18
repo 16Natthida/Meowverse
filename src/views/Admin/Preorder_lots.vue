@@ -228,6 +228,12 @@
                       formatPrice(product.roundPrice ?? product.basePrice)
                     }}</span>
                   </div>
+                  <div class="price-section">
+                    <span class="price-label">ขั้นต่ำ / ยอดจอง:</span>
+                    <span class="price">
+                      {{ Number(product.minimumOrderQty || 0) > 0 ? `${product.minimumOrderQty} / ${product.quantityReserved || 0} ชิ้น` : `ไม่กำหนด / ${product.quantityReserved || 0} ชิ้น` }}
+                    </span>
+                  </div>
                   <div class="price-section china-shipping-summary">
                     <span class="price-label">ค่าส่งจีน:</span>
                     <span class="price">{{ Number(product.chinaShippingFeeThb || 0).toFixed(2) }} บาท/ชิ้น</span>
@@ -329,6 +335,18 @@
                     />
                   </div>
                   <div class="price-input">
+                    <label>จำนวนขั้นต่ำที่ต้องสั่ง (ชิ้น):</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      :value="selectedProductMinimums[product.id] ?? product.minimumOrderQty ?? 0"
+                      @input="updateSelectedProductMinimum(product.id, $event.target.value)"
+                      class="price-input-field"
+                    />
+                    <small>กรอก 0 หากสินค้านี้ไม่มีขั้นต่ำ</small>
+                  </div>
+                  <div class="price-input">
                     <label>ค่าส่งจีนต่อชิ้น (บาท):</label>
                     <input
                       type="number"
@@ -399,6 +417,21 @@
               <p>
                 <strong>ราคาพรีออเดอร์:</strong> {{ formatPrice(selectedProduct.roundPrice) }} บาท
               </p>
+              <p>
+                <strong>ยอดจองปัจจุบัน:</strong> {{ selectedProduct.quantityReserved || 0 }} ชิ้น
+              </p>
+              <div class="price-detail-edit">
+                <label>จำนวนขั้นต่ำที่ต้องสั่ง (ชิ้น):</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  :value="productMinimumChanges[selectedProduct.id] ?? selectedProduct.minimumOrderQty ?? 0"
+                  @input="updateProductMinimum(selectedProduct.id, $event.target.value)"
+                  class="price-input-field"
+                />
+                <small>กรอก 0 หากสินค้านี้ไม่มีขั้นต่ำ</small>
+              </div>
               <p class="compact">ราคาพรีออเดอร์จะแยกแก้จากราคาพื้นฐาน</p>
               <div class="price-detail-edit">
                 <label>แก้ไขราคาพรีออเดอร์:</label>
@@ -537,7 +570,7 @@
 
 <script setup>
 import AdminPageHeader from '../../components/AdminPageHeader.vue'
-import { ref, computed, onMounted, reactive } from 'vue'
+import { ref, computed, onMounted, onUnmounted, reactive } from 'vue'
 import { usePreorderStore } from '@/stores/preorderStore'
 import { useAdminProductStore } from '@/stores/adminProductStore'
 
@@ -554,6 +587,8 @@ const selectedProductRoundPrices = reactive({})
 const selectedProductChinaShippingFeesThb = reactive({})
 const productPriceChanges = reactive({})
 const productChinaShippingFeeChanges = reactive({})
+const selectedProductMinimums = reactive({})
+const productMinimumChanges = reactive({})
 const showProductDetailModal = ref(false)
 const selectedProduct = ref(null)
 const previewImage = ref(null)
@@ -570,6 +605,7 @@ const showDuplicateModal = ref(false)
 const roundToDuplicate = ref(null)
 const isDuplicating = ref(false)
 const duplicateForm = ref({ name: '', description: '', startDate: '', endDate: '', status: 'active' })
+let roundProgressTimer = null
 
 const roundForm = ref({
   name: '',
@@ -622,6 +658,8 @@ function normalizeProduct(product) {
       Number(product.chinaShippingFeeThb ?? product.china_shipping_fee_thb) || 0,
     quantityAvailable:
       product.quantityAvailable ?? product.quantity_available ?? product.stock_qty,
+    minimumOrderQty: Number(product.minimumOrderQty ?? product.minimum_order_qty) || 0,
+    quantityReserved: Number(product.quantityReserved ?? product.quantity_reserved) || 0,
     imageUrls: product.imageUrls ?? (product.image_url ? [product.image_url] : []),
     flavors: parsedFlavors,
     flavorStock: parsedFlavorStock,
@@ -731,6 +769,7 @@ async function openRoundDetailModal(round) {
   try {
     await preorderStore.fetchRoundDetail(round.id)
     showEditRoundModal.value = true
+    startRoundProgressPolling(round.id)
   } catch (error) {
     alert('เกิดข้อผิดพลาด: ' + error.message)
   }
@@ -743,6 +782,23 @@ function closeRoundModal() {
 
 function closeEditRoundModal() {
   showEditRoundModal.value = false
+  stopRoundProgressPolling()
+}
+
+function startRoundProgressPolling(roundId) {
+  stopRoundProgressPolling()
+  roundProgressTimer = window.setInterval(() => {
+    if (showEditRoundModal.value) {
+      preorderStore.fetchRoundDetail(roundId).catch(() => {})
+    }
+  }, 15000)
+}
+
+function stopRoundProgressPolling() {
+  if (roundProgressTimer) {
+    window.clearInterval(roundProgressTimer)
+    roundProgressTimer = null
+  }
 }
 
 function openAddProductsModal() {
@@ -753,6 +809,9 @@ function openAddProductsModal() {
   })
   Object.keys(selectedProductChinaShippingFeesThb).forEach((key) => {
     delete selectedProductChinaShippingFeesThb[key]
+  })
+  Object.keys(selectedProductMinimums).forEach((key) => {
+    delete selectedProductMinimums[key]
   })
   showAddProductsModal.value = true
 }
@@ -765,6 +824,9 @@ function closeAddProductsModal() {
   })
   Object.keys(selectedProductChinaShippingFeesThb).forEach((key) => {
     delete selectedProductChinaShippingFeesThb[key]
+  })
+  Object.keys(selectedProductMinimums).forEach((key) => {
+    delete selectedProductMinimums[key]
   })
 }
 
@@ -781,6 +843,9 @@ function closeProductDetailModal() {
   })
   Object.keys(productChinaShippingFeeChanges).forEach((key) => {
     delete productChinaShippingFeeChanges[key]
+  })
+  Object.keys(productMinimumChanges).forEach((key) => {
+    delete productMinimumChanges[key]
   })
 }
 
@@ -837,6 +902,7 @@ async function confirmDuplicateRound() {
         newRound.id,
         products.map((product) => product.id),
         products.map((product) => Number(product.quantityAvailable) || 0),
+        products.map((product) => Number(product.minimumOrderQty) || 0),
         products.map((product) => Number(product.roundPrice) || 0),
         products.map((product) => Number(product.chinaShippingFeeThb) || 0),
       )
@@ -876,10 +942,12 @@ function toggleProductSelection(product) {
     selectedProductIds.value.splice(index, 1)
     delete selectedProductRoundPrices[productId]
     delete selectedProductChinaShippingFeesThb[productId]
+    delete selectedProductMinimums[productId]
   } else {
     selectedProductIds.value.push(productId)
     selectedProductRoundPrices[productId] = getSuggestedRoundPrice(product)
     selectedProductChinaShippingFeesThb[productId] = 0
+    selectedProductMinimums[productId] = Number(product.minimumOrderQty) || 0
   }
 }
 
@@ -900,6 +968,14 @@ function updateSelectedProductChinaShippingFee(productId, fee) {
 
   if (selectedProductIds.value.includes(productId)) {
     selectedProductChinaShippingFeesThb[productId] = value
+  }
+}
+
+function updateSelectedProductMinimum(productId, quantity) {
+  const value = Number(quantity)
+  if (!Number.isInteger(value) || value < 0) return
+  if (selectedProductIds.value.includes(productId)) {
+    selectedProductMinimums[productId] = value
   }
 }
 
@@ -927,6 +1003,12 @@ function updateProductChinaShippingFee(productId, fee) {
   productChinaShippingFeeChanges[productId] = value
 }
 
+function updateProductMinimum(productId, quantity) {
+  const value = Number(quantity)
+  if (!Number.isInteger(value) || value < 0) return
+  productMinimumChanges[productId] = value
+}
+
 async function saveProductPrice(productId) {
   try {
     if (!currentRound.value) return
@@ -936,14 +1018,24 @@ async function saveProductPrice(productId) {
     const chinaFee = Object.prototype.hasOwnProperty.call(productChinaShippingFeeChanges, productId)
       ? productChinaShippingFeeChanges[productId]
       : currentRound.value.products.find((p) => String(p.id) === String(productId))?.chinaShippingFeeThb || 0
+    const minimumOrderQty = Object.prototype.hasOwnProperty.call(productMinimumChanges, productId)
+      ? productMinimumChanges[productId]
+      : currentRound.value.products.find((p) => String(p.id) === String(productId))?.minimumOrderQty || 0
 
-    await preorderStore.updateProductPriceInRound(currentRound.value.id, productId, raw, chinaFee)
+    await preorderStore.updateProductPriceInRound(
+      currentRound.value.id,
+      productId,
+      raw,
+      chinaFee,
+      minimumOrderQty,
+    )
     await preorderStore.fetchRoundDetail(currentRound.value.id)
     selectedProduct.value =
       currentRound.value.products.find((product) => String(product.id) === String(productId)) ||
       selectedProduct.value
     delete productPriceChanges[productId]
     delete productChinaShippingFeeChanges[productId]
+    delete productMinimumChanges[productId]
   } catch (err) {
     alert('การบันทึกราคาพรีออเดอร์ล้มเหลว: ' + err.message)
   }
@@ -961,7 +1053,11 @@ function hasPriceChanged(productId) {
 }
 
 function hasProductDetailChanged(productId) {
-  return hasPriceChanged(productId) || Object.prototype.hasOwnProperty.call(productChinaShippingFeeChanges, productId)
+  return (
+    hasPriceChanged(productId) ||
+    Object.prototype.hasOwnProperty.call(productChinaShippingFeeChanges, productId) ||
+    Object.prototype.hasOwnProperty.call(productMinimumChanges, productId)
+  )
 }
 
 async function saveRound() {
@@ -999,10 +1095,14 @@ async function confirmAddProducts() {
       const chinaShippingFeesThb = selectedProductIds.value.map(
         (id) => selectedProductChinaShippingFeesThb[id] ?? 0,
       )
+      const minimumOrderQtys = selectedProductIds.value.map(
+        (id) => selectedProductMinimums[id] ?? 0,
+      )
       await preorderStore.addProductsToRound(
         currentRound.value.id,
         selectedProductIds.value,
         quantities,
+        minimumOrderQtys,
         roundPrices,
         chinaShippingFeesThb,
       )
@@ -1070,6 +1170,10 @@ onMounted(async () => {
   if (typeof adminProductStore.fetchProducts === 'function') {
     await adminProductStore.fetchProducts()
   }
+})
+
+onUnmounted(() => {
+  stopRoundProgressPolling()
 })
 </script>
 

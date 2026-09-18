@@ -98,6 +98,30 @@ const selectedFlavor = ref('')
 const selectedPreviewIndex = ref(0)
 const detailQty = ref(1)
 const batchSelections = ref([]) // [{ flavor, qty }]
+const detailTouchStart = ref({ x: 0, y: 0 })
+
+const detailDescription = computed(() => {
+  const fallbackDescription =
+    selectedProduct.value?.description ||
+    selectedProduct.value?.categoryName ||
+    'ไม่มีรายละเอียดเพิ่มเติม'
+  const description = String(fallbackDescription).trim()
+  const flavorLabel = '\u0e23\u0e2a\u0e0a\u0e32\u0e15\u0e34'
+  const flavorIndex = description.indexOf(flavorLabel)
+
+  if (flavorIndex < 0) {
+    return { general: description, flavor: '' }
+  }
+
+  if (flavorIndex === 0) {
+    return { general: '', flavor: description }
+  }
+
+  return {
+    general: description.slice(0, flavorIndex).trim(),
+    flavor: description.slice(flavorIndex).trim(),
+  }
+})
 const defaultBannerImageUrl = '/images/cat.jpg'
 const heroBannerImage = ref(defaultBannerImageUrl)
 const defaultLogoImageUrl = ''
@@ -187,6 +211,37 @@ function parseFlavorStock(value) {
   )
 }
 
+function parseFlavorPrices(value) {
+  if (!value) return {}
+
+  let data = value
+  if (typeof value === 'string') {
+    try {
+      data = JSON.parse(value)
+    } catch {
+      return {}
+    }
+  }
+
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return {}
+
+  return Object.fromEntries(
+    Object.entries(data).map(([flavor, prices]) => [
+      String(flavor || '').trim(),
+      {
+        readyPrice:
+          prices?.readyPrice == null || prices?.readyPrice === ''
+            ? null
+            : Number(prices.readyPrice) || 0,
+        preorderPrice:
+          prices?.preorderPrice == null || prices?.preorderPrice === ''
+            ? null
+            : Number(prices.preorderPrice) || 0,
+      },
+    ]),
+  )
+}
+
 // จัดรูปแบบวันที่เปิด-ปิดรอบพรีออเดอร์
 function formatDateTime(dateStr) {
   if (!dateStr) return '-'
@@ -249,6 +304,7 @@ const fetchProducts = async () => {
       description: p.description || '',
       flavors: parseFlavorList(p.flavors),
       flavorStock: parseFlavorStock(p.flavorStock ?? p.flavor_stock),
+      flavorPrices: parseFlavorPrices(p.flavorPrices ?? p.flavor_prices),
       price: p.basePrice ?? p.price ?? 0,
       // For preorder items prefer the round-specific price (p.price comes from preorder_round_products subquery)
       preorderPrice: p.price ?? p.preorderPrice ?? p.preorder_price ?? p.basePrice ?? 0,
@@ -543,6 +599,29 @@ function selectFlavorAndPreview(flavor) {
   selectedPreviewIndex.value = fi !== -1 ? fi : 0
 }
 
+function handleDetailTouchStart(event) {
+  const touch = event.changedTouches?.[0]
+  if (!touch) return
+  detailTouchStart.value = { x: touch.clientX, y: touch.clientY }
+}
+
+function handleDetailTouchEnd(event) {
+  const touch = event.changedTouches?.[0]
+  const images = detailImages.value
+  if (!touch || images.length < 2) return
+
+  const deltaX = touch.clientX - detailTouchStart.value.x
+  const deltaY = touch.clientY - detailTouchStart.value.y
+  if (Math.abs(deltaX) < 40 || Math.abs(deltaX) <= Math.abs(deltaY)) return
+
+  const direction = deltaX < 0 ? 1 : -1
+  const nextIndex = (selectedPreviewIndex.value + direction + images.length) % images.length
+  selectedPreviewIndex.value = nextIndex
+
+  const nextFlavor = images[nextIndex]?.flavor
+  if (nextFlavor) selectedFlavor.value = nextFlavor
+}
+
 // รูปที่แสดงใน main — อิงตาม index ของรูปที่ถูกเลือกไว้เท่านั้น (จาก thumb ที่กด หรือรสที่เลือก)
 // ไม่ยึด selectedFlavor ทับ index ที่ผู้ใช้กดเอง เพื่อไม่ให้รูปที่กดโดนแทนที่ผิดๆ
 const activeDetailImage = computed(() => {
@@ -645,9 +724,19 @@ function getEffectiveItemType(product) {
 
 function getProductPrice(product) {
   const itemType = getEffectiveItemType(product)
+  const flavorKey = normalizeFlavorValue(
+    product === selectedProduct.value ? selectedFlavor.value : '',
+  )
+  const flavorEntry = Object.entries(product?.flavorPrices || {}).find(
+    ([flavor]) => normalizeFlavorValue(flavor) === flavorKey,
+  )?.[1]
+
   if (itemType === 'preorder') {
+    if (flavorEntry?.preorderPrice != null) return flavorEntry.preorderPrice
     return product.preorderPrice ?? product.price
   }
+
+  if (flavorEntry?.readyPrice != null) return flavorEntry.readyPrice
   return product.price
 }
 
@@ -1352,7 +1441,11 @@ onMounted(async () => {
 
           <div class="detail-layout">
             <div class="detail-media">
-              <div class="detail-media-main">
+              <div
+                class="detail-media-main"
+                @touchstart.passive="handleDetailTouchStart"
+                @touchend.passive="handleDetailTouchEnd"
+              >
                 <img
                   v-if="activeDetailImage"
                   :src="activeDetailImage"
@@ -1398,11 +1491,10 @@ onMounted(async () => {
               <p class="detail-eyebrow">รายละเอียดสินค้า</p>
               <h3 class="detail-title">{{ selectedProduct.name }}</h3>
               <p class="detail-desc">
-                {{
-                  selectedProduct.description ||
-                  selectedProduct.categoryName ||
-                  'ไม่มีรายละเอียดเพิ่มเติม'
-                }}
+                <span>{{ detailDescription.general }}</span>
+                <span v-if="detailDescription.flavor" class="detail-desc__flavor">
+                  {{ detailDescription.flavor }}
+                </span>
               </p>
 
               <div class="detail-price-band">
@@ -2690,7 +2782,7 @@ onMounted(async () => {
 .detail-overlay {
   position: fixed;
   inset: 0;
-  z-index: 300;
+  z-index: 2000;
   background: rgba(63, 47, 93, 0.42);
   backdrop-filter: blur(7px);
   display: flex;
@@ -2839,6 +2931,12 @@ onMounted(async () => {
   line-height: 1.7;
   color: var(--muted);
   margin-bottom: 0.65rem;
+  white-space: pre-line;
+}
+
+.detail-desc__flavor {
+  display: block;
+  margin-top: 0.2rem;
 }
 
 .detail-price-band {
@@ -3213,6 +3311,135 @@ onMounted(async () => {
 }
 
 /* ── PREORDER ROUNDS INFO ── */
+@media (max-width: 600px) {
+  .detail-overlay {
+    align-items: flex-end;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  .detail-modal {
+    width: 100%;
+    max-height: calc(100dvh - 0.35rem);
+    border-radius: 22px 22px 0 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .detail-close {
+    top: 0.55rem;
+    right: 0.55rem;
+    width: 32px;
+    height: 32px;
+    font-size: 1.1rem;
+    z-index: 2;
+  }
+
+  .detail-media {
+    padding: 0.7rem 0.7rem 0.6rem;
+  }
+
+  .detail-media-main {
+    height: clamp(180px, 48vw, 220px);
+    max-height: none;
+    aspect-ratio: auto;
+    touch-action: pan-y;
+  }
+
+  .detail-thumb-row {
+    grid-template-columns: repeat(auto-fit, minmax(48px, 58px));
+    justify-content: start;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+  }
+
+  .detail-content {
+    padding: 0.9rem 0.85rem 1rem;
+  }
+
+  .detail-title {
+    padding-right: 2.2rem;
+    font-size: 1.12rem;
+    line-height: 1.3;
+  }
+
+  .detail-desc {
+    font-size: 0.82rem;
+    line-height: 1.5;
+    margin-bottom: 0.6rem;
+  }
+
+  .detail-price-band {
+    margin-bottom: 0.8rem;
+    padding: 0.55rem 0.7rem;
+    font-size: 1.15rem;
+  }
+
+  .flavor-chip-row {
+    gap: 0.4rem;
+  }
+
+  .flavor-chip {
+    max-width: 100%;
+    padding: 0.3rem 0.58rem 0.3rem 0.3rem;
+    font-size: 0.76rem;
+  }
+
+  .flavor-chip__img {
+    width: 27px;
+    height: 27px;
+  }
+
+  .detail-meta-grid {
+    gap: 0.5rem;
+    margin-bottom: 0.85rem;
+  }
+
+  .detail-meta {
+    border-radius: 11px;
+    padding: 0.65rem 0.7rem;
+  }
+
+  .detail-meta__label {
+    font-size: 0.68rem;
+  }
+
+  .detail-meta__value {
+    font-size: 0.84rem;
+  }
+
+  .detail-qty-row {
+    margin-bottom: 0.8rem;
+  }
+
+  .detail-option-label {
+    font-size: 0.78rem;
+    margin-bottom: 0.4rem;
+  }
+
+  .qty-picker__btn {
+    width: 34px;
+    height: 34px;
+  }
+
+  .qty-picker__value {
+    min-width: 46px;
+    line-height: 34px;
+  }
+
+  .detail-actions {
+    display: grid;
+    gap: 0.45rem;
+  }
+
+  .detail-action-btn {
+    width: 100%;
+    min-width: 0;
+    min-height: 42px;
+  }
+}
+
 .preorder-rounds-container {
   margin-bottom: 1.5rem;
   background: linear-gradient(160deg, #fffaf5, #fff5f0);

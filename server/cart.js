@@ -4,6 +4,7 @@
 // Fixed: Flavor stock boundary validation. Added fallback to main product stock.
 
 import express from 'express'
+import { getFlavorPrice } from './productPricing.js'
 const router = express.Router()
 
 function normalizeItemType(value) {
@@ -125,6 +126,23 @@ function getDB(req) {
   return req.app.locals.db
 }
 
+async function isPreorderRoundOpen(db, roundId) {
+  if (!roundId) return false
+
+  const [rows] = await db.query(
+    `SELECT round_id
+     FROM preorder_rounds
+     WHERE round_id = ?
+       AND LOWER(status) = 'active'
+       AND start_date <= NOW()
+       AND end_date >= NOW()
+     LIMIT 1`,
+    [roundId],
+  )
+
+  return rows.length > 0
+}
+
 // ─────────────────────────────────────────────
 // GET /api/cart?user_id=xxx
 // ─────────────────────────────────────────────
@@ -191,8 +209,9 @@ router.get('/', async (req, res) => {
          ),
          ''
        ) AS image,
-         p.stock_qty AS stock,
-         NULL AS preorder_remaining
+       p.stock_qty AS stock,
+       p.flavor_prices AS flavorPrices,
+       NULL AS preorder_remaining
        FROM cart c
        LEFT JOIN products p ON c.prod_id = p.prod_id
        WHERE c.user_id = ?
@@ -200,7 +219,17 @@ router.get('/', async (req, res) => {
       [user_id],
     )
 
-    res.json(rows)
+    res.json(
+      rows.map((row) => ({
+        ...row,
+        price: getFlavorPrice(
+          row.flavorPrices,
+          row.flavor,
+          normalizeItemType(row.item_type),
+          row.price,
+        ),
+      })),
+    )
   } catch (err) {
     console.error('[GET /api/cart]', err)
     res.status(500).json({ error: 'Internal server error' })
@@ -315,6 +344,12 @@ router.post('/', async (req, res) => {
         }
       }
 
+      if (requestedType === 'preorder' && !(await isPreorderRoundOpen(connection, effectiveRoundId))) {
+        await connection.rollback()
+        connection.release()
+        return res.status(409).json({ error: 'รอบพรีออเดอร์นี้ปิดรับออเดอร์แล้ว' })
+      }
+
       if (existing.length > 0) {
         const newQty = Number(existing[0].qty) + requestedQty
         if (requestedType === 'ready-to-ship' && newQty > availableQty) {
@@ -379,8 +414,10 @@ router.put('/:cart_id', async (req, res) => {
     const db = getDB(req)
     const [cartRows] = await db.query(
       `SELECT
-         c.cart_id, c.qty, c.item_type, c.flavor,
-         p.stock_qty AS stock, p.flavors AS flavors, p.flavor_stock AS flavorStock,
+       c.cart_id, c.qty, c.item_type, c.flavor,
+       c.preorder_round_id,
+       p.stock_qty AS stock, p.flavors AS flavors, p.flavor_stock AS flavorStock,
+       p.flavor_prices AS flavorPrices,
          p.preorder_enabled AS preorderEnabled, p.ready_to_ship_enabled AS readyToShipEnabled
        FROM cart c
        LEFT JOIN products p ON p.prod_id = c.prod_id
@@ -416,6 +453,10 @@ router.put('/:cart_id', async (req, res) => {
       return res.status(400).json({ error: 'Product is not available for preorder' })
     }
 
+    if (effectiveType === 'preorder' && !(await isPreorderRoundOpen(db, cartRow.preorder_round_id))) {
+      return res.status(409).json({ error: 'รอบพรีออเดอร์นี้ปิดรับออเดอร์แล้ว' })
+    }
+
     const connection = await db.getConnection()
     try {
       await connection.beginTransaction()
@@ -448,6 +489,20 @@ router.delete('/:cart_id', async (req, res) => {
   const { cart_id } = req.params
   try {
     const db = getDB(req)
+    const [cartRows] = await db.query(
+      'SELECT cart_id, item_type, preorder_round_id FROM cart WHERE cart_id = ? LIMIT 1',
+      [cart_id],
+    )
+    const cartRow = cartRows[0]
+    if (!cartRow) return res.status(404).json({ error: 'Cart item not found' })
+
+    if (
+      normalizeItemType(cartRow.item_type) === 'preorder' &&
+      !(await isPreorderRoundOpen(db, cartRow.preorder_round_id))
+    ) {
+      return res.status(409).json({ error: 'รอบพรีออเดอร์นี้ปิดรับออเดอร์แล้ว' })
+    }
+
     const [result] = await db.query('DELETE FROM cart WHERE cart_id = ?', [cart_id])
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Cart item not found' })
     res.json({ message: 'Deleted', cart_id: Number(cart_id) })

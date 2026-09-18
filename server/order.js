@@ -3,6 +3,7 @@
 
 import express from 'express'
 import { getShippingFeeSettings } from './shippingFees.js'
+import { getFlavorPrice } from './productPricing.js'
 
 const router = express.Router()
 
@@ -49,6 +50,14 @@ function getEffectiveItemType(item) {
   }
 
   if (item?.preorder_round_id) {
+    return 'preorder'
+  }
+
+  if (Number(item?.readyToShipEnabled) === 1) {
+    return 'ready-to-ship'
+  }
+
+  if (Number(item?.preorderEnabled) === 1) {
     return 'preorder'
   }
 
@@ -318,6 +327,7 @@ router.post('/checkout-preview', async (req, res) => {
          p.stock_qty AS stock,
          p.base_price AS basePrice,
          p.preorder_price AS preorderPrice,
+         p.flavor_prices AS flavorPrices,
          p.ready_to_ship_enabled AS readyToShipEnabled,
          p.preorder_enabled AS preorderEnabled,
          COALESCE(prp.china_shipping_fee_thb, 0) AS china_shipping_fee_thb,
@@ -357,6 +367,15 @@ router.post('/checkout-preview', async (req, res) => {
        ORDER BY c.cart_id`,
       [user_id, ...selectedCartIds],
     )
+
+    for (const item of cartItems) {
+      item.price = getFlavorPrice(
+        item.flavorPrices,
+        item.flavor,
+        getEffectiveItemType(item),
+        item.price,
+      )
+    }
 
     if (cartItems.length === 0) {
       await connection.rollback()
@@ -480,6 +499,7 @@ router.post('/confirm-payment', async (req, res) => {
          p.stock_qty AS stock,
          p.base_price AS basePrice,
          p.preorder_price AS preorderPrice,
+         p.flavor_prices AS flavorPrices,
          p.ready_to_ship_enabled AS readyToShipEnabled,
          p.preorder_enabled AS preorderEnabled,
          COALESCE(prp.china_shipping_fee_thb, 0) AS china_shipping_fee_thb,
@@ -519,6 +539,15 @@ router.post('/confirm-payment', async (req, res) => {
        ORDER BY c.cart_id`,
       [user_id, ...selectedCartIds],
     )
+
+    for (const item of cartItems) {
+      item.price = getFlavorPrice(
+        item.flavorPrices,
+        item.flavor,
+        getEffectiveItemType(item),
+        item.price,
+      )
+    }
 
     if (cartItems.length === 0) {
       await connection.rollback()
