@@ -148,10 +148,6 @@
             </div>
           </form>
         </div>
-
-        <div v-if="editingRound && currentRound" class="modal-footer">
-          <button class="btn-add-products" @click="openAddProductsModal">+ เพิ่มสินค้า</button>
-        </div>
       </div>
     </div>
 

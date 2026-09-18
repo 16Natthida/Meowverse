@@ -102,6 +102,10 @@ const isSubmitDisabled = computed(() => {
   )
 })
 
+const isSkuDuplicateError = computed(() => {
+  return Boolean(form.sku.trim()) && isSkuDuplicate(form.sku, editingProductId.value)
+})
+
 const filteredProducts = computed(() => {
   const keyword = searchKeyword.value.trim().toLowerCase()
   if (!keyword) {
@@ -124,7 +128,12 @@ const totalFlavorStock = computed(() => {
   if (!form.flavorStock || Object.keys(form.flavorStock).length === 0) {
     return 0
   }
-  return Object.values(form.flavorStock).reduce((sum, qty) => sum + Number(qty || 0), 0)
+  const currentFlavors = parseFlavorsText(form.flavorsText)
+  if (currentFlavors.length === 0) {
+    return 0
+  }
+  // นับเฉพาะรสที่ยังอยู่ในรายการจริง กัน key ค้างจากรสที่ถูกลบไปแล้ว
+  return currentFlavors.reduce((sum, flavor) => sum + Number(form.flavorStock[flavor] || 0), 0)
 })
 
 function getLowestFlavorFormPrice(type) {
@@ -287,12 +296,27 @@ function clearImage(index) {
   form.imageUrls.splice(index, 1)
 }
 
+function isSkuDuplicate(sku, currentProductId = null) {
+  const normalizedSku = String(sku || '').trim().toLowerCase()
+  if (!normalizedSku) return false
+
+  return store.products.some((product) => {
+    if (currentProductId && product.id === currentProductId) return false
+    return String(product.sku || '').trim().toLowerCase() === normalizedSku
+  })
+}
+
 async function submitForm() {
   addFlavorFromInput()
   syncMainPricesFromFlavorPrices()
 
   if (!form.name.trim() || !form.sku.trim() || !form.categoryId) {
     setNotice('error', 'กรอกข้อมูลที่จำเป็นให้ครบก่อนบันทึกสินค้า')
+    return
+  }
+
+  if (isSkuDuplicate(form.sku, editingProductId.value)) {
+    setNotice('error', 'SKU นี้มีอยู่ในระบบแล้ว กรุณาใช้ SKU อื่น')
     return
   }
 
@@ -309,34 +333,32 @@ async function submitForm() {
       flavor: img.flavor || '',
     }))
 
+    const currentFlavors = parseFlavorsText(form.flavorsText)
+    const cleanFlavorStock = {}
+    for (const flavor of currentFlavors) {
+      cleanFlavorStock[flavor] = Number(form.flavorStock[flavor] || 0)
+    }
+
     const payload = {
       name: form.name.trim(),
       description: form.description.trim(),
-      flavors: parseFlavorsText(form.flavorsText),
+      flavors: currentFlavors,
       sku: form.sku.trim(),
       categoryId: form.categoryId,
       basePrice: Number(form.basePrice) || 0,
       preorderPrice: Number(form.preorderPrice) || 0,
-      flavorStock: { ...form.flavorStock },
+      flavorStock: cleanFlavorStock,
       flavorPrices: { ...form.flavorPrices },
       images: processedImages,
       imageUrls: processedImages.map((img) => img.url),
       preorderEnabled: form.preorderEnabled,
       readyToShipEnabled: form.readyToShipEnabled,
       isRecommended: form.isRecommended,
-      stock:
-        parseFlavorsText(form.flavorsText).length > 0
-          ? totalFlavorStock.value
-          : Number(form.stock) || 0,
+      // stock_qty = ผลรวม flavor_stock ทุกรสเสมอ (ทั้งตอนเพิ่มใหม่และตอนแก้ไข)
+      stock: currentFlavors.length > 0 ? totalFlavorStock.value : Number(form.stock) || 0,
     }
 
     if (editingProductId.value) {
-      const existingProduct = store.products.find(
-        (p) => String(p.id) === String(editingProductId.value),
-      )
-      if (existingProduct) {
-        payload.stock = Number(existingProduct.stock) || 0
-      }
       await store.updateProduct(editingProductId.value, payload)
       setNotice('success', 'อัปเดตสินค้าเรียบร้อยแล้ว')
     } else {
@@ -811,7 +833,25 @@ onUnmounted(() => {
 
         <label>
           SKU *
-          <input v-model="form.sku" type="text" />
+          <input
+            v-model="form.sku"
+            type="text"
+            :class="{ 'input-error': isSkuDuplicateError }"
+            :aria-invalid="isSkuDuplicateError"
+          />
+          <span v-if="isSkuDuplicateError" class="sku-duplicate-error" role="alert">
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.6" />
+              <path
+                d="M10 5.8v4.6"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+              />
+              <circle cx="10" cy="13.4" r="1" fill="currentColor" />
+            </svg>
+            SKU นี้ซ้ำกับสินค้าอื่น กรุณาใช้รหัสอื่น
+          </span>
         </label>
 
         <label>
@@ -1028,6 +1068,7 @@ onUnmounted(() => {
               isSubmitting ? 'กำลังบันทึก...' : editingProductId ? 'อัปเดตสินค้า' : 'บันทึกสินค้า'
             }}
           </button>
+
           <button class="ghost" type="button" @click="resetForm">ยกเลิก</button>
         </div>
       </form>
@@ -1626,6 +1667,9 @@ onUnmounted(() => {
   padding: 0.62rem;
   min-width: 0;
   box-shadow: 0 9px 24px rgba(79, 62, 108, 0.12);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   transition:
     transform 0.2s ease,
     box-shadow 0.25s ease;
@@ -1747,7 +1791,8 @@ onUnmounted(() => {
 }
 
 .card-actions {
-  margin-top: 0.38rem;
+  margin-top: auto;
+  padding-top: 0.38rem;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -2349,6 +2394,49 @@ textarea:focus {
   gap: 8px;
   justify-content: flex-end;
   margin-top: 20px;
+}
+
+.sku-duplicate-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: #fdecee;
+  border: 1px solid #f5b8c0;
+  color: #c0293f;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.3;
+  animation: sku-error-in 0.15s ease-out;
+}
+
+.sku-duplicate-error svg {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+}
+
+@keyframes sku-error-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+input.input-error {
+  border-color: #e5546b !important;
+  background: #fff8f8;
+}
+
+input.input-error:focus {
+  outline-color: #e5546b;
+  box-shadow: 0 0 0 3px rgba(229, 84, 107, 0.15);
 }
 
 .form-actions button {

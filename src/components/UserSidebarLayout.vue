@@ -643,6 +643,17 @@ onBeforeUnmount(() => {
   .user-shell__label { display: none; }
   .user-shell__link,
   .user-shell__logout { justify-content: center; padding-inline: 0; }
+
+  /* Laptop collapsed sidebar: keep the notification dot out of the flex flow
+     so the Order List icon stays centered like every other menu icon. */
+  .user-shell__link { position: relative; }
+  .user-shell__notif-dot {
+    position: absolute;
+    top: 50%;
+    right: 0.45rem;
+    margin: 0;
+    transform: translateY(-50%);
+  }
 }
 
 @media (max-width: 768px) {

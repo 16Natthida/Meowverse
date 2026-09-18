@@ -3871,9 +3871,13 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
       }
 
       // 7. อัปเดตสถานะในตาราง orders เป็น 'Slip_submitted' เพื่อให้แอดมินรู้ว่า user แนบสลิปมาแล้ว
-      await connection.query(`UPDATE orders SET status = 'Slip_submitted' WHERE order_id = ?`, [
-        order_id,
-      ])
+    await connection.query(
+      `UPDATE orders
+      SET status = 'Slip_submitted',
+          deadline = NULL
+      WHERE order_id = ?`,
+      [order_id],
+    )
 
     }
 
@@ -3901,9 +3905,7 @@ app.post('/api/orders/:order_id/shipping', async (req, res) => {
       'SELECT order_id, status, import_fee_total, Order_type FROM orders WHERE order_id = ?',
       [order_id],
     )
-    const shippingLockedStatuses = [
-      'Slip_submitted',
-      'Import_slip_submitted',
+    const shippingLockedStatuses = [,,
       'Paid',
       'Ready_to_Ship',
       'Shipped',

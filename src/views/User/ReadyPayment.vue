@@ -90,7 +90,7 @@ const shippingFee = computed(() => {
 
   const orderType = String(order.value?.Order_type || '').trim().toLowerCase()
   const status = String(order.value?.status || '').trim().toLowerCase().replace(/[_\s]+/g, ' ')
-  const isUnpaidReadyOrder = ['pending', 'slip submitted', 'invalid slip'].includes(status)
+  const isUnpaidReadyOrder = ['pending', 'Slip_submitted', 'invalid slip'].includes(status)
 
   return orderType === 'ready' && (isUnpaidReadyOrder || !order.value?.order_id) ? 49 : 0
 })
@@ -241,14 +241,15 @@ const displayStatus = computed(() => {
   const raw = String(order.value?.status || '').trim()
   const status = raw.toLowerCase()
   const normalized = status.replace(/[_\s]+/g, ' ')
-
+ 
   if (normalized === 'pending') {
     const hasPaymentEvidence = Boolean(
       order.value?.saved_shipping?.slip_url || order.value?.saved_shipping?.payment_status,
     )
     return hasPaymentEvidence ? 'รอแอดมินตรวจสอบ' : 'รอชำระเงิน'
   }
-
+  
+  if (normalized === 'slip submitted') return 'แนบสลิปแล้วรอตรวจสอบ'
   if (normalized === 'paid') return 'จ่ายเงินสำเร็จ รอแอดมินตรวจสอบและจัดส่ง'
 
   if (normalized === 'shipped') return 'จัดส่งแล้ว'
@@ -279,7 +280,7 @@ const isShippingLocked = computed(() => {
   const raw = String(order.value?.status || '').trim()
   const normalized = raw.toLowerCase().replace(/[_\s]+/g, ' ')
   return [
-    'slip submitted',
+    'Slip_submitted',
     'import slip submitted',
     'paid',
     'ready to ship',
@@ -589,7 +590,7 @@ const isCancellable = computed(() => {
     .trim()
     .toLowerCase()
     .replace(/[_\s]+/g, ' ')
-  return ['pending', 'slip submitted', 'invalid slip'].includes(normalized)
+  return ['pending', 'Slip_submitted', 'invalid slip'].includes(normalized)
 })
 
 async function cancelOrder() {
@@ -1811,7 +1812,7 @@ onUnmounted(() => {
     transform: rotate(360deg);
   }
 }
-@media (max-width: 1024px) {
+@media (max-width: 900px) {
   .order-layout {
     grid-template-columns: 1fr;
   }
@@ -1820,9 +1821,6 @@ onUnmounted(() => {
   }
   .payment-sticky {
     position: static;
-  }
-  .payment-section {
-    order: -1;
   }
 }
 @media (max-width: 768px) {

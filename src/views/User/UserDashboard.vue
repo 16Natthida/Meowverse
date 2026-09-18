@@ -99,6 +99,8 @@ const selectedPreviewIndex = ref(0)
 const detailQty = ref(1)
 const batchSelections = ref([]) // [{ flavor, qty }]
 const detailTouchStart = ref({ x: 0, y: 0 })
+const imageViewerOpen = ref(false)
+const suppressImageClick = ref(false)
 
 const detailDescription = computed(() => {
   const fallbackDescription =
@@ -497,7 +499,7 @@ const addToCart = async (product, flavor = '', qty = 1, sourceEvent = null) => {
     }
 
     showNotice(
-      `เพิ่ม "${product.name}${payload.flavor ? ` (${payload.flavor})` : ''}" ลงตะกร้าแล้ว!`,
+      `เพิ่ม "${payload.flavor ? ` (${payload.flavor})` : ''}" ลงตะกร้าแล้ว!`,
       'success',
     )
 
@@ -540,6 +542,27 @@ function closeProductDetail() {
   selectedFlavor.value = ''
   selectedPreviewIndex.value = 0
   detailQty.value = 1
+  imageViewerOpen.value = false
+}
+
+// ── POPUP ดูรูปใหญ่ (ขนาดเท่ากรอบ .detail-layout) ──
+function openImageViewer() {
+  if (suppressImageClick.value) return
+  if (!activeDetailImage.value) return
+  imageViewerOpen.value = true
+}
+
+function closeImageViewer() {
+  imageViewerOpen.value = false
+}
+
+function stepViewerImage(direction) {
+  const images = detailImages.value
+  if (images.length < 2) return
+  const nextIndex = (selectedPreviewIndex.value + direction + images.length) % images.length
+  selectedPreviewIndex.value = nextIndex
+  const nextFlavor = images[nextIndex]?.flavor
+  if (nextFlavor) selectedFlavor.value = nextFlavor
 }
 
 function increaseDetailQty() {
@@ -620,6 +643,12 @@ function handleDetailTouchEnd(event) {
 
   const nextFlavor = images[nextIndex]?.flavor
   if (nextFlavor) selectedFlavor.value = nextFlavor
+
+  // ปัดเปลี่ยนรูปแล้วไม่ต้องเปิด popup รูปใหญ่
+  suppressImageClick.value = true
+  setTimeout(() => {
+    suppressImageClick.value = false
+  }, 350)
 }
 
 // รูปที่แสดงใน main — อิงตาม index ของรูปที่ถูกเลือกไว้เท่านั้น (จาก thumb ที่กด หรือรสที่เลือก)
@@ -828,7 +857,10 @@ const filteredProducts = computed(() => {
   if (searchQuery.value.trim()) {
     const q = searchQuery.value.toLowerCase()
     list = list.filter(
-      (p) => p.name.toLowerCase().includes(q) || p.categoryName.toLowerCase().includes(q),
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.categoryName.toLowerCase().includes(q) ||
+        p.description.toLowerCase().includes(q),
     )
   }
 
@@ -848,7 +880,8 @@ const recommendedProducts = computed(() => {
       if (!keyword) return true
       return (
         product.name.toLowerCase().includes(keyword) ||
-        product.categoryName.toLowerCase().includes(keyword)
+        product.categoryName.toLowerCase().includes(keyword) ||
+        product.description.toLowerCase().includes(keyword)
       )
     })
     .slice(0, 6)
@@ -1443,6 +1476,13 @@ onMounted(async () => {
             <div class="detail-media">
               <div
                 class="detail-media-main"
+                :class="{ 'detail-media-main--zoomable': !!activeDetailImage }"
+                role="button"
+                tabindex="0"
+                aria-label="ดูรูปขนาดใหญ่"
+                @click="openImageViewer"
+                @keydown.enter.prevent="openImageViewer"
+                @keydown.space.prevent="openImageViewer"
                 @touchstart.passive="handleDetailTouchStart"
                 @touchend.passive="handleDetailTouchEnd"
               >
@@ -1480,11 +1520,6 @@ onMounted(async () => {
                 </button>
               </div>
 
-              <span
-                v-if="getCardBadge(selectedProduct)"
-                :class="['detail-badge', getCardBadge(selectedProduct).className]"
-                >{{ getCardBadge(selectedProduct).label }}</span
-              >
             </div>
 
             <div class="detail-content">
@@ -1498,7 +1533,13 @@ onMounted(async () => {
               </p>
 
               <div class="detail-price-band">
-                ฿{{ Number(getProductPrice(selectedProduct)).toLocaleString() }}
+                <span class="detail-price-band__price">
+                  ฿{{ Number(getProductPrice(selectedProduct)).toLocaleString() }}
+                </span>
+                <span
+                  v-if="getCardBadge(selectedProduct)"
+                  :class="['detail-badge', getCardBadge(selectedProduct).className]"
+                >{{ getCardBadge(selectedProduct).label }}</span>
               </div>
 
               <div
@@ -1663,6 +1704,52 @@ onMounted(async () => {
               </div>
             </div>
           </div>
+
+          <transition name="fade-scale">
+            <div
+              v-if="imageViewerOpen"
+              class="image-viewer"
+              @click.self="closeImageViewer"
+            >
+              <div class="image-viewer__frame" @click.self="closeImageViewer">
+                <button
+                  class="image-viewer__close"
+                  type="button"
+                  aria-label="ปิดรูปขนาดใหญ่"
+                  @click="closeImageViewer"
+                >
+                  ×
+                </button>
+
+                <button
+                  v-if="detailImages.length > 1"
+                  class="image-viewer__nav image-viewer__nav--prev"
+                  type="button"
+                  aria-label="รูปก่อนหน้า"
+                  @click.stop="stepViewerImage(-1)"
+                >
+                  ‹
+                </button>
+
+                <img :src="activeDetailImage" :alt="selectedProduct.name" />
+
+                <button
+                  v-if="detailImages.length > 1"
+                  class="image-viewer__nav image-viewer__nav--next"
+                  type="button"
+                  aria-label="รูปถัดไป"
+                  @click.stop="stepViewerImage(1)"
+                >
+                  ›
+                </button>
+
+                <span v-if="detailImages.length > 1" class="image-viewer__counter">
+                  {{ Math.min(selectedPreviewIndex + 1, detailImages.length) }} /
+                  {{ detailImages.length }}
+                </span>
+              </div>
+            </div>
+          </transition>
         </section>
       </div>
     </transition>
@@ -2129,7 +2216,7 @@ onMounted(async () => {
   position: fixed;
   top: 66px;
   right: 1.5rem;
-  z-index: 200;
+  z-index: 10000;
   pointer-events: none;
   display: flex;
   align-items: center;
@@ -2820,6 +2907,11 @@ onMounted(async () => {
 .detail-layout {
   display: grid;
   grid-template-columns: minmax(300px, 390px) minmax(360px, 1fr);
+  align-items: start;
+  max-height: calc(100vh - 4rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .detail-media {
@@ -2841,10 +2933,106 @@ onMounted(async () => {
   justify-content: center;
 }
 
+.detail-media-main--zoomable {
+  cursor: zoom-in;
+}
+
 .detail-media img {
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+/* ── POPUP ดูรูปใหญ่ (เต็มกรอบ .detail-layout) ── */
+.image-viewer {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(45, 32, 68, 0.72);
+  backdrop-filter: blur(4px);
+  cursor: zoom-out;
+}
+
+.image-viewer__frame {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border: 1px solid #eadff5;
+  border-radius: 18px;
+  box-shadow: 0 24px 60px rgba(63, 47, 93, 0.3);
+  overflow: hidden;
+}
+
+.image-viewer__frame img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  cursor: default;
+}
+
+.image-viewer__close {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  z-index: 2;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--primary-dark);
+  font-size: 1.35rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(79, 62, 108, 0.18);
+}
+
+.image-viewer__nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  width: 38px;
+  height: 38px;
+  border: 1px solid #e7dbf4;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--primary-dark);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(79, 62, 108, 0.15);
+}
+
+.image-viewer__nav--prev {
+  left: 0.6rem;
+}
+
+.image-viewer__nav--next {
+  right: 0.6rem;
+}
+
+.image-viewer__counter {
+  position: absolute;
+  left: 50%;
+  bottom: 0.7rem;
+  transform: translateX(-50%);
+  background: rgba(63, 47, 93, 0.82);
+  color: #fff;
+  border-radius: 999px;
+  padding: 0.25rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 700;
 }
 
 .detail-media__fallback {
@@ -2894,9 +3082,10 @@ onMounted(async () => {
 }
 
 .detail-badge {
-  position: absolute;
-  left: 1rem;
-  bottom: 1rem;
+  position: static;
+  z-index: 3;
+  pointer-events: none;
+  box-shadow: 0 6px 16px rgba(79, 62, 108, 0.14);
   background: #fff2d9;
   color: #9b6210;
   border: 1px solid #f7ddb0;
@@ -2907,7 +3096,7 @@ onMounted(async () => {
 }
 
 .detail-content {
-  padding: 1.25rem 1.35rem 1.15rem;
+  padding: 1.25rem 1.35rem 3rem;
 }
 
 .detail-eyebrow {
@@ -2940,6 +3129,11 @@ onMounted(async () => {
 }
 
 .detail-price-band {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
   margin-bottom: 0.95rem;
   padding: 0.62rem 0.82rem;
   border-radius: 10px;
@@ -3298,6 +3492,8 @@ onMounted(async () => {
 
   .detail-layout {
     grid-template-columns: 1fr;
+    max-height: none;
+    overflow-y: visible;
   }
 
   .detail-media {
@@ -3307,6 +3503,17 @@ onMounted(async () => {
 
   .detail-media-main {
     max-height: 300px;
+  }
+
+  /* จอเล็ก: ตัว modal เป็นตัวเลื่อน จึงเว้นที่ด้านล่างให้ badge ไม่ทับปุ่ม */
+  .detail-content {
+    padding-bottom: 3rem;
+  }
+
+  .image-viewer {
+    position: fixed;
+    inset: 0;
+    padding: 0.85rem;
   }
 }
 
@@ -3355,7 +3562,7 @@ onMounted(async () => {
   }
 
   .detail-content {
-    padding: 0.9rem 0.85rem 1rem;
+    padding: 0.9rem 0.85rem 3rem;
   }
 
   .detail-title {

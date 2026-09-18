@@ -3245,7 +3245,7 @@ onMounted(async () => {
     transform: rotate(360deg);
   }
 }
-@media (max-width: 1024px) {
+@media (max-width: 900px) {
   .order-layout {
     grid-template-columns: 1fr;
   }
@@ -3254,9 +3254,6 @@ onMounted(async () => {
   }
   .payment-sticky {
     position: static;
-  }
-  .payment-section {
-    order: -1;
   }
 }
 @media (max-width: 768px) {
