@@ -501,7 +501,7 @@ onMounted(fetchCart)
                 :class="{ 'view-toggle__btn--active': activeCartView === 'ready' }"
                 @click="activeCartView = 'ready'"
               >
-                พร้อมส่งสินค้า
+                สินค้าพร้อมส่ง
               </button>
               <button
                 class="view-toggle__btn"
@@ -518,7 +518,7 @@ onMounted(fetchCart)
             v-if="activeCartView === 'ready' && readyToShipItems.length > 0"
             class="item-section"
           >
-            <h3 class="item-section-title">✅ พร้อมส่ง</h3>
+            <!-- <h3 class="item-section-title">สินค้าพร้อมส่ง</h3> -->
 
             <transition-group name="list" tag="div" class="item-list">
               <div
@@ -648,7 +648,7 @@ onMounted(fetchCart)
             v-if="activeCartView === 'preorder' && preorderItems.length > 0"
             class="item-section"
           >
-            <h3 class="item-section-title">⏳ พรีออเดอร์</h3>
+            <h3 class="item-section-title">สินค้าพรีออเดอร์</h3>
 
             <transition-group name="list" tag="div" class="item-list">
               <div

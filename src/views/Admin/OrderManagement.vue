@@ -95,7 +95,7 @@ function getStatus(status) {
 }
 
 function getOrderTypeLabel(orderType) {
-  return String(orderType || '').toLowerCase() === 'preorder' ? '🕐 พรีออเดอร์' : '✅ พร้อมส่ง'
+  return String(orderType || '').toLowerCase() === 'preorder' ? 'สินค้าพรีออเดอร์' : 'สินค้าพร้อมส่ง'
 }
 
 // ── ผูก path กับตัวกรองประเภทออเดอร์ ──

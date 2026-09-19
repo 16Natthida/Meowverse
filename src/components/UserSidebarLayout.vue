@@ -743,4 +743,27 @@ onBeforeUnmount(() => {
   .user-shell__top-action { width: 36px; height: 36px; }
   .user-shell__profile-avatar { width: 32px; height: 32px; }
 }
+@media (max-width: 347px) {
+  /* 1. ซ่อน avatar */
+  :deep(.user-shell__profile-avatar),
+  .user-shell__profile-avatar {
+    display: none !important;
+  }
+
+  /* 2. สลับปุ่มค้นหาให้ไปอยู่ตำแหน่งขวาสุดแทนที่ avatar */
+  [aria-label="ค้นหาสินค้า"],
+  :deep([aria-label="ค้นหาสินค้า"]),
+  .mobile-search-btn {
+    order: 99 !important; /* ดันไปอยู่ลำดับท้ายสุดแทน avatar */
+    margin-left: 0 !important;
+  }
+
+  /* 3. ล็อกตะกร้าสินค้าให้อยู่ก่อนหน้าปุ่มค้นหา */
+  .cart-icon-btn,
+  :deep(.cart-icon-btn),
+  [aria-label="ตะกร้าสินค้า"],
+  :deep([aria-label="ตะกร้าสินค้า"]) {
+    order: 98 !important;
+  }
+}
 </style>
