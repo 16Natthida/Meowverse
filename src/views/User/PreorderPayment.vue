@@ -200,7 +200,7 @@ const isReadOnlyStage = computed(() =>
 
 // ✅ ซ่อนปุ่มขอเลื่อนกำหนดชำระเงิน และสกัดการเลือกช่องทางการโอนเมื่อออเดอร์จ่ายเสร็จสมบูรณ์/จัดส่งแล้ว
 const isFullyPaid = computed(() =>
-  ['paid', 'ready to ship', 'shipped', 'delivered', 'slip submitted'].includes(
+  ['paid', 'ready to ship', 'shipped', 'delivered', 'slip submitted', 'import slip submitted'].includes(
     normalizedOrderStatus.value,
   ),
 )
@@ -249,6 +249,28 @@ const heroTotal = computed(() => {
   if (isImportFeePaymentStage.value || isMissingRound.value) return importFeeTotal.value
   if (isDelayedOrder.value) return itemsSubtotal.value
   return amountDue.value
+})
+
+// ค่าส่งดิบจาก orders.shipping_fee (ไม่มี fallback 65) ใช้แสดงในสรุปยอดรอบแรกเท่านั้น
+// แสดงเฉพาะตอนมีค่าจริง > 0 ตามที่ระบุ (0.00 หรือไม่มีค่า = ไม่แสดง)
+const rawShippingFee = computed(() => Number(order.value?.shipping_fee || 0))
+
+// ยอดรวมของรายการที่แสดงในกล่องสรุปด้านบน (ต่างจาก amountDue ที่มี logic พิเศษเช่นสถานะจ่ายครบแล้ว)
+// รอบแรก: สินค้า + ค่าส่งจีน + ค่าส่งไทย(ดิบ) + ค่านำเข้าที่แจ้งแล้ว(ถ้ามี)
+// รอบ 2/ตกหล่น: ค่านำเข้ารอบนี้ + ค่าส่งไทย
+const breakdownTotal = computed(() => {
+  if (isImportFeeDisplayStage.value) {
+    return importFeeTotal.value + shippingFee.value
+  }
+  const shippingPart = !['pending', 'slip submitted'].includes(normalizedOrderStatus.value)
+    ? rawShippingFee.value
+    : 0
+  return (
+    itemsSubtotal.value +
+    chinaShippingTotalThb.value +
+    shippingPart +
+    importFeeTotal.value
+  )
 })
 
 const shippingFee = computed(() => {
@@ -2091,6 +2113,13 @@ onMounted(async () => {
                   <span>฿{{ chinaShippingTotalThb.toLocaleString() }}</span>
                 </div>
                 <div
+                  v-if="!isImportFeeDisplayStage && !['pending', 'slip submitted'].includes(normalizedOrderStatus) && rawShippingFee > 0"
+                  style="display: flex; justify-content: space-between"
+                >
+                  <span>ค่าส่งภายในไทย</span>
+                  <span>฿{{ rawShippingFee.toLocaleString() }}</span>
+                </div>
+                <div
                   v-if="isImportFeeDisplayStage && importFeeTotal > 0"
                   style="display: flex; justify-content: space-between"
                 >
@@ -2159,6 +2188,20 @@ onMounted(async () => {
                     แจ้งแล้ว
                   </span>
                 </div>
+                <div
+                  style="
+                    display: flex;
+                    justify-content: space-between;
+                    font-weight: 800;
+                    color: #4b3f72;
+                    padding-top: 6px;
+                    border-top: 1px dashed #eadff5;
+                    margin-top: 2px;
+                  "
+                >
+                  <span>ยอดรวม</span>
+                  <span>฿{{ breakdownTotal.toLocaleString() }}</span>
+                </div>
               </div>
               <hr
                 class="divider"
@@ -2198,7 +2241,7 @@ onMounted(async () => {
                    <input
                      v-model="termsAccepted"
                      type="checkbox"
-                     :disabled="isReadOnlyStage || isRoundOpen || termsLoading || !!termsError"
+                     :disabled="isReadOnlyStage || isFullyPaid || isRoundOpen || termsLoading || !!termsError"
                    />
                    <span>ฉันได้อ่านและยอมรับกฎกติกาและเงื่อนไขของร้านแล้ว</span>
                  </label>
@@ -2210,7 +2253,7 @@ onMounted(async () => {
                  v-if="normalizedOrderStatus !== 'delayed'"
                  class="btn-checkout"
                  @click="confirmPayment"
-                 :disabled="loading || isReadOnlyStage || isRoundOpen || !termsAccepted"
+                 :disabled="loading || isReadOnlyStage || isFullyPaid || isRoundOpen || !termsAccepted"
                >
                 {{
                   loading
@@ -2219,7 +2262,11 @@ onMounted(async () => {
                       ? 'รอแอดมินปิดรอบก่อนจึงจะชำระเงินได้'
                       : isReadOnlyStage
                       ? 'ออเดอร์ถูกเตรียมจัดส่งแล้ว'
-                      : order.status && ['paid'].includes(String(order.status).toLowerCase())
+                      : normalizedOrderStatus === 'slip submitted'
+                        ? 'รอตรวจสอบสลิป'
+                        : normalizedOrderStatus === 'import slip submitted'
+                          ? 'รอตรวจสอบสลิปค่านำเข้า'
+                        : order.status && ['paid'].includes(String(order.status).toLowerCase())
                         ? 'บันทึกอัปเดตข้อมูลจัดส่ง'
                         : importFeeTotal > 0
                           ? 'ยืนยันการชำระค่านำเข้า'

@@ -153,6 +153,22 @@ watch(
   { immediate: true },
 )
 
+// Exact-name icon lookup for the 10 approved categories (primary match).
+// Falls back to the keyword map below for any legacy/unmapped names, and
+// finally to the generic "all products" icon if nothing matches.
+const CATEGORY_ICON_BY_NAME = {
+  'wet food': '/images/category-icons/wet-cat-food.png',
+  soup: '/images/category-icons/soup-cat-food.png',
+  'lickable cat treats': '/images/category-icons/lickable-cat-treats.png',
+  'cat supplies / toys': '/images/category-icons/cat-toys.png',
+  'freeze-dried food': '/images/category-icons/freeze-dried-food.png',
+  'vitamins / supplements': '/images/category-icons/supplements.png',
+  'snacks / treats': '/images/category-icons/cat-treats.png',
+  promotions: '/images/category-icons/promotion.png',
+  'trial sets': '/images/category-icons/trial-set.png',
+  others: '/images/category-icons/others.png',
+}
+
 const iconMap = [
   { keyword: 'อาหารเปียก', icon: '/images/category-icons/wet-cat-food.png' },
   { keyword: 'อาหารเม็ด', icon: '/images/category-icons/dry-cat-food.png' },
@@ -177,6 +193,8 @@ const iconMap = [
 ]
 
 function getCatIcon(name) {
+  const exact = CATEGORY_ICON_BY_NAME[String(name || '').trim().toLowerCase()]
+  if (exact) return exact
   const match = iconMap.find((i) => name?.includes(i.keyword))
   return match ? match.icon : '/images/category-icons/all-products.png'
 }
@@ -273,6 +291,24 @@ function formatDateTime(dateStr) {
 }
 
 // ── FETCH CATEGORIES ──
+// The 10 approved product categories, in the exact display order requested.
+// Categories still come from the database/API (see /api/categories) — this
+// array is only used to (a) sort them in a fixed order on this screen and
+// (b) pick the right icon per name. It does not create or hardcode category
+// records; whatever the API returns is still what gets shown/filtered.
+const CATEGORY_DISPLAY_ORDER = [
+  'Wet Food',
+  'Soup',
+  'Lickable Cat Treats',
+  'Cat Supplies / Toys',
+  'Freeze-Dried Food',
+  'Vitamins / Supplements',
+  'Snacks / Treats',
+  'Promotions',
+  'Trial Sets',
+  'Others',
+]
+
 const fetchCategories = async () => {
   try {
     const res = await fetch(`${API_BASE_URL}/categories`)
@@ -284,6 +320,14 @@ const fetchCategories = async () => {
       name: c.cat_name ?? c.name ?? c.categoryName ?? '',
       icon: getCatIcon(c.cat_name ?? c.name ?? ''),
     }))
+    // Keep the fixed 1-10 order when the name matches one of the approved
+    // categories; anything else (shouldn't happen after the DB migration)
+    // is pushed to the end instead of being dropped.
+    normalizedCategories.sort((a, b) => {
+      const ia = CATEGORY_DISPLAY_ORDER.indexOf(a.name)
+      const ib = CATEGORY_DISPLAY_ORDER.indexOf(b.name)
+      return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib)
+    })
     categories.value = normalizedCategories.length || !isGuideMode(route) ? normalizedCategories : GUIDE_CATEGORIES
   } catch (err) {
     console.error('fetchCategories:', err)

@@ -38,7 +38,7 @@ const LOCAL_DEV_ORIGINS = [
 const CATEGORY_NAME_MAX_LENGTH = 100
 const CATEGORY_DETAIL_MAX_LENGTH = 255
 const CATEGORY_MIN_COUNT = 4
-const CATEGORY_MAX_COUNT = 5
+const CATEGORY_MAX_COUNT = 10
 const DEFAULT_BANNER_IMAGE_URL = '/images/cat.jpg'
 const DEFAULT_BRAND_LOGO_URL = ''
 const DEFAULT_THEME_PRIMARY = '#b673ee'
@@ -5679,6 +5679,7 @@ app.get('/api/admin/orders', authenticateToken, requireAdmin, async (req, res) =
         o.order_id,
         o.user_id,
         o.total_amount,
+        o.shipping_fee,
         o.status,
         o.deadline,
         o.Order_type,
@@ -5732,6 +5733,7 @@ app.get('/api/admin/orders', authenticateToken, requireAdmin, async (req, res) =
         o.order_id,
         o.user_id,
         o.total_amount,
+        o.shipping_fee,
         o.status,
         o.deadline,
         o.Order_type,
@@ -5750,6 +5752,7 @@ app.get('/api/admin/orders', authenticateToken, requireAdmin, async (req, res) =
         username: row.username || '',
         full_name: row.full_name || '',
         total_amount: Number(row.total_amount) || 0,
+        shipping_fee: Number(row.shipping_fee) || 0,
         status: row.status || 'Pending',
         deadline: row.deadline || null,
         Order_type: row.Order_type || 'Ready',

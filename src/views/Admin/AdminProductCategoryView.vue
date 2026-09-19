@@ -9,7 +9,7 @@ const LOW_STOCK_THRESHOLD = 5
 const CATEGORY_NAME_MAX_LENGTH = 100
 const CATEGORY_DETAIL_MAX_LENGTH = 255
 const CATEGORY_MIN_COUNT = 4
-const CATEGORY_MAX_COUNT = 5
+const CATEGORY_MAX_COUNT = 10
 
 const store = useAdminProductStore()
 

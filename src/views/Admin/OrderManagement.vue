@@ -165,7 +165,11 @@ const filteredOrders = computed(() => {
 
 const orderStats = computed(() => ({
   all: orders.value.length,
-  totalSales: orders.value.reduce((sum, order) => sum + (Number(order.total_amount) || 0), 0),
+  totalSales: orders.value.reduce(
+    (sum, order) =>
+      sum + Math.max((Number(order.total_amount) || 0) - (Number(order.shipping_fee) || 0), 0),
+    0,
+  ),
   paid: orders.value.filter((order) => normalizeStatus(order.status) === 'paid').length,
   preorder: orders.value.filter((order) => normalizeStatus(order.Order_type) === 'preorder').length,
   ready: orders.value.filter((order) => normalizeStatus(order.Order_type) === 'ready').length,
@@ -541,7 +545,7 @@ onUnmounted(() => {
 
     <section class="kpi-grid">
       <article class="kpi-card">
-        <p class="kpi-label">ยอดขายรวม</p>
+        <p class="kpi-label">ยอดขายรวม (ไม่รวมค่าส่ง)</p>
         <p class="kpi-value">{{ formatMoney(orderStats.totalSales) }}</p>
       </article>
       <article class="kpi-card">
