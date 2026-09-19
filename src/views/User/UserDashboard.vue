@@ -172,6 +172,7 @@ const CATEGORY_ICON_BY_NAME = {
 const iconMap = [
   { keyword: 'อาหารเปียก', icon: '/images/category-icons/wet-cat-food.png' },
   { keyword: 'อาหารเม็ด', icon: '/images/category-icons/dry-cat-food.png' },
+  { keyword: 'ฟรีซดราย', icon: '/images/category-icons/freeze-dry-cat-food.png' },
   { keyword: 'ขนมเลีย', icon: '/images/category-icons/lickable-cat-treats.png' },
   { keyword: 'ขนม', icon: '/images/category-icons/cat-treats.png' },
   { keyword: 'ทูน่า', icon: '/images/category-icons/tuna-fish-food.png' },
