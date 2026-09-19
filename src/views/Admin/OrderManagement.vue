@@ -160,6 +160,32 @@ function goToSalesView(type) {
   else router.push('/admin/sales')
 }
 
+// ── ยอดรวมของออเดอร์ในหน้าต่างรายละเอียด (modal) ให้ตรงกับหน้า "รายการจัดส่ง" ──
+// พรีออเดอร์: total_amount (ค่าสินค้า) + ค่าจัดส่ง + ค่านำเข้า + ค่าส่งจากจีน
+// พร้อมส่ง: total_amount รวมค่าจัดส่งไว้แล้วตั้งแต่ตอนสร้างออเดอร์ จึงใช้ตรง ๆ ได้เลย
+function getOrderDetailTotal(order) {
+  const total = Number(order?.total_amount || 0)
+  if (String(order?.Order_type || '').toLowerCase() !== 'preorder') return total
+  return (
+    total +
+    Number(order?.shipping_fee || 0) +
+    Number(order?.import_fee_total || 0) +
+    Number(order?.china_shipping_total_thb || 0)
+  )
+}
+
+// ── ค่าสินค้าล้วน ๆ ของออเดอร์ในหน้าต่างรายละเอียด (ไม่รวมค่าจัดส่ง/ค่านำเข้า/ค่าส่งจากจีน) ──
+// รวมจากรายการสินค้าจริง (items) โดยตรง แทนที่จะใช้ total_amount เพราะออเดอร์ "พร้อมส่ง"
+// เก็บค่าจัดส่งปนไว้ใน total_amount ตั้งแต่ตอนสร้างออเดอร์ ต่างจากออเดอร์ "พรีออเดอร์" ที่ total_amount
+// เป็นค่าสินค้าล้วน ๆ อยู่แล้ว การรวมจาก items ตรง ๆ จะได้ตัวเลขที่ถูกต้องเสมอไม่ว่าประเภทไหน
+function getOrderProductTotal(order) {
+  const items = Array.isArray(order?.items) ? order.items : []
+  return items.reduce(
+    (sum, item) => sum + Number(item.unit_price || 0) * Number(item.qty || 0),
+    0,
+  )
+}
+
 // ── ใช้จำกัดขอบเขตการแสดงคอลัมน์ "ค่าส่ง" ในตาราง "จัดการรายการยอดขาย"
 // ให้เห็นเฉพาะหน้า /admin/sales/preorder เท่านั้น ไม่กระทบหน้า /admin/sales และ /admin/sales/ready-to-ship
 const isPreorderSalesPage = computed(() => route.meta?.orderType === 'preorder')
@@ -984,7 +1010,10 @@ onUnmounted(() => {
           <template v-else>
             <div class="summary-strip">
               <div>
-                <span>ยอดรวม</span><strong>{{ formatMoney(selectedOrder.total_amount) }}</strong>
+                <span>ยอดรวม</span><strong>{{ formatMoney(getOrderDetailTotal(selectedOrder)) }}</strong>
+              </div>
+              <div>
+                <span>ค่าสินค้า</span><strong>{{ formatMoney(getOrderProductTotal(selectedOrder)) }}</strong>
               </div>
               <div>
                 <span>สถานะ</span><strong>{{ getStatus(selectedOrder.status).label }}</strong>

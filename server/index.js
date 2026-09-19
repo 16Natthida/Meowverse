@@ -679,15 +679,28 @@ app.post('/register', async (req, res) => {
     return res.status(400).json({ success: false, error: 'กรุณากรอกข้อมูลให้ครบถ้วน' })
   }
 
+  const trimmedUsername = String(username).trim()
+
   try {
+    const [existing] = await pool.query(
+      'SELECT user_id FROM accounts WHERE username = ? LIMIT 1',
+      [trimmedUsername],
+    )
+    if (existing.length > 0) {
+      return res.status(409).json({ success: false, error: 'ชื่อผู้ใช้นี้มีอยู่แล้ว กรุณาใช้ชื่ออื่น' })
+    }
+
     const hashedPassword = await bcrypt.hash(String(password), 10)
     await pool.query(
       'INSERT INTO accounts (username, password, full_name, role) VALUES (?, ?, ?, "User")',
-      [String(username).trim(), hashedPassword, String(full_name).trim()],
+      [trimmedUsername, hashedPassword, String(full_name).trim()],
     )
 
     return res.json({ success: true, message: 'ลงทะเบียนสำเร็จ' })
   } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ success: false, error: 'ชื่อผู้ใช้นี้มีอยู่แล้ว กรุณาใช้ชื่ออื่น' })
+    }
     return res.status(500).json({ success: false, error: error.message })
   }
 })
@@ -699,15 +712,28 @@ app.post('/api/register', async (req, res) => {
     return res.status(400).json({ success: false, error: 'กรุณากรอกข้อมูลให้ครบถ้วน' })
   }
 
+  const trimmedUsername = String(username).trim()
+
   try {
+    const [existing] = await pool.query(
+      'SELECT user_id FROM accounts WHERE username = ? LIMIT 1',
+      [trimmedUsername],
+    )
+    if (existing.length > 0) {
+      return res.status(409).json({ success: false, error: 'ชื่อผู้ใช้นี้มีอยู่แล้ว กรุณาใช้ชื่ออื่น' })
+    }
+
     const hashedPassword = await bcrypt.hash(String(password), 10)
     await pool.query(
       'INSERT INTO accounts (username, password, full_name, role) VALUES (?, ?, ?, "User")',
-      [String(username).trim(), hashedPassword, String(full_name).trim()],
+      [trimmedUsername, hashedPassword, String(full_name).trim()],
     )
 
     return res.json({ success: true, message: 'ลงทะเบียนสำเร็จ' })
   } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ success: false, error: 'ชื่อผู้ใช้นี้มีอยู่แล้ว กรุณาใช้ชื่ออื่น' })
+    }
     return res.status(500).json({ success: false, error: error.message })
   }
 })
@@ -726,13 +752,23 @@ app.post('/api/users', authenticateToken, requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'Invalid role' })
   }
 
+  const trimmedUsername = String(username).trim()
+
   try {
+    const [existing] = await pool.query(
+      'SELECT user_id FROM accounts WHERE username = ? LIMIT 1',
+      [trimmedUsername],
+    )
+    if (existing.length > 0) {
+      return res.status(409).json({ error: 'ชื่อผู้ใช้นี้มีอยู่แล้ว กรุณาใช้ชื่ออื่น' })
+    }
+
     const hashedPassword = await bcrypt.hash(String(password), 10)
 
     await pool.query(
       'INSERT INTO accounts (username, password, role, full_name, phone_number, line_id, notes) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [
-        String(username).trim(),
+        trimmedUsername,
         hashedPassword,
         safeRole,
         String(full_name).trim(),
@@ -744,6 +780,9 @@ app.post('/api/users', authenticateToken, requireAdmin, async (req, res) => {
 
     return res.json({ message: 'User added successfully' })
   } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'ชื่อผู้ใช้นี้มีอยู่แล้ว กรุณาใช้ชื่ออื่น' })
+    }
     return res.status(500).json({ error: error.message })
   }
 })

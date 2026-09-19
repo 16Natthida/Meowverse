@@ -30,6 +30,14 @@ function getOrderTotal(order) {
   )
 }
 
+// ยอดรวมเฉพาะค่าสินค้า (ไม่รวมค่าจัดส่ง/ค่านำเข้า/ค่าส่งจากจีน)
+function getProductTotal(order) {
+  return (order?.details || []).reduce(
+    (sum, i) => sum + Number(i.unit_price || 0) * Number(i.qty || 0),
+    0,
+  )
+}
+
 function openOrderDetail(order) {
   detailOrder.value = order
 }
@@ -369,41 +377,82 @@ onUnmounted(() => {
 
     <!-- Order Detail Modal -->
     <div v-if="detailOrder" class="modal-overlay" @click.self="closeOrderDetail">
-      <div class="detail-modal">
-        <div class="detail-modal__head">
+      <div class="modal-card">
+        <div class="modal-head">
           <div>
-            <h3>รายละเอียดออเดอร์ #{{ String(detailOrder.order_id).padStart(3, '0') }}</h3>
-            <p>{{ detailOrder.name || '-' }} · {{ detailOrder.phone || '-' }}</p>
+            <h3>ออเดอร์ #{{ String(detailOrder.order_id).padStart(3, '0') }}</h3>
+            <p>
+              {{ detailOrder.name || '-' }} ·
+              {{ detailOrder.Order_type === 'Preorder' ? 'สินค้าพรีออเดอร์' : 'สินค้าพร้อมส่ง' }}
+            </p>
           </div>
-          <button type="button" class="close-btn" @click="closeOrderDetail" aria-label="ปิด">✕</button>
-        </div>
-
-        <div class="detail-modal__items">
-          <div v-for="item in detailOrder.details" :key="item.detail_id" class="detail-item-row">
-            <button
-              v-if="item.image_url"
-              type="button"
-              class="thumb-btn"
-              @click="openImagePreview(item.image_url, item.prod_name, item.flavor)"
-              :aria-label="`ดูรูป ${item.prod_name}`"
-            >
-              <img :src="item.image_url" :alt="item.prod_name" class="detail-item-thumb" loading="lazy" />
+          <div class="modal-head__actions">
+            <button type="button" class="print-order-btn" @click="printShippingOrder(detailOrder)">
+              พิมพ์ใบออเดอร์
             </button>
-            <div v-else class="detail-item-thumb detail-item-thumb--placeholder">ไม่มีรูป</div>
-
-            <div class="detail-item-info">
-              <strong>{{ item.prod_name }}</strong>
-              <span v-if="item.flavor" class="detail-item-flavor">รสชาติ: {{ item.flavor }}</span>
-              <span class="detail-item-price">฿{{ Number(item.unit_price || 0).toLocaleString() }} / ชิ้น</span>
-            </div>
-
-            <div class="detail-item-qty">x{{ item.qty }}</div>
+            <button type="button" class="close-btn" @click="closeOrderDetail" aria-label="ปิด">✕</button>
           </div>
         </div>
 
-        <div class="detail-modal__total">
-          <span>ยอดรวม</span>
-          <strong>฿{{ getOrderTotal(detailOrder).toLocaleString() }}</strong>
+        <div class="summary-strip">
+          <div>
+            <span>ยอดรวม</span><strong>฿{{ getOrderTotal(detailOrder).toLocaleString() }}</strong>
+          </div>
+          <div>
+            <span>ค่าสินค้า</span><strong>฿{{ getProductTotal(detailOrder).toLocaleString() }}</strong>
+          </div>
+          <div>
+            <span>สถานะ</span><strong>{{ statusLabel(detailOrder.status) }}</strong>
+          </div>
+          <div>
+            <span>วันที่</span><strong>{{ formatDate(detailOrder.Order_date) }}</strong>
+          </div>
+          <div>
+            <span>จำนวนสินค้า</span>
+            <strong>{{ (detailOrder.details || []).reduce((sum, i) => sum + Number(i.qty || 0), 0) }} ชิ้น</strong>
+          </div>
+          <div>
+            <span>ค่าจัดส่ง</span><strong>฿{{ Number(detailOrder.shipping_fee || 0).toLocaleString() }}</strong>
+          </div>
+          <template v-if="detailOrder.Order_type === 'Preorder'">
+            <div>
+              <span>ค่านำเข้า</span><strong>฿{{ Number(detailOrder.import_fee_total || 0).toLocaleString() }}</strong>
+            </div>
+            <div>
+              <span>ค่าส่งจากจีน</span><strong>฿{{ Number(detailOrder.china_shipping_total_thb || 0).toLocaleString() }}</strong>
+            </div>
+          </template>
+        </div>
+
+        <div class="items-list">
+          <div v-for="item in detailOrder.details" :key="item.detail_id" class="item-row">
+            <div class="item-thumb-cell">
+              <button
+                v-if="item.image_url"
+                type="button"
+                class="thumb-btn"
+                @click="openImagePreview(item.image_url, item.prod_name, item.flavor)"
+                :aria-label="`ดูรูป ${item.prod_name}`"
+              >
+                <img :src="item.image_url" :alt="item.prod_name" class="item-thumb" loading="lazy" />
+              </button>
+              <div v-else class="item-thumb item-thumb--placeholder">ไม่มีรูป</div>
+            </div>
+            <div>
+              <strong>{{ item.prod_name }}</strong>
+              <p v-if="item.flavor">รสชาติ: {{ item.flavor }}</p>
+            </div>
+            <div>฿{{ Number(item.unit_price || 0).toLocaleString() }}</div>
+            <div>x{{ item.qty }}</div>
+            <div>
+              ฿{{ (Number(item.unit_price || 0) * Number(item.qty || 0)).toLocaleString() }}
+            </div>
+            <div>
+              <span :class="['type-chip', detailOrder.Order_type === 'Preorder' ? 'type-chip--pre' : 'type-chip--ready']">
+                {{ detailOrder.Order_type === 'Preorder' ? 'พรีออเดอร์' : 'พร้อมส่ง' }}
+              </span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -587,56 +636,100 @@ td { padding: 1rem; border-bottom: 1px solid #f3e8ff; font-size: 0.9rem; vertica
   z-index: 60;
 }
 
-.close-btn {
-  border: none;
-  background: none;
-  font-size: 1.1rem;
-  color: #6d3fa3;
-  cursor: pointer;
-  line-height: 1;
-}
-
-.detail-modal {
-  width: min(520px, 100%);
-  max-height: 85vh;
+.modal-card {
+  width: min(980px, calc(100vw - 2rem));
+  max-height: min(88vh, 820px);
   overflow: auto;
   background: #fff;
   border-radius: 20px;
-  padding: 1.3rem;
+  padding: 1.35rem;
+  scrollbar-gutter: stable;
 }
 
-.detail-modal__head {
+.modal-head {
+  position: sticky;
+  top: -1.35rem;
+  z-index: 3;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
-  margin-bottom: 1rem;
+  margin: -1.35rem -1.35rem 1.1rem;
+  padding: 1.1rem 1.35rem 0.9rem;
+  background: #fff;
+  border-bottom: 1px solid #f0e8fb;
 }
 
-.detail-modal__head h3 {
+.modal-head h3 {
   margin: 0 0 0.25rem;
   color: #3c1f59;
   font-size: 1.15rem;
 }
 
-.detail-modal__head p {
-  margin: 0;
-  color: #7c6a92;
+.modal-head p {
+  margin: 0.25rem 0 0;
+  color: #7b6992;
   font-size: 0.85rem;
 }
 
-.detail-modal__items {
-  display: grid;
-  gap: 0.75rem;
-}
-
-.detail-item-row {
+.modal-head__actions {
   display: flex;
   align-items: center;
-  gap: 0.85rem;
-  padding: 0.7rem;
-  border: 1px solid #ede0fb;
+  gap: 0.55rem;
+  flex-shrink: 0;
+}
+
+.print-order-btn {
+  padding: 0.55rem 0.85rem;
+  border: 1px solid #7c5cdb;
+  border-radius: 999px;
+  background: #7c5cdb;
+  color: #fff;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.print-order-btn:hover {
+  background: #6848bf;
+}
+
+.close-btn {
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 999px;
+  background: #f5ecff;
+  color: #6f50a0;
+  font-size: 1.1rem;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.summary-strip {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-bottom: 1rem;
+}
+
+.summary-strip div {
+  background: #faf7ff;
+  border: 1px solid #ede4fb;
   border-radius: 14px;
+  padding: 0.85rem;
+}
+
+.summary-strip span {
+  display: block;
+  color: #7b6992;
+  font-size: 0.82rem;
+}
+
+.summary-strip strong {
+  color: #432f61;
+  font-size: 1.05rem;
 }
 
 .thumb-btn {
@@ -646,71 +739,80 @@ td { padding: 1rem; border-bottom: 1px solid #f3e8ff; font-size: 0.9rem; vertica
   cursor: zoom-in;
   display: block;
   line-height: 0;
-  border-radius: 12px;
-  flex: 0 0 auto;
+  border-radius: 10px;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .thumb-btn:hover,
 .thumb-btn:focus-visible {
   transform: scale(1.06);
-  box-shadow: 0 4px 14px rgba(166, 109, 230, 0.28);
+  box-shadow: 0 4px 14px rgba(140, 99, 174, 0.28);
   outline: none;
 }
 
-.detail-item-thumb {
-  width: 56px;
-  height: 56px;
-  border-radius: 12px;
-  object-fit: cover;
-  background: #f5efff;
-  flex: 0 0 auto;
-}
-
-.detail-item-thumb--placeholder {
+.items-list {
   display: grid;
-  place-items: center;
-  color: #a996c9;
-  font-size: 0.65rem;
-  text-align: center;
+  gap: 0.65rem;
 }
 
-.detail-item-info {
-  flex: 1;
+.item-row {
   display: grid;
-  gap: 0.15rem;
+  gap: 0.5rem;
+  grid-template-columns: 56px 1.5fr 0.8fr 0.5fr 0.8fr 0.7fr;
+  align-items: center;
+  padding: 0.85rem;
+  border: 1px solid #ede4fb;
+  border-radius: 14px;
 }
 
-.detail-item-info strong {
-  color: #3c1f59;
-  font-size: 0.92rem;
+.item-row p {
+  margin: 0.15rem 0 0;
+  color: #8b7aa3;
+  font-size: 0.82rem;
 }
 
-.detail-item-flavor,
-.detail-item-price {
-  color: #7c6a92;
-  font-size: 0.8rem;
-}
-
-.detail-item-qty {
-  font-weight: 800;
-  color: var(--grape);
-  flex: 0 0 auto;
-}
-
-.detail-modal__total {
+.item-thumb-cell {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-top: 1.1rem;
-  padding-top: 0.9rem;
-  border-top: 1px solid #ede0fb;
-  color: #3c1f59;
-  font-size: 0.95rem;
+  justify-content: center;
 }
 
-.detail-modal__total strong {
-  font-size: 1.1rem;
+.item-thumb {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid #ede4fb;
+  background: #f8f5ff;
+}
+
+.item-thumb--placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #a996c9;
+  font-size: 0.6rem;
+  text-align: center;
+  line-height: 1.15;
+}
+
+.type-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.type-chip--pre {
+  background: #fff1dc;
+  color: #b45309;
+}
+
+.type-chip--ready {
+  background: #e5f8ef;
+  color: #15803d;
 }
 
 /* ── Image preview modal ── */
