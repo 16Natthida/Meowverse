@@ -1079,6 +1079,11 @@ router.patch('/:order_id/confirm-receipt', async (req, res) => {
 
 router.get('/:order_id', async (req, res) => {
   const { order_id } = req.params
+  // ผู้เรียก API ต้องระบุตัวตนมาด้วย (query ?user_id=) เพื่อให้เช็คสิทธิ์เจ้าของออเดอร์ได้
+  // รองรับ role admin ผ่าน header x-user-role ให้แอดมินดูออเดอร์ของลูกค้าคนไหนก็ได้
+  const requestUserId = req.query.user_id
+  const requesterRole = String(req.headers['x-user-role'] || '').toLowerCase()
+  const isAdmin = requesterRole === 'admin'
 
   try {
     const db = getDB(req)
@@ -1110,6 +1115,18 @@ router.get('/:order_id', async (req, res) => {
     }
 
     const order = orderRows[0]
+
+    // ✅ Authorization check: อนุญาตเฉพาะเจ้าของออเดอร์ หรือแอดมินเท่านั้น
+    // ป้องกัน IDOR — ไม่ให้ user คนอื่นเข้าถึงข้อมูลออเดอร์ (ที่อยู่/เบอร์โทร/สลิป) ของคนอื่นได้
+    // แค่เดา/สุ่ม order_id
+    if (!isAdmin) {
+      if (!requestUserId) {
+        return res.status(403).json({ error: 'คุณไม่มีสิทธิ์เข้าถึงออเดอร์นี้' })
+      }
+      if (Number(order.user_id) !== Number(requestUserId)) {
+        return res.status(403).json({ error: 'คุณไม่มีสิทธิ์เข้าถึงออเดอร์นี้' })
+      }
+    }
 
     // ดึง slip แยกตาม type เพื่อให้ frontend เลือกแสดงได้ถูกต้อง
     // Order_fee = สลิปรอบแรก, Import_Fee = สลิปรอบค่านำเข้า

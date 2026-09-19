@@ -22,10 +22,12 @@ function itemLineTotal(item) {
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
+// ใช้เช็คว่าคนที่กำลังเปิดหน้านี้เป็นเจ้าของออเดอร์จริงหรือไม่ (ป้องกัน IDOR)
 
 const router = useRouter()
 const route = useRoute()
-useAuth()
+const { getUser } = useAuth()
+const currentUser = computed(() => getUser())
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 
 const order = ref(null)
@@ -799,9 +801,28 @@ const fetchOrder = async () => {
   try {
     loading.value = true
     error.value = null
-    const res = await fetch(`${API_BASE_URL}/orders/${orderId}`)
+    // ส่ง user_id ของคนที่กำลังเปิดหน้านี้ไปให้ backend เช็คสิทธิ์เจ้าของออเดอร์
+    const userId = currentUser.value?.id ?? currentUser.value?.user_id
+    const res = await fetch(`${API_BASE_URL}/orders/${orderId}?user_id=${userId || ''}`)
+
+    // ดักจับกรณีไม่มีสิทธิ์เข้าถึงออเดอร์นี้ (คนละเจ้าของ)
+    if (res.status === 403) {
+      error.value = 'คุณไม่มีสิทธิ์เข้าถึงออเดอร์นี้'
+      setTimeout(() => router.replace('/order-list'), 1500)
+      loading.value = false
+      return
+    }
+
     if (!res.ok) throw new Error(`ไม่พบข้อมูลออเดอร์ (${res.status})`)
     const data = await res.json()
+
+    // Double check ฝั่ง client อีกชั้น เผื่อ backend เก่ายังไม่ได้อัปเดต
+    if (userId && data.user_id && Number(data.user_id) !== Number(userId)) {
+      error.value = 'คุณไม่มีสิทธิ์เข้าถึงออเดอร์นี้'
+      setTimeout(() => router.replace('/order-list'), 1500)
+      loading.value = false
+      return
+    }
 
     if (data.Order_type !== 'Preorder') {
       router.replace(`/order/${orderId}`)
