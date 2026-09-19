@@ -83,6 +83,24 @@ export function useAdminProductStore() {
     categories.value = categories.value.filter((category) => String(category.id) !== String(id))
   }
 
+  async function toggleCategoryStatus(id, isActive) {
+    const updatedCategory = await requestJson(`/categories/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ isActive }),
+    })
+
+    const index = categories.value.findIndex((category) => String(category.id) === String(id))
+    if (index !== -1) {
+      categories.value = [
+        ...categories.value.slice(0, index),
+        updatedCategory,
+        ...categories.value.slice(index + 1),
+      ]
+    }
+
+    return updatedCategory
+  }
+
   async function fetchProducts() {
     isLoadingProducts.value = true
 
@@ -257,6 +275,7 @@ export function useAdminProductStore() {
     fetchCategories,
     createCategory,
     deleteCategory,
+    toggleCategoryStatus,
     fetchProducts,
     reloadProducts,
     uploadProductImage,

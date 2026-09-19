@@ -9,7 +9,6 @@ const LOW_STOCK_THRESHOLD = 5
 const CATEGORY_NAME_MAX_LENGTH = 100
 const CATEGORY_DETAIL_MAX_LENGTH = 255
 const CATEGORY_MIN_COUNT = 4
-const CATEGORY_MAX_COUNT = 10
 
 const store = useAdminProductStore()
 
@@ -80,8 +79,8 @@ const categoryMap = computed(() => {
 const productCount = computed(() => store.products.length)
 
 const categoryCount = computed(() => store.categories.length)
-const canCreateCategory = computed(() => categoryCount.value < CATEGORY_MAX_COUNT)
 const canDeleteCategory = computed(() => categoryCount.value > CATEGORY_MIN_COUNT)
+const togglingCategoryId = ref(null)
 
 const lowStockCount = computed(() => {
   return store.products.filter((product) => Number(product.stock) <= LOW_STOCK_THRESHOLD).length
@@ -180,7 +179,6 @@ function toThaiApiMessage(message) {
   const lookup = {
     'Category already exists.': 'มีหมวดหมู่นี้อยู่แล้ว',
     'Category name is required.': 'กรุณากรอกชื่อหมวดหมู่',
-    [`You can create up to ${CATEGORY_MAX_COUNT} categories only.`]: `เพิ่มหมวดหมู่ได้สูงสุด ${CATEGORY_MAX_COUNT} หมวด`,
     [`At least ${CATEGORY_MIN_COUNT} categories are required.`]: `ต้องมีหมวดหมู่อย่างน้อย ${CATEGORY_MIN_COUNT} หมวด`,
     'Cannot delete category because products still exist in this category.':
       'ไม่สามารถลบหมวดหมู่นี้ได้ เพราะยังมีสินค้าอยู่ในหมวด',
@@ -393,11 +391,6 @@ async function submitCategoryForm() {
     return
   }
 
-  if (!canCreateCategory.value) {
-    setNotice('warning', `เพิ่มหมวดหมู่ได้สูงสุด ${CATEGORY_MAX_COUNT} หมวด`)
-    return
-  }
-
   isCategorySubmitting.value = true
 
   try {
@@ -446,6 +439,29 @@ async function deleteCategory(category) {
     } else {
       setNotice('error', 'ไม่สามารถลบหมวดหมู่ได้')
     }
+  }
+}
+
+async function toggleCategoryStatus(category) {
+  togglingCategoryId.value = category.id
+
+  try {
+    const nextIsActive = !category.isActive
+    await store.toggleCategoryStatus(category.id, nextIsActive)
+    setNotice(
+      'success',
+      nextIsActive
+        ? `เปิดแสดงหมวดหมู่ "${category.name}" แล้ว`
+        : `ปิดแสดงหมวดหมู่ "${category.name}" แล้ว สินค้าในหมวดนี้จะไม่แสดงหน้าร้าน`,
+    )
+  } catch (error) {
+    if (error instanceof Error && error.message) {
+      setNotice('error', toThaiApiMessage(error.message))
+    } else {
+      setNotice('error', 'ไม่สามารถเปลี่ยนสถานะหมวดหมู่ได้')
+    }
+  } finally {
+    togglingCategoryId.value = null
   }
 }
 
@@ -743,8 +759,8 @@ onUnmounted(() => {
           <p class="manager-eyebrow">Category Studio</p>
           <h2>จัดการหมวดหมู่</h2>
           <p class="compact category-limit-note">
-            แนะนำให้มี {{ CATEGORY_MIN_COUNT }}-{{ CATEGORY_MAX_COUNT }} หมวด (ตอนนี้มี
-            {{ categoryCount }} หมวด)
+            อย่างน้อย {{ CATEGORY_MIN_COUNT }} หมวด (ตอนนี้มี
+            {{ categoryCount }} หมวด) · เพิ่มหมวดหมู่ได้ไม่จำกัดจำนวน
           </p>
         </div>
         <button class="ghost" type="button" @click="closeCategoryForm">ปิด</button>
@@ -754,9 +770,7 @@ onUnmounted(() => {
         <section class="category-card category-card--form">
           <div class="section-head">
             <h3>เพิ่มหมวดหมู่</h3>
-            <span class="section-badge"
-              >เพิ่มได้อีก {{ Math.max(0, CATEGORY_MAX_COUNT - categoryCount) }} หมวด</span
-            >
+            <span class="section-badge">เพิ่มได้ไม่จำกัด</span>
           </div>
 
           <form class="category-form" @submit.prevent="submitCategoryForm">
@@ -775,10 +789,7 @@ onUnmounted(() => {
             </label>
 
             <div class="form-actions">
-              <button
-                :disabled="isCategorySubmitting || isLoading || !canCreateCategory"
-                type="submit"
-              >
+              <button :disabled="isCategorySubmitting || isLoading" type="submit">
                 {{ isCategorySubmitting ? 'กำลังเพิ่ม...' : 'บันทึกหมวดหมู่' }}
               </button>
               <button class="ghost" type="button" @click="closeCategoryForm">ยกเลิก</button>
@@ -795,19 +806,43 @@ onUnmounted(() => {
           </div>
 
           <ul v-if="store.categories.length" class="category-list">
-            <li v-for="category in store.categories" :key="category.id" class="category-item">
+            <li
+              v-for="category in store.categories"
+              :key="category.id"
+              class="category-item"
+              :class="{ 'category-item--inactive': category.isActive === false }"
+            >
               <div class="category-item__content">
-                <p class="category-name">{{ category.name }}</p>
+                <p class="category-name">
+                  {{ category.name }}
+                  <span
+                    class="category-status-tag"
+                    :class="category.isActive === false ? 'is-off' : 'is-on'"
+                  >
+                    {{ category.isActive === false ? 'ปิดการแสดงผล' : 'แสดงอยู่' }}
+                  </span>
+                </p>
                 <p class="category-detail">{{ category.detail || 'ไม่มีรายละเอียด' }}</p>
               </div>
-              <button
-                class="danger"
-                type="button"
-                :disabled="!canDeleteCategory || isCategorySubmitting || isLoading"
-                @click="deleteCategory(category)"
-              >
-                ลบ
-              </button>
+              <div class="category-item__actions">
+                <label class="category-toggle">
+                  <input
+                    type="checkbox"
+                    :checked="category.isActive !== false"
+                    :disabled="togglingCategoryId === category.id || isLoading"
+                    @change="toggleCategoryStatus(category)"
+                  />
+                  <span class="category-toggle__slider"></span>
+                </label>
+                <button
+                  class="danger"
+                  type="button"
+                  :disabled="!canDeleteCategory || isCategorySubmitting || isLoading"
+                  @click="deleteCategory(category)"
+                >
+                  ลบ
+                </button>
+              </div>
             </li>
           </ul>
 
@@ -1931,8 +1966,20 @@ onUnmounted(() => {
   gap: 0.75rem;
 }
 
+.category-item--inactive {
+  background: linear-gradient(180deg, #f7f5fa, #f3f0f7);
+  opacity: 0.72;
+}
+
 .category-item__content {
   min-width: 0;
+}
+
+.category-item__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-shrink: 0;
 }
 
 .category-name {
@@ -1940,6 +1987,77 @@ onUnmounted(() => {
   font-size: 0.88rem;
   font-weight: 800;
   color: #4f3d69;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.category-status-tag {
+  font-size: 0.66rem;
+  font-weight: 700;
+  padding: 0.16rem 0.5rem;
+  border-radius: 999px;
+  letter-spacing: 0.01em;
+}
+
+.category-status-tag.is-on {
+  background: #e6f7ee;
+  color: #1f8a55;
+}
+
+.category-status-tag.is-off {
+  background: #fdeceb;
+  color: #c0392b;
+}
+
+.category-toggle {
+  position: relative;
+  display: inline-block;
+  width: 38px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.category-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.category-toggle__slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background-color: #d9cdec;
+  transition: background-color 0.18s ease;
+  border-radius: 999px;
+}
+
+.category-toggle__slider::before {
+  content: '';
+  position: absolute;
+  height: 16px;
+  width: 16px;
+  left: 3px;
+  bottom: 3px;
+  background-color: #fff;
+  transition: transform 0.18s ease;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(79, 62, 108, 0.35);
+}
+
+.category-toggle input:checked + .category-toggle__slider {
+  background-color: #8f5fd6;
+}
+
+.category-toggle input:checked + .category-toggle__slider::before {
+  transform: translateX(16px);
+}
+
+.category-toggle input:disabled + .category-toggle__slider {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .category-detail {

@@ -14,6 +14,7 @@ import shippingRouter from './shipping.js'
 import { DEFAULT_PREORDER_TERMS, normalizePreorderTerms } from './preorderTerms.js'
 import { getShippingFeeSettings } from './shippingFees.js'
 import {
+  getFlavorPrice,
   getLowestFlavorPrice,
   parseFlavorPricesMap,
   serializeFlavorPrices,
@@ -286,6 +287,7 @@ async function createPreorderOrdersForClosedRound(connection, roundId) {
        c.flavor,
        c.item_type,
        c.preorder_round_id,
+       p.flavor_prices AS flavorPrices,
        COALESCE(prp.minimum_order_qty, 0) AS minimum_order_qty,
        COALESCE(
          NULLIF(c.round_price, 0),
@@ -316,6 +318,8 @@ async function createPreorderOrdersForClosedRound(connection, roundId) {
 
   const byUser = new Map()
   for (const row of eligibleCartRows) {
+    // Match checkout pricing before calculating totals and saving order details.
+    row.price = getFlavorPrice(row.flavorPrices, row.flavor, 'preorder', row.price)
     if (!byUser.has(row.user_id)) byUser.set(row.user_id, [])
     byUser.get(row.user_id).push(row)
   }
@@ -1162,6 +1166,11 @@ async function ensureAdminSchema() {
   `)
 
   await pool.query(`
+    ALTER TABLE categories
+    ADD COLUMN IF NOT EXISTS is_active TINYINT(1) NOT NULL DEFAULT 1
+  `)
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS shipping_providers (
       provider_id INT NOT NULL AUTO_INCREMENT,
       provider_code VARCHAR(50) NOT NULL,
@@ -1606,10 +1615,15 @@ app.get('/api/health', async (_req, res) => {
 app.get('/api/categories', async (_req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT cat_id AS id, cat_name AS name, cat_detail AS detail FROM categories ORDER BY cat_name ASC',
+      'SELECT cat_id AS id, cat_name AS name, cat_detail AS detail, is_active AS isActive FROM categories ORDER BY cat_name ASC',
     )
 
-    res.json(rows)
+    res.json(
+      rows.map((row) => ({
+        ...row,
+        isActive: Boolean(row.isActive),
+      })),
+    )
   } catch (error) {
     res.status(500).json({ message: error.message })
   }
@@ -1641,16 +1655,6 @@ app.post('/api/categories', async (req, res) => {
   }
 
   try {
-    const [countRows] = await pool.query('SELECT COUNT(*) AS total FROM categories')
-    const totalCategories = Number(countRows?.[0]?.total) || 0
-
-    if (totalCategories >= CATEGORY_MAX_COUNT) {
-      res.status(400).json({
-        message: `You can create up to ${CATEGORY_MAX_COUNT} categories only.`,
-      })
-      return
-    }
-
     const [existingRows] = await pool.query(
       'SELECT cat_id AS id FROM categories WHERE cat_name = ? LIMIT 1',
       [name],
@@ -1661,8 +1665,18 @@ app.post('/api/categories', async (req, res) => {
       return
     }
 
+    const [countRows] = await pool.query('SELECT COUNT(*) AS total FROM categories')
+    const totalCategories = Number(countRows?.[0]?.total) || 0
+
+    if (totalCategories >= CATEGORY_MAX_COUNT) {
+      res.status(400).json({
+        message: `You can create up to ${CATEGORY_MAX_COUNT} categories only.`,
+      })
+      return
+    }
+
     const [insertResult] = await pool.query(
-      'INSERT INTO categories (cat_name, cat_detail) VALUES (?, ?)',
+      'INSERT INTO categories (cat_name, cat_detail, is_active) VALUES (?, ?, 1)',
       [name, detail],
     )
 
@@ -1670,6 +1684,46 @@ app.post('/api/categories', async (req, res) => {
       id: insertResult.insertId,
       name,
       detail,
+      isActive: true,
+    })
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
+
+app.patch('/api/categories/:id/status', async (req, res) => {
+  const categoryId = Number(req.params.id)
+  if (!Number.isInteger(categoryId) || categoryId <= 0) {
+    res.status(400).json({ message: 'Valid category id is required.' })
+    return
+  }
+
+  const { isActive } = req.body || {}
+
+  try {
+    const [result] = await pool.query('UPDATE categories SET is_active = ? WHERE cat_id = ?', [
+      toBooleanNumber(isActive),
+      categoryId,
+    ])
+
+    if (result.affectedRows === 0) {
+      res.status(404).json({ message: 'Category not found.' })
+      return
+    }
+
+    const [rows] = await pool.query(
+      'SELECT cat_id AS id, cat_name AS name, cat_detail AS detail, is_active AS isActive FROM categories WHERE cat_id = ? LIMIT 1',
+      [categoryId],
+    )
+
+    if (rows.length === 0) {
+      res.status(404).json({ message: 'Category not found.' })
+      return
+    }
+
+    res.json({
+      ...rows[0],
+      isActive: Boolean(rows[0].isActive),
     })
   } catch (error) {
     res.status(500).json({ message: error.message })
@@ -2149,6 +2203,7 @@ app.get('/api/products/public', async (req, res) => {
       FROM products p
       LEFT JOIN categories c ON c.cat_id = p.cat_id
       WHERE (p.ready_to_ship_enabled = 1 OR p.preorder_enabled = 1)
+        AND (c.is_active = 1 OR c.cat_id IS NULL)
     `
     const params = []
 
@@ -2240,6 +2295,7 @@ app.get('/api/products/ready-to-ship', async (req, res) => {
       FROM products p
       LEFT JOIN categories c ON c.cat_id = p.cat_id
       WHERE p.ready_to_ship_enabled = 1
+        AND (c.is_active = 1 OR c.cat_id IS NULL)
     `
     const params = []
 
@@ -2332,6 +2388,7 @@ app.get('/api/products/preorder', async (req, res) => {
       FROM products p
       LEFT JOIN categories c ON c.cat_id = p.cat_id
       WHERE p.preorder_enabled = 1
+        AND (c.is_active = 1 OR c.cat_id IS NULL)
     `
     const params = []
 
@@ -2418,6 +2475,7 @@ app.get('/api/products/preorder', async (req, res) => {
       WHERE LOWER(r.status) IN ('active', 'open', 'scheduled')
         AND r.start_date <= NOW()
         AND r.end_date >= NOW()
+        AND (c.is_active = 1 OR c.cat_id IS NULL)
     `
     const params = []
 
@@ -5784,10 +5842,24 @@ app.get('/api/admin/order-item-summary', authenticateToken, requireAdmin, async 
          od.Price AS unit_price,
          od.preorder_round_id,
          pr.round_name AS preorder_round_name,
-         SUM(od.qty) AS sold_qty,
+         SUM(
+           CASE
+             WHEN LOWER(COALESCE(od.arrival_status, '')) IN ('missing', 'delayed')
+               THEN COALESCE(od.received_qty, 0)
+             ELSE od.qty
+           END
+         ) AS sold_qty,
          COUNT(od.detail_id) AS line_count,
          COUNT(DISTINCT od.order_id) AS order_count,
-         COALESCE(SUM(od.Price * od.qty), 0) AS total_amount
+         COALESCE(SUM(
+           od.Price * (
+             CASE
+               WHEN LOWER(COALESCE(od.arrival_status, '')) IN ('missing', 'delayed')
+                 THEN COALESCE(od.received_qty, 0)
+               ELSE od.qty
+             END
+           )
+         ), 0) AS total_amount
        FROM order_details od
        INNER JOIN orders o ON o.order_id = od.order_id
        LEFT JOIN products p ON p.prod_id = od.prod_id

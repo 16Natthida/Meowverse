@@ -5,6 +5,7 @@
 
 import express from 'express'
 import { getFlavorPrice } from './productPricing.js'
+import { getBelowMinimumCartIds } from './preorderCartEligibility.js'
 const router = express.Router()
 
 function normalizeItemType(value) {
@@ -219,9 +220,12 @@ router.get('/', async (req, res) => {
       [user_id],
     )
 
+    const belowMinimumIds = await getBelowMinimumCartIds(db, rows.map((row) => row.cart_id))
     res.json(
       rows.map((row) => ({
         ...row,
+        preorder_unavailable_reason: belowMinimumIds.has(Number(row.cart_id))
+          ? 'minimum_not_reached' : null,
         price: getFlavorPrice(
           row.flavorPrices,
           row.flavor,
@@ -487,11 +491,15 @@ router.put('/:cart_id', async (req, res) => {
 // ─────────────────────────────────────────────
 router.delete('/:cart_id', async (req, res) => {
   const { cart_id } = req.params
+  const userId = Number(req.query.user_id)
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ error: 'user_id is required' })
+  }
   try {
     const db = getDB(req)
     const [cartRows] = await db.query(
-      'SELECT cart_id, item_type, preorder_round_id FROM cart WHERE cart_id = ? LIMIT 1',
-      [cart_id],
+      'SELECT cart_id, item_type, preorder_round_id FROM cart WHERE cart_id = ? AND user_id = ? LIMIT 1',
+      [cart_id, userId],
     )
     const cartRow = cartRows[0]
     if (!cartRow) return res.status(404).json({ error: 'Cart item not found' })
@@ -500,10 +508,13 @@ router.delete('/:cart_id', async (req, res) => {
       normalizeItemType(cartRow.item_type) === 'preorder' &&
       !(await isPreorderRoundOpen(db, cartRow.preorder_round_id))
     ) {
-      return res.status(409).json({ error: 'รอบพรีออเดอร์นี้ปิดรับออเดอร์แล้ว' })
+      const belowMinimumIds = await getBelowMinimumCartIds(db, [cart_id])
+      if (!belowMinimumIds.has(Number(cart_id))) {
+        return res.status(409).json({ error: 'รอบพรีออเดอร์นี้ปิดรับออเดอร์แล้ว' })
+      }
     }
 
-    const [result] = await db.query('DELETE FROM cart WHERE cart_id = ?', [cart_id])
+    const [result] = await db.query('DELETE FROM cart WHERE cart_id = ? AND user_id = ?', [cart_id, userId])
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Cart item not found' })
     res.json({ message: 'Deleted', cart_id: Number(cart_id) })
   } catch (err) {

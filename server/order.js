@@ -4,6 +4,7 @@
 import express from 'express'
 import { getShippingFeeSettings } from './shippingFees.js'
 import { getFlavorPrice } from './productPricing.js'
+import { getBelowMinimumCartIds } from './preorderCartEligibility.js'
 
 const router = express.Router()
 
@@ -312,6 +313,12 @@ router.post('/checkout-preview', async (req, res) => {
       return res.status(400).json({ error: 'ต้องส่งรายการสินค้าที่ต้องการ checkout' })
     }
 
+    const belowMinimumIds = await getBelowMinimumCartIds(connection, selectedCartIds)
+    if (belowMinimumIds.size > 0) {
+      await connection.rollback()
+      return res.status(409).json({ error: '??????????????????? ?????????????????????? ?????????????????????????' })
+    }
+
     const placeholders = selectedCartIds.map(() => '?').join(',')
     const [cartItems] = await connection.query(
       `SELECT
@@ -482,6 +489,12 @@ router.post('/confirm-payment', async (req, res) => {
     if (selectedCartIds.length === 0) {
       await connection.rollback()
       return res.status(400).json({ error: 'ต้องส่งรายการสินค้าที่ต้องการ checkout' })
+    }
+
+    const belowMinimumIds = await getBelowMinimumCartIds(connection, selectedCartIds)
+    if (belowMinimumIds.size > 0) {
+      await connection.rollback()
+      return res.status(409).json({ error: '??????????????????? ?????????????????????? ?????????????????????????' })
     }
 
     const placeholders = selectedCartIds.map(() => '?').join(',')

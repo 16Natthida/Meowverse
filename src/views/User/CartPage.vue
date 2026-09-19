@@ -116,6 +116,7 @@ const fetchCart = async () => {
         image: item.image ?? item.imageUrl ?? item.imageUrls?.[0] ?? item.images?.[0] ?? null,
         flavor: item.flavor ?? '',
         preorder_round_status: item.preorder_round_status || null,
+        preorderUnavailableReason: item.preorder_unavailable_reason || null,
         isPreorder: Boolean(item.pre_item_id) || item.item_type === 'preorder',
         stock: Number(item.stock ?? 999),
         preorderRemaining:
@@ -150,7 +151,7 @@ const fetchCart = async () => {
 
 // ── UPDATE QTY ──
 const updateQty = async (item, newQty) => {
-  if (newQty < 1) return
+  if (newQty < 1 || item.preorderUnavailableReason) return
   if (!item.isPreorder && newQty > item.stock) {
     showNotice(`สต็อกมีเพียง ${item.stock} ชิ้น`, 'warn')
     return
@@ -192,7 +193,7 @@ const removeItem = async (item) => {
   }
   try {
     console.debug('[removeItem] Removing cart item', item.cart_id, 'item:', item)
-    const deleteUrl = `${API_BASE_URL}/cart/${item.cart_id}`
+    const deleteUrl = `${API_BASE_URL}/cart/${item.cart_id}?user_id=${resolveUserId(currentUser.value)}`
     console.debug('[removeItem] DELETE URL:', deleteUrl)
 
     const res = await fetch(deleteUrl, {
@@ -231,7 +232,8 @@ const preorderItems = computed(() => {
 
 // ── COMPUTED ──
 const activeItems = computed(() =>
-  activeCartView.value === 'preorder' ? preorderItems.value : readyToShipItems.value,
+  (activeCartView.value === 'preorder' ? preorderItems.value : readyToShipItems.value)
+    .filter((item) => !item.preorderUnavailableReason),
 )
 const activeSubtotal = computed(() =>
   activeItems.value.reduce((sum, item) => sum + item.price * item.qty, 0),
@@ -553,7 +555,7 @@ onMounted(fetchCart)
                 <div class="item-qty">
                   <button
                     class="qty-btn"
-                    :disabled="item.qty <= 1 || updatingId === item.cart_id"
+                    :disabled="!!item.preorderUnavailableReason || item.qty <= 1 || updatingId === item.cart_id"
                     @click="updateQty(item, item.qty - 1)"
                   >
                     <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
@@ -684,7 +686,7 @@ onMounted(fetchCart)
                 <div class="item-qty">
                   <button
                     class="qty-btn"
-                    :disabled="item.qty <= 1 || updatingId === item.cart_id"
+                    :disabled="!!item.preorderUnavailableReason || item.qty <= 1 || updatingId === item.cart_id"
                     @click="updateQty(item, item.qty - 1)"
                   >
                     <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
@@ -718,7 +720,7 @@ onMounted(fetchCart)
                   <button
                     class="qty-btn"
                     :disabled="
-                      (!item.isPreorder && item.qty >= item.stock) || updatingId === item.cart_id
+                      !!item.preorderUnavailableReason || (!item.isPreorder && item.qty >= item.stock) || updatingId === item.cart_id
                     "
                     @click="updateQty(item, item.qty + 1)"
                   >
@@ -844,6 +846,7 @@ onMounted(fetchCart)
 </template>
 
 <style scoped>
+.item-unavailable { color: #9a3412; font-size: 0.85rem; line-height: 1.6; margin-top: 8px; }
 .cart-page {
   --primary: #6f50a0;
   --primary-light: #cda2fb;

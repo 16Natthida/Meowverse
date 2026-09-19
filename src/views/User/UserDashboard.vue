@@ -316,11 +316,14 @@ const fetchCategories = async () => {
     if (!res.ok) throw new Error(`categories API ${res.status}`)
     const data = await res.json()
     const arr = Array.isArray(data) ? data : (data.data ?? data.categories ?? [])
-    const normalizedCategories = arr.map((c) => ({
-      id: c.cat_id ?? c.id ?? c.categoryId,
-      name: c.cat_name ?? c.name ?? c.categoryName ?? '',
-      icon: getCatIcon(c.cat_name ?? c.name ?? ''),
-    }))
+    // ตัดหมวดหมู่ที่แอดมินปิดการแสดงผลออก (isActive === false) เพื่อไม่ให้ลูกค้าเห็น
+    const normalizedCategories = arr
+      .filter((c) => c.isActive !== false)
+      .map((c) => ({
+        id: c.cat_id ?? c.id ?? c.categoryId,
+        name: c.cat_name ?? c.name ?? c.categoryName ?? '',
+        icon: getCatIcon(c.cat_name ?? c.name ?? ''),
+      }))
     // Keep the fixed 1-10 order when the name matches one of the approved
     // categories; anything else (shouldn't happen after the DB migration)
     // is pushed to the end instead of being dropped.

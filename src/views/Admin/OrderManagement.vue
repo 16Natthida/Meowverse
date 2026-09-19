@@ -112,6 +112,12 @@ function syncFilterFromRoute() {
 
 watch(() => route.fullPath, syncFilterFromRoute, { immediate: true })
 
+// ── ให้ตัวกรอง "สรุปยอดขายรายสินค้า" ตามตัวกรองประเภทออเดอร์ทุกครั้งที่เปลี่ยน ──
+// (ไม่ว่าจะสลับด้วยเมนูด้านซ้าย ปุ่มทั้งหมด/พร้อมส่ง/พรีออเดอร์ หรือ path ตรง ๆ)
+watch(typeFilter, (val) => {
+  productFilterType.value = val
+}, { immediate: true })
+
 const salesPageMeta = computed(() => {
   if (route.meta?.orderType === 'ready') {
     return {
@@ -184,9 +190,43 @@ const orderStats = computed(() => ({
   ).length,
 }))
 
-const productSalesTotalQty = computed(() =>
-  productSalesSummary.value.reduce((sum, item) => sum + (Number(item.sold_qty) || 0), 0),
-)
+// ── สถิติของออเดอร์ที่ถูกจำกัดขอบเขตตาม typeFilter (ทั้งหมด/พร้อมส่ง/พรีออเดอร์) ──
+// ใช้กับการ์ดสรุปด้านบนตอนอยู่หน้า "จัดการรายการยอดขาย" เพื่อให้ตัวเลขตรงกับตัวกรองที่เลือก
+const scopedOrders = computed(() => {
+  if (typeFilter.value === 'all') return orders.value
+  return orders.value.filter((order) => normalizeStatus(order.Order_type) === typeFilter.value)
+})
+
+const orderKpiStats = computed(() => {
+  const list = scopedOrders.value
+  return {
+    totalSales: list.reduce(
+      (sum, order) =>
+        sum + Math.max((Number(order.total_amount) || 0) - (Number(order.shipping_fee) || 0), 0),
+      0,
+    ),
+    all: list.length,
+    paid: list.filter((order) => normalizeStatus(order.status) === 'paid').length,
+  }
+})
+
+// ── สถิติของสรุปยอดขายรายสินค้าที่ถูกจำกัดขอบเขตตาม productFilterType ──
+// ใช้กับการ์ดสรุปด้านบนตอนอยู่หน้า "สรุปยอดขายรายสินค้า" ให้ตัวเลขตรงกับตัวกรอง ทั้งหมด/พร้อมส่ง/พรีออเดอร์
+const summaryKpiStats = computed(() => {
+  const type = String(productFilterType.value || 'all').toLowerCase()
+  let rows = aggregatedProductSales.value
+  if (type !== 'all') {
+    rows = rows.filter((r) => {
+      const itemType = String(r.item_type || '').toLowerCase()
+      return type === 'preorder' ? itemType === 'preorder' : itemType !== 'preorder'
+    })
+  }
+  return {
+    totalSales: rows.reduce((sum, r) => sum + (Number(r.total_amount) || 0), 0),
+    productCount: rows.length,
+    totalQty: rows.reduce((sum, r) => sum + (Number(r.sold_qty) || 0), 0),
+  }
+})
 
 // Aggregate product sales by product id and item type (ignore flavor) so preorder and ready-to-ship rows stay separate
 const aggregatedProductSales = computed(() => {
@@ -222,6 +262,17 @@ const aggregatedProductSales = computed(() => {
     existing.details.push(r)
   }
 
+  // Recompute unit_price as a weighted average (total_amount / sold_qty) so it always
+  // stays consistent with the summed qty and total, even when a product was sold at
+  // more than one price (price changes, promos, multiple flavors, etc). Falling back
+  // to the representative price only when qty is 0 avoids a divide-by-zero.
+  for (const item of map.values()) {
+    item.unit_price =
+      item.sold_qty > 0 ? item.total_amount / item.sold_qty : Number(item.unit_price) || 0
+    item.has_mixed_prices = item.details.length > 1 &&
+      new Set(item.details.map((d) => Number(d.unit_price))).size > 1
+  }
+
   return [...map.values()].sort((a, b) => {
     const typeRank = (value) => (String(value || '').toLowerCase() === 'preorder' ? 0 : 1)
     const rankDiff = typeRank(a.item_type) - typeRank(b.item_type)
@@ -254,7 +305,12 @@ const filteredProductSales = computed(() => {
   }
 
   if (type && type !== 'all') {
-    list = list.filter((p) => String(p.item_type || '').toLowerCase() === type)
+    // item_type ของสินค้าพร้อมส่งจะถูกเก็บเป็นค่าว่าง ('') ไม่ใช่ 'ready' หรือ 'ready-to-ship'
+    // ดังนั้นถือว่าอะไรก็ตามที่ไม่ใช่ 'preorder' คือสินค้าพร้อมส่ง
+    list = list.filter((p) => {
+      const itemType = String(p.item_type || '').toLowerCase()
+      return type === 'preorder' ? itemType === 'preorder' : itemType !== 'preorder'
+    })
   }
 
   if (!Number.isNaN(minSold) && minSold > 0) {
@@ -418,10 +474,10 @@ async function fetchOrders() {
   error.value = ''
 
   try {
+    // หมายเหตุ: ดึงออเดอร์ "ทั้งหมด" มาเก็บไว้เสมอ ไม่กรองที่ฝั่งเซิร์ฟเวอร์ด้วย type/status/search
+    // เพราะตัวกรองประเภท (ทั้งหมด/พร้อมส่ง/พรีออเดอร์) ถูกสลับแบบ client-side (เปลี่ยน route โดยไม่โหลดหน้าใหม่)
+    // ถ้ากรองตั้งแต่ตอนขอข้อมูล จะทำให้ orders.value ค้างเป็นชุดเก่าที่ไม่ตรงกับตัวกรองที่เพิ่งสลับไป
     const params = new URLSearchParams()
-    if (searchQuery.value.trim()) params.set('search', searchQuery.value.trim())
-    if (statusFilter.value !== 'all') params.set('status', statusFilter.value)
-    if (typeFilter.value !== 'all') params.set('type', typeFilter.value)
 
     const response = await fetch(`${API_BASE_URL}/admin/orders?${params.toString()}`, {
       headers: authHeaders(),
@@ -544,23 +600,42 @@ onUnmounted(() => {
     </div>
 
     <section class="kpi-grid">
-      <article class="kpi-card">
-        <p class="kpi-label">ยอดขายรวม (ไม่รวมค่าส่ง)</p>
-        <p class="kpi-value">{{ formatMoney(orderStats.totalSales) }}</p>
-      </article>
-      <article class="kpi-card">
-        <p class="kpi-label">รายการทั้งหมด</p>
-        <p class="kpi-value">{{ orderStats.all }}</p>
-      </article>
-      <article class="kpi-card">
-        <p class="kpi-label">ชำระแล้ว</p>
-        <p class="kpi-value">{{ orderStats.paid }}</p>
-      </article>
-      
-      <article class="kpi-card">
-        <p class="kpi-label">พรีออเดอร์</p>
-        <p class="kpi-value">{{ orderStats.preorder }}</p>
-      </article>
+      <template v-if="salesView === 'summary'">
+        <article class="kpi-card">
+          <p class="kpi-label">ยอดขายรวม (ไม่รวมค่าส่ง)</p>
+          <p class="kpi-value">{{ formatMoney(summaryKpiStats.totalSales) }}</p>
+        </article>
+        <article class="kpi-card">
+          <p class="kpi-label">รายการสินค้าทั้งหมด</p>
+          <p class="kpi-value">{{ summaryKpiStats.productCount }}</p>
+        </article>
+        <article class="kpi-card">
+          <p class="kpi-label">จำนวนชิ้นที่ขายได้</p>
+          <p class="kpi-value">{{ summaryKpiStats.totalQty }}</p>
+        </article>
+        <article class="kpi-card">
+          <p class="kpi-label">พรีออเดอร์</p>
+          <p class="kpi-value">{{ orderStats.preorder }}</p>
+        </article>
+      </template>
+      <template v-else>
+        <article class="kpi-card">
+          <p class="kpi-label">ยอดขายรวม (ไม่รวมค่าส่ง)</p>
+          <p class="kpi-value">{{ formatMoney(orderKpiStats.totalSales) }}</p>
+        </article>
+        <article class="kpi-card">
+          <p class="kpi-label">รายการทั้งหมด</p>
+          <p class="kpi-value">{{ orderKpiStats.all }}</p>
+        </article>
+        <article class="kpi-card">
+          <p class="kpi-label">ชำระแล้ว</p>
+          <p class="kpi-value">{{ orderKpiStats.paid }}</p>
+        </article>
+        <article class="kpi-card">
+          <p class="kpi-label">พรีออเดอร์</p>
+          <p class="kpi-value">{{ orderStats.preorder }}</p>
+        </article>
+      </template>
     </section>
 
     <div class="view-filter-row">
@@ -589,10 +664,10 @@ onUnmounted(() => {
       <div class="summary-strip summary-strip--wide">
         <div>
           <span>สินค้าทั้งหมดที่ขายได้</span
-          ><strong>{{ productSalesSummary.length }} รายการ</strong>
+          ><strong>{{ summaryKpiStats.productCount }} รายการ</strong>
         </div>
         <div>
-          <span>จำนวนชิ้นรวม</span><strong>{{ productSalesTotalQty }} ชิ้น</strong>
+          <span>จำนวนชิ้นรวม</span><strong>{{ summaryKpiStats.totalQty }} ชิ้น</strong>
         </div>
         <button class="ghost-btn summary-toggle-btn" type="button" @click="toggleProductFilters">
           {{ showProductFilters ? 'ซ่อนตัวกรอง' : 'แสดงตัวกรอง' }}
@@ -619,9 +694,9 @@ onUnmounted(() => {
             </button>
             <button
               class="filter-btn"
-              :class="{ active: productFilterType === 'ready-to-ship' }"
+              :class="{ active: productFilterType === 'ready' }"
               type="button"
-              @click="productFilterType = 'ready-to-ship'"
+              @click="productFilterType = 'ready'"
             >
               พร้อมส่งสินค้า
             </button>
@@ -711,7 +786,16 @@ onUnmounted(() => {
                   {{ item.item_type === 'preorder' ? 'พรีออเดอร์' : 'พร้อมส่ง' }}
                 </span>
               </td>
-              <td>{{ formatMoney(item.unit_price) }}</td>
+              <td>
+                {{ formatMoney(item.unit_price) }}
+                <span
+                  v-if="item.has_mixed_prices"
+                  class="price-mixed-hint"
+                  title="สินค้านี้เคยขายมากกว่า 1 ราคา ตัวเลขนี้คือราคาเฉลี่ยต่อชิ้น"
+                >
+                  (เฉลี่ย)
+                </span>
+              </td>
               <td>
                 <strong>{{ Number(item.sold_qty || 0).toLocaleString('th-TH') }}</strong>
               </td>
@@ -1037,6 +1121,14 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.price-mixed-hint {
+  display: inline-block;
+  margin-left: 0.3rem;
+  font-size: 0.72rem;
+  color: #8a7ba8;
+  cursor: help;
+}
+
 .admin-order-page {
   min-height: 100vh;
   padding: 2rem;
