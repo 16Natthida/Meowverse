@@ -16,6 +16,20 @@ const savingOrderId = ref(null)
 const detailOrder = ref(null)
 const previewImage = ref(null)
 
+// ── ยอดรวมของออเดอร์ ให้ตรงกับหน้า "จัดการยอดขาย" โดยแยกตามประเภทออเดอร์ ──
+// พรีออเดอร์: total_amount + ค่าจัดส่ง + ค่านำเข้า + ค่าส่งจากจีน
+// พร้อมส่ง: total_amount เฉย ๆ (รวมค่าส่งไว้ตั้งแต่ตอนสร้างออเดอร์แล้ว)
+function getOrderTotal(order) {
+  const total = Number(order?.total_amount || 0)
+  if (String(order?.Order_type || '').toLowerCase() !== 'preorder') return total
+  return (
+    total +
+    Number(order?.shipping_fee || 0) +
+    Number(order?.import_fee_total || 0) +
+    Number(order?.china_shipping_total_thb || 0)
+  )
+}
+
 function openOrderDetail(order) {
   detailOrder.value = order
 }
@@ -320,7 +334,7 @@ onUnmounted(() => {
               </td>
 
               <td class="price-text">
-                ฿{{ Number(order.total_amount).toLocaleString() }}
+                ฿{{ getOrderTotal(order).toLocaleString() }}
               </td>
 
               <td>
@@ -389,7 +403,7 @@ onUnmounted(() => {
 
         <div class="detail-modal__total">
           <span>ยอดรวม</span>
-          <strong>฿{{ Number(detailOrder.total_amount).toLocaleString() }}</strong>
+          <strong>฿{{ getOrderTotal(detailOrder).toLocaleString() }}</strong>
         </div>
       </div>
     </div>

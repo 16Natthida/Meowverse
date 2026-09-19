@@ -171,7 +171,8 @@ router.get('/shipping-orders', async (req, res) => {
   try {
     const sql = `
       SELECT 
-        o.order_id, o.Order_type, o.Order_date, o.total_amount, o.status,
+        o.order_id, o.Order_type, o.Order_date, o.total_amount, o.shipping_fee,
+        o.import_fee_total, o.china_shipping_total_thb, o.status,
         s.name, s.phone, s.notes, s.address, s.Shipping_Carrier,
         s.provider_id, sp.provider_code, sp.provider_name, s.tracking_number,
         s.tracking_url, s.shipping_status, s.shipped_at,
@@ -221,6 +222,9 @@ router.get('/shipping-orders', async (req, res) => {
           Order_type: row.Order_type,
           Order_date: row.Order_date,
           total_amount: row.total_amount,
+          shipping_fee: row.shipping_fee,
+          import_fee_total: row.import_fee_total,
+          china_shipping_total_thb: row.china_shipping_total_thb,
           status: row.status,
           name: row.name,
           phone: row.phone,
