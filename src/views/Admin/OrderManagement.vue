@@ -98,6 +98,20 @@ function getOrderTypeLabel(orderType) {
   return String(orderType || '').toLowerCase() === 'preorder' ? 'สินค้าพรีออเดอร์' : 'สินค้าพร้อมส่ง'
 }
 
+// ── ยอดเงินรวมของแถวในตาราง "จัดการรายการยอดขาย" ──
+// หน้าพรีออเดอร์: total_amount + ค่าจัดส่ง + ค่านำเข้า + ค่าส่งจากจีน (รวมทุกค่าใช้จ่ายจริง)
+// หน้าอื่น: total_amount เฉย ๆ เหมือนเดิม ไม่กระทบ
+function getOrderRowTotal(order) {
+  const total = Number(order.total_amount || 0)
+  if (!isPreorderSalesPage.value) return total
+  return (
+    total +
+    Number(order.shipping_fee || 0) +
+    Number(order.import_fee_total || 0) +
+    Number(order.china_shipping_total_thb || 0)
+  )
+}
+
 // ── ผูก path กับตัวกรองประเภทออเดอร์ ──
 // /admin/sales -> ทั้งหมด, /admin/sales/ready-to-ship -> พร้อมส่ง, /admin/sales/preorder -> พรีออเดอร์
 function syncFilterFromRoute() {
@@ -145,6 +159,10 @@ function goToSalesView(type) {
   else if (type === 'preorder') router.push('/admin/sales/preorder')
   else router.push('/admin/sales')
 }
+
+// ── ใช้จำกัดขอบเขตการแสดงคอลัมน์ "ค่าส่ง" ในตาราง "จัดการรายการยอดขาย"
+// ให้เห็นเฉพาะหน้า /admin/sales/preorder เท่านั้น ไม่กระทบหน้า /admin/sales และ /admin/sales/ready-to-ship
+const isPreorderSalesPage = computed(() => route.meta?.orderType === 'preorder')
 
 const filteredOrders = computed(() => {
   return orders.value.filter((order) => {
@@ -199,12 +217,19 @@ const scopedOrders = computed(() => {
 
 const orderKpiStats = computed(() => {
   const list = scopedOrders.value
+  // ให้ยอดขายรวม (ไม่รวมค่าส่ง) ใช้แหล่งข้อมูลเดียวกับหน้า "สรุปยอดขายรายสินค้า"
+  // (รวมจาก order_details.Price * qty ตรง ๆ) เพื่อให้ตัวเลขตรงกันเสมอ แทนที่จะคำนวณจาก
+  // orders.total_amount - orders.shipping_fee ซึ่งรวมค่าส่งจากจีนของพรีออเดอร์ปนอยู่
+  const type = String(typeFilter.value || 'all').toLowerCase()
+  let productRows = aggregatedProductSales.value
+  if (type !== 'all') {
+    productRows = productRows.filter((r) => {
+      const itemType = String(r.item_type || '').toLowerCase()
+      return type === 'preorder' ? itemType === 'preorder' : itemType !== 'preorder'
+    })
+  }
   return {
-    totalSales: list.reduce(
-      (sum, order) =>
-        sum + Math.max((Number(order.total_amount) || 0) - (Number(order.shipping_fee) || 0), 0),
-      0,
-    ),
+    totalSales: productRows.reduce((sum, r) => sum + (Number(r.total_amount) || 0), 0),
     all: list.length,
     paid: list.filter((order) => normalizeStatus(order.status) === 'paid').length,
   }
@@ -745,7 +770,6 @@ onUnmounted(() => {
               <th class="image-col">รูปภาพ</th>
               <th>สินค้า</th>
               <th>ประเภท</th>
-              <th>ราคาต่อชิ้น</th>
               <th>ขายได้</th>
               <th>รวมมูลค่า</th>
             </tr>
@@ -784,16 +808,6 @@ onUnmounted(() => {
                   ]"
                 >
                   {{ item.item_type === 'preorder' ? 'พรีออเดอร์' : 'พร้อมส่ง' }}
-                </span>
-              </td>
-              <td>
-                {{ formatMoney(item.unit_price) }}
-                <span
-                  v-if="item.has_mixed_prices"
-                  class="price-mixed-hint"
-                  title="สินค้านี้เคยขายมากกว่า 1 ราคา ตัวเลขนี้คือราคาเฉลี่ยต่อชิ้น"
-                >
-                  (เฉลี่ย)
                 </span>
               </td>
               <td>
@@ -879,7 +893,7 @@ onUnmounted(() => {
               <th>ลูกค้า</th>
               <th>ประเภท</th>
               <th>รอบพรีออเดอร์</th>
-              <th>ยอดเงิน</th>
+              <th>ยอดเงิน{{ isPreorderSalesPage ? ' (รวมค่าส่ง)' : '' }}</th>
               <th>สถานะ</th>
               <th>รายการ</th>
               <th>วันที่</th>
@@ -912,7 +926,7 @@ onUnmounted(() => {
                 </span>
                 <span v-else class="round-badge round-badge--empty">-</span>
               </td>
-              <td>{{ formatMoney(order.total_amount) }}</td>
+              <td>{{ formatMoney(getOrderRowTotal(order)) }}</td>
               <td>
                 <span
                   class="status-pill"
@@ -984,6 +998,14 @@ onUnmounted(() => {
               <div>
                 <span>ค่าจัดส่ง</span><strong>{{ formatMoney(selectedOrder.shipping_fee || 0) }}</strong>
               </div>
+              <template v-if="selectedOrder.Order_type === 'Preorder'">
+                <div>
+                  <span>ค่านำเข้า</span><strong>{{ formatMoney(selectedOrder.import_fee_total || 0) }}</strong>
+                </div>
+                <div>
+                  <span>ค่าส่งจากจีน</span><strong>{{ formatMoney(selectedOrder.china_shipping_total_thb || 0) }}</strong>
+                </div>
+              </template>
             </div>
 
             <div class="items-list">
@@ -2135,12 +2157,12 @@ onUnmounted(() => {
   .orders-table td:nth-child(6)::before { content: 'สถานะ'; }
   .orders-table td:nth-child(7)::before { content: 'รายการ'; }
   .orders-table td:nth-child(8)::before { content: 'วันที่'; }
+
   .summary-table td:nth-child(1)::before { content: 'สินค้า'; }
   .summary-table td:nth-child(2)::before { content: 'ประเภท'; }
-  .summary-table td:nth-child(3)::before { content: 'ราคา/ชิ้น'; }
-  .summary-table td:nth-child(4)::before { content: 'จำนวนขาย'; }
-  .summary-table td:nth-child(5)::before { content: 'รวม'; }
-  .summary-table td:nth-child(6)::before { content: 'มูลค่ารวม'; }
+  .summary-table td:nth-child(3)::before { content: 'จำนวนขาย'; }
+  .summary-table td:nth-child(4)::before { content: 'รวม'; }
+  .summary-table td:nth-child(5)::before { content: 'มูลค่ารวม'; }
 
   .orders-table td:last-child {
     display: block;

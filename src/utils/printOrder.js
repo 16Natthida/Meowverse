@@ -68,7 +68,15 @@ function renderPrintDocument(printWindow, order, logoUrl = '') {
   const subtotal = items.reduce((sum, item) => sum + item.total, 0)
   const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0)
   const shippingFee = numberValue(order?.shipping_fee)
-  const total = order?.total_amount != null ? numberValue(order.total_amount) : subtotal + shippingFee
+  const importFeeTotal = numberValue(order?.import_fee_total)
+  const chinaShippingTotalThb = numberValue(order?.china_shipping_total_thb)
+  const isPreorder = String(order?.Order_type || '').toLowerCase() === 'preorder'
+  const baseAmount = order?.total_amount != null ? numberValue(order.total_amount) : subtotal
+  // พรีออเดอร์: รวมทุกค่าใช้จ่ายจริงเข้าด้วยกัน (เหมือนตาราง "จัดการรายการยอดขาย")
+  // พร้อมส่ง: total_amount รวมค่าจัดส่งไว้แล้วตั้งแต่ตอนสร้างออเดอร์
+  const total = isPreorder
+    ? baseAmount + shippingFee + importFeeTotal + chinaShippingTotalThb
+    : baseAmount
   const shipping = order?.saved_shipping || order?.shipping || {}
   const customerName =
     order?.full_name ||
@@ -222,6 +230,12 @@ function renderPrintDocument(printWindow, order, logoUrl = '') {
             <div class="totals">
               <div class="total-row"><span>ยอดรวมสินค้า</span><strong>${formatMoney(subtotal)}</strong></div>
               <div class="total-row"><span>ค่าจัดส่ง</span><strong>${formatMoney(shippingFee)}</strong></div>
+              ${
+                isPreorder
+                  ? `<div class="total-row"><span>ค่านำเข้า</span><strong>${formatMoney(importFeeTotal)}</strong></div>
+              <div class="total-row"><span>ค่าส่งจากจีน</span><strong>${formatMoney(chinaShippingTotalThb)}</strong></div>`
+                  : ''
+              }
               <div class="total-row"><span>ยอดรวมสุทธิ</span><strong>${formatMoney(total)}</strong></div>
             </div>
           </section>
