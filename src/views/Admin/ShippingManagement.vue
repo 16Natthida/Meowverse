@@ -133,6 +133,11 @@ async function fetchShippingOrders() {
   }
 }
 
+// ออเดอร์ที่นำจ่ายแล้ว (Delivered) ห้ามแก้ไขข้อมูลการจัดส่งอีก
+function isDelivered(order) {
+  return order?.status === 'Delivered'
+}
+
 function getDraft(order) {
   if (!drafts.value[order.order_id]) {
     drafts.value[order.order_id] = {
@@ -144,6 +149,8 @@ function getDraft(order) {
 }
 
 async function saveShipment(order) {
+  if (isDelivered(order)) return
+
   const draft = getDraft(order)
   if (!draft.provider_id || !draft.tracking_number.trim()) {
     alert('กรุณาเลือกบริษัทขนส่งและกรอกเลขพัสดุ')
@@ -323,7 +330,7 @@ onUnmounted(() => {
 
               <td>
                 <div class="shipment-editor">
-                  <select v-model="getDraft(order).provider_id">
+                  <select v-model="getDraft(order).provider_id" :disabled="isDelivered(order)">
                     <option value="">-- เลือกบริษัทขนส่ง --</option>
                     <option
                       v-for="provider in activeProviders"
@@ -336,6 +343,7 @@ onUnmounted(() => {
                   <input
                     v-model="getDraft(order).tracking_number"
                     placeholder="เลขพัสดุ"
+                    :disabled="isDelivered(order)"
                   />
                 </div>
               </td>
@@ -347,7 +355,8 @@ onUnmounted(() => {
               <td>
                 <button
                   class="btn-action btn-action--ready"
-                  :disabled="savingOrderId === order.order_id"
+                  :disabled="isDelivered(order) || savingOrderId === order.order_id"
+                  :title="isDelivered(order) ? 'ออเดอร์นี้นำจ่ายแล้ว ไม่สามารถแก้ไขได้' : ''"
                   @click="saveShipment(order)"
                 >
                   {{ savingOrderId === order.order_id ? 'กำลังบันทึก...' : 'บันทึกและจัดส่ง' }}
@@ -587,6 +596,13 @@ td { padding: 1rem; border-bottom: 1px solid #f3e8ff; font-size: 0.9rem; vertica
 .btn-action--ready:hover {
   background: #10b981;
   color: white;
+}
+.btn-action:disabled,
+.btn-action:disabled:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+  color: #9ca3af;
+  cursor: not-allowed;
 }
 
 .btn-print-order {
@@ -893,6 +909,12 @@ td { padding: 1rem; border-bottom: 1px solid #f3e8ff; font-size: 0.9rem; vertica
   padding: 0.55rem 0.65rem;
   background: #fff;
   color: var(--text-main);
+}
+.shipment-editor input:disabled,
+.shipment-editor select:disabled {
+  background: #f3f4f6;
+  color: #9ca3af;
+  cursor: not-allowed;
 }
 .shipment-editor {
   display: grid;
