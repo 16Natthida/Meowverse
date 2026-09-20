@@ -16,6 +16,7 @@ const searchOpen = ref(false)
 const logoImage = ref('')
 const cartCount = ref(0)
 const orderNotifDot = ref('')
+const preorderNotifDot = ref(false)
 const currentUser = computed(() => getUser() || {})
 
 const shopLinks = [
@@ -110,6 +111,27 @@ async function loadOrderNotifDot() {
   }
 }
 
+async function loadPreorderNotifDot() {
+  const user = currentUser.value
+  const userId = user?.id ?? user?.user_id
+
+  if (!userId) {
+    preorderNotifDot.value = false
+    return
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/preorder-notifications?user_id=${userId}`)
+    if (!response.ok) return
+
+    const data = await response.json()
+    const notifications = Array.isArray(data) ? data : (data.notifications ?? [])
+    preorderNotifDot.value = notifications.length > 0
+  } catch {
+    // Keep the previous state if the notifications API is temporarily unavailable.
+  }
+}
+
 function toggleSidebar() {
   sidebarOpen.value = !sidebarOpen.value
 }
@@ -154,17 +176,20 @@ watch(
     closeSidebar()
     loadCartCount()
     loadOrderNotifDot()
+    loadPreorderNotifDot()
   },
 )
 
 function handleCartUpdated() {
   loadCartCount()
+  loadPreorderNotifDot()
 }
 
 onMounted(() => {
   loadLogo()
   loadCartCount()
   loadOrderNotifDot()
+  loadPreorderNotifDot()
   window.addEventListener('meowverse:cart-updated', handleCartUpdated)
 })
 
@@ -231,6 +256,10 @@ onBeforeUnmount(() => {
               <svg v-else viewBox="0 0 24 24"><path d="M5 4h10l4 4v12H5z"/><path d="M15 4v5h4M8 13h8M8 17h6"/></svg>
             </span>
             <span class="user-shell__label">{{ item.label }}</span>
+            <span
+              v-if="item.path === '/cart' && preorderNotifDot"
+              class="user-shell__notif-dot user-shell__notif-dot--red"
+            ></span>
           </RouterLink>
         </nav>
 

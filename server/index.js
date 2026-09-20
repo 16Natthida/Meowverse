@@ -273,6 +273,12 @@ async function createPreorderOrdersForClosedRound(connection, roundId) {
       ),
     }))
 
+  const [roundRows] = await connection.query(
+    'SELECT round_name AS name FROM preorder_rounds WHERE round_id = ? LIMIT 1',
+    [roundId],
+  )
+  const roundName = roundRows[0]?.name || `รอบพรีออเดอร์ #${roundId}`
+
   const eligibleProductIds = new Set(
     minimumRows
       .filter((row) => Number(row.quantity_reserved) >= Number(row.minimum_order_qty))
@@ -310,6 +316,44 @@ async function createPreorderOrdersForClosedRound(connection, roundId) {
   )
 
   const autoOrderSummary = { created: 0, skipped: 0, errors: [], minimumNotReached }
+
+  const failedProductIds = new Set(minimumNotReached.map((row) => Number(row.prod_id)))
+  const failedCartRows = cartRows.filter((row) => failedProductIds.has(Number(row.prod_id)))
+
+  if (failedCartRows.length > 0) {
+    const notifiedUsers = new Set()
+    for (const row of failedCartRows) {
+      const key = `${row.user_id}:${row.prod_id}`
+      if (notifiedUsers.has(key)) continue
+      notifiedUsers.add(key)
+
+      const failedProduct = minimumNotReached.find(
+        (item) => Number(item.prod_id) === Number(row.prod_id),
+      )
+      if (!failedProduct) continue
+
+      await connection.query(
+        `INSERT IGNORE INTO preorder_notifications
+          (user_id, round_id, prod_id, notification_type, title, message, expires_at)
+         VALUES (?, ?, ?, 'minimum_not_reached', ?, ?, DATE_ADD(NOW(), INTERVAL 1 DAY))`,
+        [
+          row.user_id,
+          roundId,
+          row.prod_id,
+          'สินค้าไม่ถึงขั้นต่ำ ถูกลบออกจากตะกร้าแล้ว',
+          `สินค้า ${failedProduct.name || 'รายการนี้'} ใน${roundName}มียอดรวม ${failedProduct.quantity_reserved}/${failedProduct.minimum_order_qty} ชิ้น ไม่ถึงขั้นต่ำ จึงถูกลบออกจากตะกร้าแล้ว`,
+        ],
+      )
+    }
+
+    await connection.query(
+      `DELETE FROM cart
+       WHERE preorder_round_id = ?
+         AND item_type = 'preorder'
+         AND prod_id IN (?)`,
+      [roundId, [...failedProductIds]],
+    )
+  }
 
   const eligibleCartRows = cartRows.filter((row) => eligibleProductIds.has(Number(row.prod_id)))
 
@@ -431,11 +475,70 @@ function isImportFeeOnlyRoundName(name) {
   return /\((ตกหล่น|รอบตกหล่น)\)\s*$/i.test(String(name || '').trim())
 }
 
+async function createPreorderMinimumReminderNotifications(connection, now = new Date()) {
+  const [rows] = await connection.query(
+    `SELECT
+       c.user_id,
+       r.round_id,
+       r.round_name,
+       r.end_date,
+       prp.prod_id,
+       p.prod_name,
+       COALESCE(prp.minimum_order_qty, 0) AS minimum_order_qty,
+       COALESCE((
+         SELECT SUM(reserved.qty)
+         FROM cart reserved
+         WHERE reserved.preorder_round_id = r.round_id
+           AND reserved.prod_id = prp.prod_id
+           AND reserved.item_type = 'preorder'
+       ), 0) AS quantity_reserved
+     FROM preorder_rounds r
+     JOIN preorder_round_products prp ON prp.round_id = r.round_id
+     JOIN products p ON p.prod_id = prp.prod_id
+     JOIN cart c
+       ON c.preorder_round_id = r.round_id
+      AND c.prod_id = prp.prod_id
+      AND c.item_type = 'preorder'
+     WHERE LOWER(r.status) IN ('active', 'scheduled')
+       AND r.start_date <= ?
+       AND r.end_date > ?
+       AND r.end_date <= DATE_ADD(?, INTERVAL 1 DAY)
+     GROUP BY
+       c.user_id,
+       r.round_id,
+       r.round_name,
+       r.end_date,
+       prp.prod_id,
+       p.prod_name,
+       prp.minimum_order_qty
+     HAVING COALESCE(quantity_reserved, 0) < COALESCE(minimum_order_qty, 0)`,
+    [now, now, now],
+  )
+
+  for (const row of rows) {
+    await connection.query(
+      `INSERT IGNORE INTO preorder_notifications
+        (user_id, round_id, prod_id, notification_type, title, message, expires_at)
+       VALUES (?, ?, ?, 'minimum_reminder', ?, ?, ?)`,
+      [
+        row.user_id,
+        row.round_id,
+        row.prod_id,
+        'พรีออเดอร์ใกล้ปิดรอบ',
+        `สินค้า ${row.prod_name || 'รายการนี้'} มียอดรวม ${Number(row.quantity_reserved) || 0}/${Number(row.minimum_order_qty) || 0} ชิ้น ยังขาดอีก ${Math.max((Number(row.minimum_order_qty) || 0) - (Number(row.quantity_reserved) || 0), 0)} ชิ้น ก่อนปิดรอบ`,
+        row.end_date,
+      ],
+    )
+  }
+}
+
 async function autoSyncPreorderRoundStatuses() {
   const connection = await pool.getConnection()
 
   try {
     await connection.beginTransaction()
+
+    await createPreorderMinimumReminderNotifications(connection)
 
     const [roundRows] = await connection.query(
       `SELECT round_id, status, start_date, end_date
@@ -1320,6 +1423,24 @@ async function ensureAdminSchema() {
 
         FOREIGN KEY (prod_id) REFERENCES products (prod_id)
         ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS preorder_notifications (
+      notification_id BIGINT NOT NULL AUTO_INCREMENT,
+      user_id INT NOT NULL,
+      round_id INT NOT NULL,
+      prod_id INT NOT NULL,
+      notification_type VARCHAR(40) NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      message TEXT NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      expires_at DATETIME NOT NULL,
+      PRIMARY KEY (notification_id),
+      UNIQUE KEY uq_preorder_notification (user_id, round_id, prod_id, notification_type),
+      KEY idx_preorder_notifications_user_expiry (user_id, expires_at),
+      KEY idx_preorder_notifications_round_product (round_id, prod_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
   `)
 
@@ -2765,6 +2886,35 @@ app.get('/api/preorder-rounds/active', async (_req, res) => {
     `)
 
     res.json(rounds.filter((round) => !isImportFeeOnlyRoundName(round.round_name)))
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
+
+// User API: Active preorder notifications for the signed-in user's cart flow.
+app.get('/api/preorder-notifications', async (req, res) => {
+  const userId = Number(req.query.user_id)
+  if (!Number.isInteger(userId) || userId <= 0) {
+    res.status(400).json({ message: 'user_id is required' })
+    return
+  }
+
+  try {
+    const [rows] = await pool.query(
+      `SELECT
+         notification_id AS id,
+         notification_type AS type,
+         title,
+         message,
+         created_at AS createdAt,
+         expires_at AS expiresAt
+       FROM preorder_notifications
+       WHERE user_id = ?
+         AND expires_at > NOW()
+       ORDER BY created_at DESC, notification_id DESC`,
+      [userId],
+    )
+    res.json({ notifications: rows })
   } catch (error) {
     res.status(500).json({ message: error.message })
   }

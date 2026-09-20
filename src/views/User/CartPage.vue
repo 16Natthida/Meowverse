@@ -18,6 +18,7 @@ const updatingId = ref(null)
 const deletingId = ref(null)
 const activeCartView = ref('ready')
 const isCheckingOut = ref(false)
+const preorderNotifications = ref([])
 
 // Cache รูปภาพรายสินค้า: { [prod_id]: { default: url, [flavor]: url } }
 const productImageMap = ref({})
@@ -76,6 +77,22 @@ function resolveUserId(user) {
   return user?.id ?? user?.user_id ?? null
 }
 
+async function fetchPreorderNotifications(userId) {
+  try {
+    const response = await fetch(`${API_BASE_URL}/preorder-notifications?user_id=${userId}`)
+    if (!response.ok) return
+
+    const data = await response.json()
+    preorderNotifications.value = Array.isArray(data)
+      ? data
+      : Array.isArray(data.notifications)
+        ? data.notifications
+        : []
+  } catch {
+    // Notifications should never block the cart from loading.
+  }
+}
+
 // ── FETCH CART ──
 const fetchCart = async () => {
   const user = currentUser.value
@@ -129,6 +146,8 @@ const fetchCart = async () => {
       }))
 
     // ดึงรูปภาพตาม prod_id ทั้งหมดในตะกร้า
+    await fetchPreorderNotifications(userId)
+
     const prodIds = cartItems.value.map((it) => it.prod_id).filter(Boolean)
     if (prodIds.length > 0) await fetchProductImages(prodIds)
 
@@ -259,6 +278,16 @@ function showNotice(msg, type = 'success') {
   noticeTimer = setTimeout(() => {
     notice.value = { msg: '', type: '' }
   }, 3500)
+}
+
+function formatNotificationDate(value) {
+  if (!value) return ''
+  return new Date(value).toLocaleString('th-TH', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 function goBack() {
@@ -470,6 +499,26 @@ onMounted(fetchCart)
 
     <!-- ── CONTENT ── -->
     <div class="content">
+      <section
+        v-if="!loading && preorderNotifications.length > 0"
+        class="preorder-notification-list"
+        aria-live="polite"
+      >
+        <div
+          v-for="notification in preorderNotifications"
+          :key="notification.id"
+          class="preorder-notification"
+          :class="{ 'preorder-notification--removed': notification.type === 'minimum_not_reached' }"
+        >
+          <div class="preorder-notification__icon" aria-hidden="true">!</div>
+          <div>
+            <strong>{{ notification.title }}</strong>
+            <p>{{ notification.message }}</p>
+            <small>แจ้งเมื่อ {{ formatNotificationDate(notification.createdAt) }} · แสดงไว้ 1 วัน</small>
+          </div>
+        </div>
+      </section>
+
       <!-- Loading -->
       <div v-if="loading" class="state-wrap">
         <svg class="spin state-icon" viewBox="0 0 24 24" fill="none">
@@ -883,6 +932,15 @@ onMounted(fetchCart)
 .minimum-alert__title { font-weight: 900; color: #8b5e12; }
 .minimum-alert__body { margin-top: 0.35rem; font-size: 0.86rem; line-height: 1.55; }
 .minimum-alert__list { margin: 0.45rem 0 0; padding-left: 1.2rem; font-size: 0.82rem; line-height: 1.65; }
+.preorder-notification-list { display: grid; gap: 0.7rem; margin: 0 auto 1rem; width: min(1180px, calc(100% - 2rem)); }
+.preorder-notification { display: flex; gap: 0.75rem; padding: 0.9rem 1rem; border: 1px solid #f0c36d; border-radius: 14px; background: #fffaf0; color: #7a5311; box-shadow: 0 6px 18px rgba(174, 119, 28, 0.08); }
+.preorder-notification--removed { border-color: #efb1bd; background: #fff3f5; color: #8e3547; }
+.preorder-notification__icon { display: grid; place-items: center; flex: 0 0 1.5rem; width: 1.5rem; height: 1.5rem; border-radius: 50%; background: #e2a93b; color: #fff; font-weight: 900; }
+.preorder-notification--removed .preorder-notification__icon { background: #d86679; }
+.preorder-notification strong { display: block; font-size: 0.92rem; }
+.preorder-notification p { margin: 0.2rem 0; font-size: 0.84rem; line-height: 1.55; }
+.preorder-notification small { color: #9b7d43; font-size: 0.72rem; }
+.preorder-notification--removed small { color: #a86572; }
 .cart-page {
   --primary: #6f50a0;
   --primary-light: #cda2fb;
