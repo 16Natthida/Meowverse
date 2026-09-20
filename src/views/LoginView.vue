@@ -10,6 +10,7 @@ const router = useRouter()
 const { login } = useAuth()
 const memberId = ref('')
 const password = ref('')
+const showPassword = ref(false)
 const remember = ref(true)
 const error = ref('')
 const logoImage = ref('')
@@ -130,8 +131,55 @@ async function onSubmit() {
 
           <div class="field">
             <label>Password</label>
-            <div class="input-wrapper">
-              <input v-model="password" type="password" placeholder="รหัสผ่าน" />
+            <div class="input-wrapper has-toggle">
+              <input
+                v-model="password"
+                :type="showPassword ? 'text' : 'password'"
+                placeholder="รหัสผ่าน"
+                autocomplete="current-password"
+              />
+              <button
+                type="button"
+                class="toggle-password"
+                :aria-label="showPassword ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน'"
+                :aria-pressed="showPassword"
+                @click="showPassword = !showPassword"
+              >
+                <!-- ตาเปิด: แสดงตอนรหัสผ่านถูกซ่อนอยู่ (กดเพื่อดู) -->
+                <svg
+                  v-if="!showPassword"
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  width="20"
+                  height="20"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+                <!-- ตาขีดฆ่า: แสดงตอนรหัสผ่านถูกเปิดอยู่ (กดเพื่อซ่อน) -->
+                <svg
+                  v-else
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  width="20"
+                  height="20"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path
+                    d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.5 18.5 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"
+                  />
+                  <line x1="1" y1="1" x2="23" y2="23" />
+                </svg>
+              </button>
             </div>
           </div>
 
@@ -297,6 +345,41 @@ async function onSubmit() {
 
 .input-wrapper input::placeholder {
   color: #c0b2d6;
+}
+
+.input-wrapper.has-toggle input {
+  padding-right: 2.9rem;
+}
+
+.toggle-password {
+  position: absolute;
+  top: 50%;
+  right: 0.55rem;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: #9983b2;
+  cursor: pointer;
+  transition:
+    color 0.2s ease,
+    background 0.2s ease;
+}
+
+.toggle-password:hover {
+  color: #8554bf;
+  background: rgba(190, 164, 224, 0.2);
+}
+
+.toggle-password:focus-visible {
+  outline: 2px solid #bf97ee;
+  outline-offset: 1px;
 }
 
 .form-footer {
