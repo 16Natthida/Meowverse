@@ -31,6 +31,9 @@ const statusFilter = ref('all')
 const selectedOrder = ref(null)
 const selectedOrderLoading = ref(false)
 const selectedOrderError = ref('')
+const chinaShippingInput = ref('')
+const chinaShippingSaving = ref(false)
+const chinaShippingMessage = ref('')
 const previewImage = ref(null)
 
 function openImagePreview(url, title, subtitle) {
@@ -99,7 +102,7 @@ function getOrderTypeLabel(orderType) {
 }
 
 // ── ยอดเงินรวมของแถวในตาราง "จัดการรายการยอดขาย" ──
-// หน้าพรีออเดอร์: total_amount + ค่าจัดส่ง + ค่านำเข้า + ค่าส่งจากจีน (รวมทุกค่าใช้จ่ายจริง)
+// หน้าพรีออเดอร์: total_amount (รวมค่าส่งจีนแล้ว) + ค่าจัดส่ง + ค่านำเข้า
 // หน้าอื่น: total_amount เฉย ๆ เหมือนเดิม ไม่กระทบ
 function getOrderRowTotal(order) {
   const total = Number(order.total_amount || 0)
@@ -107,8 +110,7 @@ function getOrderRowTotal(order) {
   return (
     total +
     Number(order.shipping_fee || 0) +
-    Number(order.import_fee_total || 0) +
-    Number(order.china_shipping_total_thb || 0)
+    Number(order.import_fee_total || 0)
   )
 }
 
@@ -161,7 +163,7 @@ function goToSalesView(type) {
 }
 
 // ── ยอดรวมของออเดอร์ในหน้าต่างรายละเอียด (modal) ให้ตรงกับหน้า "รายการจัดส่ง" ──
-// พรีออเดอร์: total_amount (ค่าสินค้า) + ค่าจัดส่ง + ค่านำเข้า + ค่าส่งจากจีน
+// พรีออเดอร์: total_amount (รวมค่าสินค้าและค่าส่งจีน) + ค่าจัดส่ง + ค่านำเข้า
 // พร้อมส่ง: total_amount รวมค่าจัดส่งไว้แล้วตั้งแต่ตอนสร้างออเดอร์ จึงใช้ตรง ๆ ได้เลย
 function getOrderDetailTotal(order) {
   const total = Number(order?.total_amount || 0)
@@ -169,8 +171,7 @@ function getOrderDetailTotal(order) {
   return (
     total +
     Number(order?.shipping_fee || 0) +
-    Number(order?.import_fee_total || 0) +
-    Number(order?.china_shipping_total_thb || 0)
+    Number(order?.import_fee_total || 0)
   )
 }
 
@@ -566,6 +567,8 @@ async function openOrder(order) {
       full_name: detail.full_name || orderSummary?.full_name || '',
       username: detail.username || orderSummary?.username || '',
     }
+    chinaShippingInput.value = String(selectedOrder.value.china_shipping_total_thb || 0)
+    chinaShippingMessage.value = ''
   } catch (err) {
     selectedOrderError.value = translateError(err)
   } finally {
@@ -576,6 +579,55 @@ async function openOrder(order) {
 function closeOrder() {
   selectedOrder.value = null
   selectedOrderError.value = ''
+  chinaShippingInput.value = ''
+  chinaShippingMessage.value = ''
+}
+
+async function saveChinaShipping() {
+  if (!selectedOrder.value || String(selectedOrder.value.Order_type || '').toLowerCase() !== 'preorder') return
+
+  const amount = Number(chinaShippingInput.value)
+  if (!Number.isFinite(amount) || amount < 0) {
+    chinaShippingMessage.value = 'กรุณากรอกค่าส่งจีนเป็นตัวเลขตั้งแต่ 0 บาทขึ้นไป'
+    return
+  }
+
+  chinaShippingSaving.value = true
+  chinaShippingMessage.value = ''
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/orders/${selectedOrder.value.order_id}/china-shipping`,
+      {
+        method: 'PATCH',
+        headers: authHeaders(),
+        body: JSON.stringify({ china_shipping_total_thb: amount }),
+      },
+    )
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.error || 'ไม่สามารถบันทึกค่าส่งจีนได้')
+
+    selectedOrder.value = {
+      ...selectedOrder.value,
+      china_shipping_total_thb: data.china_shipping_total_thb,
+      total_amount: data.total_amount,
+    }
+    const index = orders.value.findIndex(
+      (order) => String(order.order_id) === String(selectedOrder.value.order_id),
+    )
+    if (index !== -1) {
+      orders.value[index] = {
+        ...orders.value[index],
+        china_shipping_total_thb: data.china_shipping_total_thb,
+        total_amount: data.total_amount,
+      }
+    }
+    chinaShippingInput.value = String(data.china_shipping_total_thb)
+    chinaShippingMessage.value = 'บันทึกค่าส่งจีนแล้ว'
+  } catch (err) {
+    chinaShippingMessage.value = translateError(err)
+  } finally {
+    chinaShippingSaving.value = false
+  }
 }
 
 function printSelectedOrder() {
@@ -1032,7 +1084,28 @@ onUnmounted(() => {
                   <span>ค่านำเข้า</span><strong>{{ formatMoney(selectedOrder.import_fee_total || 0) }}</strong>
                 </div>
                 <div>
-                  <span>ค่าส่งจากจีน</span><strong>{{ formatMoney(selectedOrder.china_shipping_total_thb || 0) }}</strong>
+                  <span>ค่าส่งจากจีนรวม</span>
+                  <div class="china-shipping-editor">
+                    <input
+                      v-model="chinaShippingInput"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      :disabled="chinaShippingSaving"
+                      aria-label="ค่าส่งจากจีนรวม"
+                    />
+                    <button
+                      type="button"
+                      class="secondary-btn china-shipping-save-btn"
+                      :disabled="chinaShippingSaving"
+                      @click="saveChinaShipping"
+                    >
+                      {{ chinaShippingSaving ? 'กำลังบันทึก...' : 'บันทึก' }}
+                    </button>
+                  </div>
+                  <small v-if="chinaShippingMessage" class="china-shipping-message">
+                    {{ chinaShippingMessage }}
+                  </small>
                 </div>
               </template>
             </div>
@@ -1782,6 +1855,52 @@ onUnmounted(() => {
 .summary-strip strong {
   color: #432f61;
   font-size: 1.05rem;
+}
+
+.china-shipping-editor {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.china-shipping-editor input {
+  width: 7.5rem;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #d9cceb;
+  border-radius: 8px;
+  color: #432f61;
+  font: inherit;
+}
+
+.china-shipping-save-btn {
+  padding: 0.35rem 0.65rem;
+  border: 1px solid #7c5cdb;
+  border-radius: 8px;
+  background: #7c5cdb;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.china-shipping-save-btn:hover:not(:disabled) {
+  background: #6848bf;
+}
+
+.china-shipping-save-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.china-shipping-message {
+  display: block;
+  margin-top: 0.25rem;
+  color: #6b5a84;
+  font-size: 0.75rem;
 }
 
 .summary-strip--wide {

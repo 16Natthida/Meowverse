@@ -5,6 +5,7 @@ import express from 'express'
 import { getShippingFeeSettings } from './shippingFees.js'
 import { getFlavorPrice } from './productPricing.js'
 import { getBelowMinimumCartIds } from './preorderCartEligibility.js'
+import { calculateChinaShippingBreakdown, calculateChinaShippingTotal } from './chinaShipping.js'
 
 const router = express.Router()
 
@@ -428,10 +429,7 @@ router.post('/checkout-preview', async (req, res) => {
       isPreorderItem,
     )
     const orderType = hasPreorder ? 'Preorder' : 'Ready'
-    const chinaShippingTotalThb = cartItems.reduce(
-      (sum, item) => sum + (Number(item.china_shipping_fee_thb) || 0) * Number(item.qty || 0),
-      0,
-    )
+    const chinaShippingTotalThb = await calculateChinaShippingTotal(mergedItems, connection)
     const shippingFee = await getShippingFee(cartItems, connection)
     const totalAmount = subtotalAmount + (hasPreorder ? chinaShippingTotalThb : shippingFee)
 
@@ -609,10 +607,8 @@ router.post('/confirm-payment', async (req, res) => {
     const hasPreorder = mergedItems.some(
       isPreorderItem,
     )
-    const chinaShippingTotalThb = mergedItems.reduce(
-      (sum, item) => sum + (Number(item.china_shipping_fee_thb) || 0) * Number(item.qty || 0),
-      0,
-    )
+    const chinaShippingBreakdown = await calculateChinaShippingBreakdown(mergedItems, connection)
+    const chinaShippingTotalThb = chinaShippingBreakdown.total
     // ถ้าเป็นการชำระรอบ 2 (import fee) ให้ตั้ง orderType = 'Pending_import'
     let orderType = hasPreorder ? 'Preorder' : 'Ready'
     // ตรวจสอบว่ามี import_fee_total > 0 และสถานะออเดอร์เป็น Wait_for_Import_Fee (รอบ 2)
@@ -651,7 +647,7 @@ router.post('/confirm-payment', async (req, res) => {
       'preorderRoundId',
     )
 
-    for (const item of mergedItems) {
+    for (const [index, item] of mergedItems.entries()) {
       const columns = [
         'order_id',
         'prod_id',
@@ -680,7 +676,7 @@ router.post('/confirm-payment', async (req, res) => {
       }
 
       columns.push('china_shipping_fee_thb')
-      values.push(Number(item.china_shipping_fee_thb) || 0)
+      values.push(chinaShippingBreakdown.itemFees[index] || 0)
 
       await connection.query(
         `INSERT INTO order_details (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
@@ -1315,6 +1311,74 @@ router.patch('/:order_id/import-fee', async (req, res) => {
     await connection.rollback()
     console.error('[PATCH /api/orders/:order_id/import-fee]', err)
     res.status(500).json({ error: 'เกิดข้อผิดพลาดในการบันทึกค่านำเข้า' })
+  } finally {
+    connection.release()
+  }
+})
+
+router.patch('/:order_id/china-shipping', async (req, res) => {
+  const { order_id } = req.params
+  const chinaShippingTotal = Number(req.body?.china_shipping_total_thb)
+  const requesterRole = String(req.headers['x-user-role'] || '').trim().toLowerCase()
+
+  if (requesterRole !== 'admin') {
+    return res.status(403).json({ error: 'เฉพาะแอดมินเท่านั้นที่แก้ค่าส่งจีนได้' })
+  }
+
+  if (!Number.isFinite(chinaShippingTotal) || chinaShippingTotal < 0) {
+    return res.status(400).json({ error: 'china_shipping_total_thb must be a non-negative number' })
+  }
+
+  const connection = await getDB(req).getConnection()
+  try {
+    await connection.beginTransaction()
+
+    const [orderRows] = await connection.query(
+      `SELECT order_id, Order_type
+       FROM orders
+       WHERE order_id = ?
+       LIMIT 1
+       FOR UPDATE`,
+      [order_id],
+    )
+    if (orderRows.length === 0) {
+      await connection.rollback()
+      return res.status(404).json({ error: 'ไม่พบออเดอร์' })
+    }
+
+    if (String(orderRows[0].Order_type || '').toLowerCase() !== 'preorder') {
+      await connection.rollback()
+      return res.status(400).json({ error: 'ค่าส่งจีนใช้ได้เฉพาะออเดอร์พรีออเดอร์' })
+    }
+
+    const [subtotalRows] = await connection.query(
+      `SELECT COALESCE(SUM(COALESCE(Price, 0) * COALESCE(qty, 0)), 0) AS subtotal
+       FROM order_details
+       WHERE order_id = ?`,
+      [order_id],
+    )
+    const subtotal = Number(subtotalRows[0]?.subtotal || 0)
+    const roundedChinaShippingTotal = Math.round(chinaShippingTotal * 100) / 100
+    const totalAmount = Math.round((subtotal + roundedChinaShippingTotal) * 100) / 100
+
+    await connection.query(
+      `UPDATE orders
+       SET china_shipping_total_thb = ?, total_amount = ?
+       WHERE order_id = ?`,
+      [roundedChinaShippingTotal, totalAmount, order_id],
+    )
+
+    await connection.commit()
+    res.json({
+      success: true,
+      order_id: Number(order_id),
+      china_shipping_total_thb: roundedChinaShippingTotal,
+      total_amount: totalAmount,
+    })
+  } catch (err) {
+    await connection.rollback()
+    console.error('[PATCH /api/orders/:order_id/china-shipping]', err)
+    res.status(500).json({ error: 'เกิดข้อผิดพลาดในการบันทึกค่าส่งจีน' })
   } finally {
     connection.release()
   }

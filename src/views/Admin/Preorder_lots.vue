@@ -232,7 +232,7 @@
                   </div>
                   <div class="price-section china-shipping-summary">
                     <span class="price-label">ค่าส่งจีน:</span>
-                    <span class="price">{{ Number(product.chinaShippingFeeThb || 0).toFixed(2) }} บาท/ชิ้น</span>
+                    <span class="price">{{ Number(product.chinaShippingFeeThb || 0).toFixed(2) }} บาท</span>
                   </div>
                   <button class="btn-detail" @click="openProductDetailModal(product)">
                     แก้ไขรายละเอียด
@@ -343,7 +343,7 @@
                     <small>กรอก 0 หากสินค้านี้ไม่มีขั้นต่ำ</small>
                   </div>
                   <div class="price-input">
-                    <label>ค่าส่งจีนต่อชิ้น (บาท):</label>
+                    <label>ค่าส่งจีนรวม (บาท):</label>
                     <input
                       type="number"
                       min="0"
@@ -441,7 +441,7 @@
                 />
               </div>
               <div class="price-detail-edit">
-                <label>ค่าส่งจีนต่อชิ้น (บาท):</label>
+                <label>ค่าส่งจีนรวม (บาท):</label>
                 <input
                   type="number"
                   min="0"

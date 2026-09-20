@@ -1647,12 +1647,12 @@ onMounted(async () => {
               >
                 <span class="china-shipping-notice__title">ค่าส่งภายในประเทศจีน</span>
                 <strong v-if="getChinaShippingFee(selectedProduct) > 0">
-                  {{ getChinaShippingFee(selectedProduct).toLocaleString() }} บาท/ชิ้น
+                  {{ getChinaShippingFee(selectedProduct).toLocaleString() }} บาท
                 </strong>
                 <strong v-else>ไม่มีค่าส่งจีน</strong>
                 <small v-if="getChinaShippingFee(selectedProduct) > 0">
                   รวมในยอดชำระค่าสินค้ารอบแรกของพรีออเดอร์
-                  ({{ (getChinaShippingFee(selectedProduct) * detailQty).toLocaleString() }} บาทตามจำนวน)
+                  (คิดเป็นยอดรวม ไม่คูณจำนวนชิ้น)
                 </small>
               </div>
 

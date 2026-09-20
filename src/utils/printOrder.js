@@ -69,13 +69,12 @@ function renderPrintDocument(printWindow, order, logoUrl = '') {
   const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0)
   const shippingFee = numberValue(order?.shipping_fee)
   const importFeeTotal = numberValue(order?.import_fee_total)
-  const chinaShippingTotalThb = numberValue(order?.china_shipping_total_thb)
   const isPreorder = String(order?.Order_type || '').toLowerCase() === 'preorder'
   const baseAmount = order?.total_amount != null ? numberValue(order.total_amount) : subtotal
-  // พรีออเดอร์: รวมทุกค่าใช้จ่ายจริงเข้าด้วยกัน (เหมือนตาราง "จัดการรายการยอดขาย")
+  // พรีออเดอร์: total_amount รวมค่าส่งจีนแล้ว จึงบวกเฉพาะค่าส่งไทยและค่านำเข้าเพิ่ม
   // พร้อมส่ง: total_amount รวมค่าจัดส่งไว้แล้วตั้งแต่ตอนสร้างออเดอร์
   const total = isPreorder
-    ? baseAmount + shippingFee + importFeeTotal + chinaShippingTotalThb
+    ? baseAmount + shippingFee + importFeeTotal
     : baseAmount
   const shipping = order?.saved_shipping || order?.shipping || {}
   const customerName =
@@ -233,7 +232,7 @@ function renderPrintDocument(printWindow, order, logoUrl = '') {
               ${
                 isPreorder
                   ? `<div class="total-row"><span>ค่านำเข้า</span><strong>${formatMoney(importFeeTotal)}</strong></div>
-              <div class="total-row"><span>ค่าส่งจากจีน</span><strong>${formatMoney(chinaShippingTotalThb)}</strong></div>`
+              <div class="total-row"><span>ค่าส่งจากจีน</span><strong>${formatMoney(order?.china_shipping_total_thb)}</strong></div>`
                   : ''
               }
               <div class="total-row"><span>ยอดรวมสุทธิ</span><strong>${formatMoney(total)}</strong></div>

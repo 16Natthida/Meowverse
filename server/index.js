@@ -13,6 +13,7 @@ import orderRouter, { deleteOrder, restoreReadyOrderStock } from './order.js'
 import shippingRouter from './shipping.js'
 import { DEFAULT_PREORDER_TERMS, normalizePreorderTerms } from './preorderTerms.js'
 import { getShippingFeeSettings } from './shippingFees.js'
+import { calculateChinaShippingBreakdown } from './chinaShipping.js'
 import {
   getFlavorPrice,
   getLowestFlavorPrice,
@@ -332,10 +333,8 @@ async function createPreorderOrdersForClosedRound(connection, roundId) {
         (sum, item) => sum + (Number(item.price) || 0) * Number(item.qty || 0),
         0,
       )
-      const chinaShippingTotalThb = items.reduce(
-        (sum, item) => sum + (Number(item.china_shipping_fee_thb) || 0) * Number(item.qty || 0),
-        0,
-      )
+      const chinaShippingBreakdown = await calculateChinaShippingBreakdown(items, connection)
+      const chinaShippingTotalThb = chinaShippingBreakdown.total
       const shippingFee = shippingFeeSettings.preorder
       // Round 1 collects the product price plus China domestic shipping.
       // The Thai flat-rate shipping fee remains reserved for round 2.
@@ -357,7 +356,7 @@ async function createPreorderOrdersForClosedRound(connection, roundId) {
       )
       const orderId = orderResult.insertId
 
-      for (const item of items) {
+      for (const [index, item] of items.entries()) {
         await connection.query(
           `INSERT INTO order_details
              (order_id, prod_id, flavor, Price, qty, received_qty, arrival_status, Import_fee,
@@ -370,7 +369,7 @@ async function createPreorderOrdersForClosedRound(connection, roundId) {
             item.price,
             item.qty,
             item.preorder_round_id,
-            Number(item.china_shipping_fee_thb) || 0,
+            chinaShippingBreakdown.itemFees[index] || 0,
           ],
         )
 

@@ -17,7 +17,7 @@ const detailOrder = ref(null)
 const previewImage = ref(null)
 
 // ── ยอดรวมของออเดอร์ ให้ตรงกับหน้า "จัดการยอดขาย" โดยแยกตามประเภทออเดอร์ ──
-// พรีออเดอร์: total_amount + ค่าจัดส่ง + ค่านำเข้า + ค่าส่งจากจีน
+// พรีออเดอร์: total_amount (รวมค่าส่งจีนแล้ว) + ค่าจัดส่ง + ค่านำเข้า
 // พร้อมส่ง: total_amount เฉย ๆ (รวมค่าส่งไว้ตั้งแต่ตอนสร้างออเดอร์แล้ว)
 function getOrderTotal(order) {
   const total = Number(order?.total_amount || 0)
@@ -25,8 +25,7 @@ function getOrderTotal(order) {
   return (
     total +
     Number(order?.shipping_fee || 0) +
-    Number(order?.import_fee_total || 0) +
-    Number(order?.china_shipping_total_thb || 0)
+    Number(order?.import_fee_total || 0)
   )
 }
 
