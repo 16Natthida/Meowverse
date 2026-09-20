@@ -99,11 +99,13 @@ function getOrderTypeLabel(orderType) {
 }
 
 // ── ยอดเงินรวมของแถวในตาราง "จัดการรายการยอดขาย" ──
-// หน้าพรีออเดอร์: total_amount + ค่าจัดส่ง + ค่านำเข้า + ค่าส่งจากจีน (รวมทุกค่าใช้จ่ายจริง)
-// หน้าอื่น: total_amount เฉย ๆ เหมือนเดิม ไม่กระทบ
+// อิงตามประเภทของแต่ละออเดอร์เอง (order.Order_type) ไม่ใช่ตามหน้าที่กำลังดูอยู่
+// เพื่อให้ยอดเงินของออเดอร์พรีออเดอร์ตรงกันไม่ว่าจะดูจากหน้า "ทั้งหมด" หรือหน้า "พรีออเดอร์" โดยเฉพาะ
+// พรีออเดอร์: total_amount + ค่าจัดส่ง + ค่านำเข้า + ค่าส่งจากจีน (รวมทุกค่าใช้จ่ายจริง)
+// พร้อมส่ง: total_amount เฉย ๆ (รวมค่าจัดส่งไว้แล้วตั้งแต่ตอนสร้างออเดอร์)
 function getOrderRowTotal(order) {
   const total = Number(order.total_amount || 0)
-  if (!isPreorderSalesPage.value) return total
+  if (String(order?.Order_type || '').toLowerCase() !== 'preorder') return total
   return (
     total +
     Number(order.shipping_fee || 0) +
