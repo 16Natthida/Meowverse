@@ -173,7 +173,7 @@ const iconMap = [
   { keyword: 'อาหารเปียก', icon: '/images/category-icons/wet-cat-food.png' },
   { keyword: 'อาหารเม็ด', icon: '/images/category-icons/dry-cat-food.png' },
   { keyword: 'ฟรีซดราย', icon: '/images/category-icons/freeze-dry-cat-food.png' },
-  { keyword: 'ขนมเลีย', icon: '/images/category-icons/lickable-cat-treats.png' },
+  { keyword: 'ขนมแมวเลีย', icon: '/images/category-icons/lickable-cat-treats.png' },
   { keyword: 'ขนม', icon: '/images/category-icons/cat-treats.png' },
   { keyword: 'ทูน่า', icon: '/images/category-icons/tuna-fish-food.png' },
   { keyword: 'ปลา', icon: '/images/category-icons/tuna-fish-food.png' },
@@ -188,9 +188,13 @@ const iconMap = [
   { keyword: 'ควบคุมน้ำหนัก', icon: '/images/category-icons/weight-control.png' },
   { keyword: 'อาหารเสริม', icon: '/images/category-icons/supplements.png' },
   { keyword: 'สินค้าใหม่', icon: '/images/category-icons/new-products.png' },
-  { keyword: 'โปรโมชั่น', icon: '/images/category-icons/promotion.png' },
+  { keyword: 'โปรโมชั่น', icon: '/images/category-icons/best-seller.png' },
   { keyword: 'ขายดี', icon: '/images/category-icons/best-seller.png' },
   { keyword: 'อาหาร', icon: '/images/category-icons/dry-cat-food.png' },
+  { keyword: 'ชุดทดลอง', icon: '/images/category-icons/promotion.png' },
+  { keyword: 'ของใช้และของเล่นแมว', icon: '/images/category-icons/Item.jpg' },  
+  { keyword: 'ซุปแมว', icon: '/images/category-icons/soup.jpg' },
+  { keyword: 'อื่นๆ', icon: '/images/category-icons/digestive-care.png' },
 ]
 
 function getCatIcon(name) {
