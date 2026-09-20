@@ -113,6 +113,10 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('click', handleOutsideClick)
   window.removeEventListener('meowverse:user-search', handleShellSearch)
+  if (deadlineTimer) {
+    window.clearInterval(deadlineTimer)
+    deadlineTimer = null
+  }
 })
 
 const orders = ref([])
@@ -120,6 +124,8 @@ const loading = ref(true)
 const error = ref(null)
 const copiedTrackingOrderId = ref(null)
 const confirmingReceiptOrderId = ref(null)
+const deadlineNow = ref(Date.now())
+let deadlineTimer = null
 
 async function copyTrackingNumber(order) {
   const trackingNumber = String(order.tracking_number || '').trim()
@@ -270,6 +276,55 @@ function formatDate(dateStr) {
 }
 
 // ── NAV BADGE (mirrors Dashboard's exact RED/GREEN priority logic, derived from existing orders data) ──
+const paymentDeadlineStatuses = new Set([
+  'pending',
+  'invalid slip',
+  'invalid_slip',
+  'pending_import_fee',
+  'invalid import slip',
+  'invalid_import_slip',
+])
+
+function isPaymentDeadlineOrder(order) {
+  const orderType = String(order?.Order_type || '').trim().toLowerCase()
+  const status = String(order?.status || '').trim().toLowerCase()
+  const supportsDeadline = orderType === 'ready' || orderType === 'preorder'
+  return supportsDeadline && paymentDeadlineStatuses.has(status) && Boolean(order?.deadline)
+}
+
+function getDeadlineRemainingMs(order) {
+  if (!isPaymentDeadlineOrder(order)) return null
+  const deadlineMs = new Date(order.deadline).getTime()
+  if (!Number.isFinite(deadlineMs)) return null
+  return Math.max(deadlineMs - deadlineNow.value, 0)
+}
+
+function isDeadlineExpired(order) {
+  const remainingMs = getDeadlineRemainingMs(order)
+  return remainingMs !== null && remainingMs <= 0
+}
+
+function formatDeadlineRemaining(order) {
+  const remainingMs = getDeadlineRemainingMs(order)
+  if (remainingMs === null) return ''
+  if (remainingMs <= 0) return 'หมดเวลาชำระแล้ว'
+
+  const totalSeconds = Math.floor(remainingMs / 1000)
+  const totalMinutes = Math.floor(totalSeconds / 60)
+  const days = Math.floor(totalSeconds / 86400)
+  const hours = Math.floor((totalSeconds % 86400) / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+
+  if (remainingMs > 24 * 60 * 60 * 1000) {
+    return `${days} วัน ${String(hours).padStart(2, '0')} ชม.`
+  }
+  if (totalSeconds >= 60 * 60) {
+    return `${String(Math.floor(totalMinutes / 60)).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+  }
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
 const NAV_RED_DOT_STATUSES = ['pending', 'pending_import_fee', 'cancelled', 'invalid_slip', 'invalid_import_slip', 'missing']
 const NAV_GREEN_DOT_STATUSES = ['paid', 'ready_to_ship']
 
@@ -418,6 +473,9 @@ function toggleExpand(orderId, evt) {
 
 onMounted(() => {
   fetchOrders()
+  deadlineTimer = window.setInterval(() => {
+    deadlineNow.value = Date.now()
+  }, 1000)
 })
 </script>
 
@@ -666,6 +724,13 @@ onMounted(() => {
                 <span class="status-label">สถานะคำสั่งซื้อ :</span>
                 <span class="status-value" :style="{ color: getStatus(order.status).color }">
                   {{ getStatus(order.status).label }}
+                </span>
+                <span
+                  v-if="isPaymentDeadlineOrder(order)"
+                  :class="['payment-deadline', { 'payment-deadline--expired': isDeadlineExpired(order) }]"
+                >
+                  <span class="payment-deadline__label">เวลาคงเหลือ</span>
+                  {{ formatDeadlineRemaining(order) }}
                 </span>
               </div>
               <div
@@ -1468,6 +1533,27 @@ onMounted(() => {
 .status-value {
   font-size: 0.9rem;
   font-weight: 800;
+}
+.payment-deadline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: 0.7rem;
+  padding: 0.28rem 0.65rem;
+  border: 1px solid #f1c46a;
+  border-radius: 999px;
+  color: #a45f00;
+  background: #fff7df;
+  font-size: 0.8rem;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.payment-deadline__label { font-weight: 700; }
+.payment-deadline--expired {
+  border-color: #efb2bd;
+  color: #b4233c;
+  background: #fff0f3;
 }
 .tracking-summary {
   display: flex;

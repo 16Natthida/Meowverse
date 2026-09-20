@@ -1,6 +1,6 @@
 <script setup>
 import AdminPageHeader from '../../components/AdminPageHeader.vue'
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 
 import { useAdminProductStore } from '@/stores/adminProductStore'
 
@@ -519,6 +519,13 @@ function editProduct(product) {
   form.readyToShipEnabled = Boolean(product.readyToShipEnabled)
   form.isRecommended = Boolean(product.isRecommended)
   flavorInput.value = ''
+
+  nextTick(() => {
+    document.querySelector('.form-head')?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    })
+  })
 }
 
 function resetForm() {
