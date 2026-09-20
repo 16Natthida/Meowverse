@@ -4828,6 +4828,10 @@ app.post(
       const orderSummaryMap = new Map()
       const splitOrderIds = new Set()
       const forceSplitDetailRefs = new Set()
+      // Product-level shortage: a product delivered under several flavors only
+      // counts as fully arrived once every one of its flavors is complete. Any
+      // prod_id added here had at least one short flavor line in this round.
+      const shortProductIds = new Set()
       let hasIntakeChange = false
       let totalExcessQty = 0
 
@@ -5004,6 +5008,24 @@ app.post(
         // for the line must move to the delayed segment, including lines that
         // happened to be fully received in one order.
         if (targetReceived < totalOrderedForLine) {
+          for (const detail of lineDetails) {
+            forceSplitDetailRefs.add(`${detail.order_id}:${detail.detail_id}`)
+          }
+          shortProductIds.add(Number(lineDetails[0]?.prod_id))
+        }
+      }
+
+      // Product-level shortage rule: if this product has more than one
+      // flavor line and any flavor came up short in this round, every other
+      // flavor line of the SAME product must be pulled into the delayed
+      // segment too — even flavors that arrived in full. A product with an
+      // incomplete flavor is treated as "ตกหล่น" as a whole, so none of its
+      // flavors (not even a single one) can have import fee entered until
+      // every flavor has fully arrived together.
+      if (shortProductIds.size > 0) {
+        for (const [, lineDetails] of lineGroups.entries()) {
+          const prodId = Number(lineDetails[0]?.prod_id)
+          if (!shortProductIds.has(prodId)) continue
           for (const detail of lineDetails) {
             forceSplitDetailRefs.add(`${detail.order_id}:${detail.detail_id}`)
           }
