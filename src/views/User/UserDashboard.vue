@@ -2501,6 +2501,9 @@ onMounted(async () => {
     background 0.18s ease;
   padding: 0.6rem 0.7rem 0.55rem;
   min-width: 82px;
+  width: 104px;
+  align-self: stretch;
+  justify-content: flex-start;
   box-shadow: 0 4px 12px rgba(89, 61, 125, 0.06);
 }
 .cat-btn:hover {
@@ -2540,10 +2543,12 @@ onMounted(async () => {
   font-size: 0.77rem;
   font-weight: 900;
   color: var(--muted);
-  white-space: nowrap;
-  max-width: 76px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  width: 100%;
+  text-align: center;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .cat-btn--active .cat-btn__label {
   color: var(--primary);
