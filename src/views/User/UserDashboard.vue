@@ -451,7 +451,7 @@ const fetchPreorderRounds = async () => {
     if (!res.ok) throw new Error('Failed to fetch preorder rounds')
     const data = await res.json()
     const rounds = Array.isArray(data) ? data : (data.data || [])
-    
+
     // ไม่ต้อง .filter แล้วเพราะ Backend กรอง 'active' มาให้แล้ว
     activePreorderRounds.value = rounds
   } catch (err) {
@@ -843,9 +843,6 @@ function getProductPrice(product) {
   return product.price
 }
 
-function getChinaShippingFee(product) {
-  return Number(product?.chinaShippingFeeThb ?? product?.china_shipping_fee_thb ?? 0) || 0
-}
 
 function getTotalStock(product) {
   if (!product) return 0
@@ -1637,24 +1634,6 @@ onMounted(async () => {
                   </p>
                 </div>
               </section>
-
-              <div
-                v-if="getEffectiveItemType(selectedProduct) === 'preorder'"
-                :class="[
-                  'china-shipping-notice',
-                  { 'china-shipping-notice--free': getChinaShippingFee(selectedProduct) <= 0 },
-                ]"
-              >
-                <span class="china-shipping-notice__title">ค่าส่งภายในประเทศจีน</span>
-                <strong v-if="getChinaShippingFee(selectedProduct) > 0">
-                  {{ getChinaShippingFee(selectedProduct).toLocaleString() }} บาท
-                </strong>
-                <strong v-else>ไม่มีค่าส่งจีน</strong>
-                <small v-if="getChinaShippingFee(selectedProduct) > 0">
-                  รวมในยอดชำระค่าสินค้ารอบแรกของพรีออเดอร์
-                  (คิดเป็นยอดรวม ไม่คูณจำนวนชิ้น)
-                </small>
-              </div>
 
               <div v-if="selectedProduct.flavors?.length" class="detail-flavor-section">
                 <p class="detail-option-label">ตัวเลือกสินค้า</p>
@@ -3823,6 +3802,8 @@ onMounted(async () => {
   border: 1px dashed #f1a17f;
   border-radius: 16px;
   padding: 1.25rem;
+  box-sizing: border-box;
+  max-width: 100%;
 }
 .rounds-title {
   font-size: 1.05rem;
@@ -3835,10 +3816,12 @@ onMounted(async () => {
 }
 .rounds-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
   gap: 1rem;
 }
 .round-card {
+  min-width: 0;
+  box-sizing: border-box;
   background: #ffffff;
   border: 1px solid #ffe3d5;
   border-radius: 12px;
@@ -3854,6 +3837,8 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.6rem;
   margin-bottom: 0.6rem;
 }
 .round-name {
@@ -3861,6 +3846,8 @@ onMounted(async () => {
   font-weight: 900;
   color: var(--primary-dark);
   margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .round-status {
   font-size: 0.75rem;
@@ -3895,6 +3882,28 @@ onMounted(async () => {
 .date-label {
   color: var(--muted);
   font-weight: 700;
+}
+@media (max-width: 480px) {
+  .preorder-rounds-container {
+    padding: 0.9rem;
+  }
+  .rounds-title {
+    font-size: 0.95rem;
+  }
+  .round-card {
+    padding: 0.9rem;
+  }
+  .round-dates {
+    padding: 0.6rem;
+  }
+  .date-item {
+    flex-wrap: wrap;
+    gap: 0.1rem 0.5rem;
+    font-size: 0.78rem;
+  }
+  .date-val {
+    text-align: right;
+  }
 }
 /* ── ORDER NOTIF DOT (navbar tab) ── */
 .nav-tab__label-wrap {

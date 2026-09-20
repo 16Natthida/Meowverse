@@ -212,6 +212,26 @@ router.get('/', async (req, res) => {
        ) AS image,
        p.stock_qty AS stock,
        p.flavor_prices AS flavorPrices,
+       COALESCE((
+         SELECT prp.minimum_order_qty
+         FROM preorder_round_products prp
+         WHERE prp.round_id = c.preorder_round_id
+           AND prp.prod_id = c.prod_id
+         LIMIT 1
+       ), 0) AS preorder_minimum_qty,
+       COALESCE((
+         SELECT SUM(reserved.qty)
+         FROM cart reserved
+         WHERE reserved.preorder_round_id = c.preorder_round_id
+           AND reserved.prod_id = c.prod_id
+           AND reserved.item_type = 'preorder'
+       ), 0) + COALESCE((
+         SELECT SUM(od.qty)
+         FROM order_details od
+         WHERE od.preorder_round_id = c.preorder_round_id
+           AND od.prod_id = c.prod_id
+           AND od.item_type = 'preorder'
+       ), 0) AS preorder_quantity_reserved,
        NULL AS preorder_remaining
        FROM cart c
        LEFT JOIN products p ON c.prod_id = p.prod_id
@@ -224,6 +244,14 @@ router.get('/', async (req, res) => {
     res.json(
       rows.map((row) => ({
         ...row,
+        preorder_minimum_qty: Number(row.preorder_minimum_qty) || 0,
+        preorder_quantity_reserved: Number(row.preorder_quantity_reserved) || 0,
+        preorder_minimum_status:
+          normalizeItemType(row.item_type) === 'preorder' && Number(row.preorder_minimum_qty) > 0
+            ? Number(row.preorder_quantity_reserved) >= Number(row.preorder_minimum_qty)
+              ? 'reached'
+              : 'not-reached'
+            : 'no-minimum',
         preorder_unavailable_reason: belowMinimumIds.has(Number(row.cart_id))
           ? 'minimum_not_reached' : null,
         price: getFlavorPrice(

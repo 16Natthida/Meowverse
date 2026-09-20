@@ -117,6 +117,9 @@ const fetchCart = async () => {
         flavor: item.flavor ?? '',
         preorder_round_status: item.preorder_round_status || null,
         preorderUnavailableReason: item.preorder_unavailable_reason || null,
+        preorderMinimumQty: Number(item.preorder_minimum_qty) || 0,
+        preorderQuantityReserved: Number(item.preorder_quantity_reserved) || 0,
+        preorderMinimumStatus: item.preorder_minimum_status || 'no-minimum',
         isPreorder: Boolean(item.pre_item_id) || item.item_type === 'preorder',
         stock: Number(item.stock ?? 999),
         preorderRemaining:
@@ -228,6 +231,10 @@ const readyToShipItems = computed(() => {
 
 const preorderItems = computed(() => {
   return cartItems.value.filter((item) => item.isPreorder)
+})
+
+const belowMinimumItems = computed(() => {
+  return preorderItems.value.filter((item) => item.preorderMinimumStatus === 'not-reached')
 })
 
 // ── COMPUTED ──
@@ -516,6 +523,23 @@ onMounted(fetchCart)
           </div>
 
           <!-- ── READY TO SHIP SECTION ── -->
+          <div
+            v-if="activeCartView === 'preorder' && belowMinimumItems.length > 0"
+            class="minimum-alert"
+            role="alert"
+          >
+            <div class="minimum-alert__title">⚠️ สินค้ายังไม่ถึงขั้นต่ำ</div>
+            <div class="minimum-alert__body">
+              รายการต่อไปนี้ยังมียอดจองไม่ครบขั้นต่ำของรอบ กรุณารอให้ยอดจองครบก่อนปิดรอบ
+            </div>
+            <ul class="minimum-alert__list">
+              <li v-for="item in belowMinimumItems" :key="`minimum-${item.cart_id}`">
+                {{ item.name }} — จองแล้ว {{ item.preorderQuantityReserved }} / ขั้นต่ำ {{ item.preorderMinimumQty }} ชิ้น
+                <span v-if="item.preorderUnavailableReason">(รอบปิดแล้ว สั่งซื้อรายการนี้ไม่ได้)</span>
+              </li>
+            </ul>
+          </div>
+
           <div
             v-if="activeCartView === 'ready' && readyToShipItems.length > 0"
             class="item-section"
@@ -847,6 +871,18 @@ onMounted(fetchCart)
 
 <style scoped>
 .item-unavailable { color: #9a3412; font-size: 0.85rem; line-height: 1.6; margin-top: 8px; }
+.minimum-alert {
+  margin: 0 0 1rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid #f0c36d;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #fffaf0, #fff4d8);
+  color: #7a5311;
+  box-shadow: 0 6px 18px rgba(174, 119, 28, 0.08);
+}
+.minimum-alert__title { font-weight: 900; color: #8b5e12; }
+.minimum-alert__body { margin-top: 0.35rem; font-size: 0.86rem; line-height: 1.55; }
+.minimum-alert__list { margin: 0.45rem 0 0; padding-left: 1.2rem; font-size: 0.82rem; line-height: 1.65; }
 .cart-page {
   --primary: #6f50a0;
   --primary-light: #cda2fb;
