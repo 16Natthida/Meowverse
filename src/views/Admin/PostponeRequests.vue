@@ -119,6 +119,7 @@ const filteredRequests = computed(() => {
       !q ||
       String(r.order_id).includes(q) ||
       String(r.post_id).includes(q) ||
+      (r.username && r.username.toLowerCase().includes(q)) ||
       (r.request_reason && r.request_reason.toLowerCase().includes(q)) ||
       (r.contact_phone && r.contact_phone.includes(q))
     return matchStatus && matchSearch
@@ -186,7 +187,7 @@ onMounted(() => {
           <input
             v-model="searchQuery"
             class="search-input"
-            placeholder="ค้นหา ออเดอร์ / เหตุผล / เบอร์..."
+            placeholder="ค้นหา ออเดอร์ / ผู้ใช้ / เหตุผล / เบอร์..."
           />
           <label>สถานะ</label>
           <select v-model="filterStatus" class="filter-select">
@@ -222,6 +223,7 @@ onMounted(() => {
             <tr>
               <th>รหัสคำขอ</th>
               <th>ออเดอร์</th>
+              <th>ผู้ใช้งาน</th>
               <th>ยอดรวม</th>
               <th>สถานะออเดอร์</th>
               <th>วันที่ขอเลื่อน</th>
@@ -241,6 +243,12 @@ onMounted(() => {
               <td>
                 <strong>#{{ String(request.order_id).padStart(3, '0') }}</strong><br />
                 <small class="text-muted">{{ formatDate(request.created_at) }}</small>
+              </td>
+
+              <!-- ผู้ใช้งาน (accounts.username) -->
+              <td class="username-cell">
+                <span v-if="request.username" class="username-text">{{ request.username }}</span>
+                <span v-else class="no-data">-</span>
               </td>
 
               <!-- ยอดรวม (total_amount จาก orders) -->
@@ -483,7 +491,7 @@ onMounted(() => {
 
 /* ── Table ── */
 .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-table { width: 100%; min-width: 960px; border-collapse: collapse; }
+table { width: 100%; min-width: 1040px; border-collapse: collapse; }
 th {
   text-align: left;
   padding: 0.9rem 1rem;
@@ -540,6 +548,7 @@ tr:last-child td { border-bottom: none; }
   color: var(--text-main);
   white-space: nowrap;
 }
+.username-text { font-weight: 700; color: var(--text-main); overflow-wrap: anywhere; }
 .text-muted { color: var(--text-muted); font-size: 0.8rem; }
 .no-data    { color: #9ca3af; font-size: 0.85rem; }
 
@@ -666,13 +675,14 @@ tr:last-child td { border-bottom: none; }
 
   .table-scroll > table td:nth-child(1)::before { content: 'รหัสคำขอ'; }
   .table-scroll > table td:nth-child(2)::before { content: 'ออเดอร์'; }
-  .table-scroll > table td:nth-child(3)::before { content: 'ยอดรวม'; }
-  .table-scroll > table td:nth-child(4)::before { content: 'สถานะออเดอร์'; }
-  .table-scroll > table td:nth-child(5)::before { content: 'วันใหม่'; }
-  .table-scroll > table td:nth-child(6)::before { content: 'เหตุผล'; }
-  .table-scroll > table td:nth-child(7)::before { content: 'เบอร์ติดต่อ'; }
-  .table-scroll > table td:nth-child(8)::before { content: 'สถานะคำขอ'; }
-  .table-scroll > table td:nth-child(9)::before { content: 'ดำเนินการ'; }
+  .table-scroll > table td:nth-child(3)::before { content: 'ผู้ใช้งาน'; }
+  .table-scroll > table td:nth-child(4)::before { content: 'ยอดรวม'; }
+  .table-scroll > table td:nth-child(5)::before { content: 'สถานะออเดอร์'; }
+  .table-scroll > table td:nth-child(6)::before { content: 'วันใหม่'; }
+  .table-scroll > table td:nth-child(7)::before { content: 'เหตุผล'; }
+  .table-scroll > table td:nth-child(8)::before { content: 'เบอร์ติดต่อ'; }
+  .table-scroll > table td:nth-child(9)::before { content: 'สถานะคำขอ'; }
+  .table-scroll > table td:nth-child(10)::before { content: 'ดำเนินการ'; }
 
   .table-scroll > table td:last-child {
     display: block;
