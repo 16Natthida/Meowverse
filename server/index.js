@@ -101,18 +101,21 @@ function resolveIntakeStatus(orderedQty, receivedQty) {
     return 'Pending'
   }
 
-  if (received <= 0) {
-    return 'Missing'
-  }
-
   if (received >= ordered) {
     return 'Arrived'
   }
 
+  // Any shortage, including receiving zero units, waits for the remaining
+  // goods instead of becoming a separate Missing state automatically.
   return 'Delayed'
 }
 
-function resolveOrderStatusAfterIntake(currentStatus, fullReceived, allMissing) {
+function resolveOrderStatusAfterIntake(
+  currentStatus,
+  fullReceived,
+  allMissing,
+  autoDelayShortage = false,
+) {
   const status = String(currentStatus || '').trim()
   const importFeeStatuses = [
     'Wait_for_Import_Fee',
@@ -126,10 +129,21 @@ function resolveOrderStatusAfterIntake(currentStatus, fullReceived, allMissing) 
     return status
   }
 
-  return fullReceived ? 'Ready_to_Ship' : allMissing ? 'Missing' : 'Partially_Received'
+  return fullReceived
+    ? 'Ready_to_Ship'
+    : autoDelayShortage
+      ? 'Delayed'
+      : allMissing
+        ? 'Missing'
+        : 'Partially_Received'
 }
 
-async function splitDelayedItemsFromOrder(connection, orderId, sourceDetailId = null) {
+async function splitDelayedItemsFromOrder(
+  connection,
+  orderId,
+  sourceDetailId = null,
+  includeCompleteSource = false,
+) {
   const [orderRows] = await connection.query(
     `SELECT order_id, user_id, total_amount, Order_type, deadline, import_fee_total,
             COALESCE(split_parent_order_id, 0) AS split_parent_order_id
@@ -151,12 +165,22 @@ async function splitDelayedItemsFromOrder(connection, orderId, sourceDetailId = 
      FROM order_details od
      WHERE od.order_id = ?
        AND (
-         od.detail_id = ?
-         OR LOWER(COALESCE(od.arrival_status, '')) IN ('delayed', 'missing')
+         (
+           od.detail_id = ?
+           AND od.qty > COALESCE(od.received_qty, 0)
+         )
+         OR (
+           ? = 1
+           AND od.detail_id = ?
+           AND od.qty > 0
+         )
+         OR (
+           LOWER(COALESCE(od.arrival_status, '')) IN ('delayed', 'missing')
+           AND od.qty > COALESCE(od.received_qty, 0)
+         )
        )
-       AND od.qty > COALESCE(od.received_qty, 0)
-     ORDER BY od.detail_id ASC`,
-    [orderId, Number(sourceDetailId) || 0],
+       ORDER BY od.detail_id ASC`,
+    [orderId, Number(sourceDetailId) || 0, includeCompleteSource ? 1 : 0, Number(sourceDetailId) || 0],
   )
 
   if (delayedRows.length === 0) return null
@@ -209,15 +233,16 @@ async function splitDelayedItemsFromOrder(connection, orderId, sourceDetailId = 
 
   for (const detail of delayedRows) {
     const orderedQty = Math.max(Number(detail.ordered_qty) || 0, 0)
-    const receivedQty = Math.min(Math.max(Number(detail.received_qty) || 0, 0), orderedQty)
-    const delayedQty = Math.max(orderedQty - receivedQty, 0)
-    if (delayedQty <= 0) continue
+    if (orderedQty <= 0) continue
 
+    // A line is considered delayed as a whole when even one unit is missing.
+    // Do not leave the received portion on the main order: the import-fee
+    // workflow must show the original ordered quantity on the delayed side.
     await connection.query(
       `UPDATE order_details
-       SET qty = ?, arrival_status = 'Arrived'
+       SET qty = 0, received_qty = 0, arrival_status = 'Delayed', Import_fee = 0
        WHERE detail_id = ?`,
-      [receivedQty, detail.detail_id],
+      [detail.detail_id],
     )
 
     await connection.query(
@@ -229,7 +254,7 @@ async function splitDelayedItemsFromOrder(connection, orderId, sourceDetailId = 
         detail.prod_id,
         detail.flavor || null,
         detail.unit_price,
-        delayedQty,
+        orderedQty,
         detail.item_type || null,
         detail.preorder_round_id || null,
       ],
@@ -4802,6 +4827,7 @@ app.post(
       const detailResults = []
       const orderSummaryMap = new Map()
       const splitOrderIds = new Set()
+      const forceSplitDetailRefs = new Set()
       let hasIntakeChange = false
       let totalExcessQty = 0
 
@@ -4872,15 +4898,9 @@ app.post(
           const excessQty = 0
           const missingQty = Math.max(orderedQty - finalReceivedQty, 0)
           const unitPrice = Number(detail.unit_price) || 0
-          // A partially received line is split below: the received quantity
-          // stays in the main order and the unreceived quantity moves to the
-          // missing-items child order.
-          const arrivalStatus =
-            finalReceivedQty >= orderedQty
-              ? 'Arrived'
-              : finalReceivedQty > 0
-                ? 'Delayed'
-                : 'Missing'
+          // Any incomplete line is moved below as one delayed line using the
+          // original ordered quantity.
+          const arrivalStatus = finalReceivedQty >= orderedQty ? 'Arrived' : 'Delayed'
 
           remainingNew -= extraQty
 
@@ -4978,15 +4998,32 @@ app.post(
             firstDetail.flavor,
           )
         }
+
+        // The import-fee rule is line-level across the whole preorder round:
+        // if any unit of this product line is short, every order's quantity
+        // for the line must move to the delayed segment, including lines that
+        // happened to be fully received in one order.
+        if (targetReceived < totalOrderedForLine) {
+          for (const detail of lineDetails) {
+            forceSplitDetailRefs.add(`${detail.order_id}:${detail.detail_id}`)
+          }
+        }
       }
 
-      // Move only the unreceived quantity into a child order for a separate
-      // missing-items round. The received portion remains in the main order
-      // and can be charged import fees independently.
+      // If a line is short by even one unit, move the whole ordered line into
+      // the delayed child order. This keeps the import-fee workflow from
+      // charging the received portion separately from the same product line.
       const delayedOrderIds = []
       for (const orderId of splitOrderIds) {
         const childOrderId = await splitDelayedItemsFromOrder(connection, orderId)
         if (childOrderId) delayedOrderIds.push(childOrderId)
+      }
+      for (const ref of forceSplitDetailRefs) {
+        const [orderId, detailId] = ref.split(':').map(Number)
+        const childOrderId = await splitDelayedItemsFromOrder(connection, orderId, detailId, true)
+        if (childOrderId && !delayedOrderIds.includes(childOrderId)) {
+          delayedOrderIds.push(childOrderId)
+        }
       }
 
       const [statusRows] = await connection.query(
@@ -5217,7 +5254,6 @@ app.post(
         if (appliedToOrder > 0) {
           allMissing = false
         }
-
         // Update order detail received and status (record applied amount toward the order)
         await connection.query(
           `UPDATE order_details
@@ -5276,7 +5312,7 @@ app.post(
         }
       }
 
-      const newStatus = resolveOrderStatusAfterIntake(order.status, allReceived, allMissing)
+      const newStatus = resolveOrderStatusAfterIntake(order.status, allReceived, allMissing, true)
       const newTotalAmount = Math.max(Number(order.total_amount) - refundAmount, 0)
 
       await connection.query(

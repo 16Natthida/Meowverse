@@ -151,8 +151,7 @@ function getDraftIntakeStatus(item) {
   const ordered = Number(item.ordered_qty) || 0
 
   if (received >= ordered) return 'ready'
-  if (received <= 0) return 'missing'
-  return 'partial'
+  return 'delayed'
 }
 
 const excessReceivedItems = computed(() => {
