@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 
@@ -40,7 +40,86 @@ async function fetchLogoSettings() {
 
 onMounted(fetchLogoSettings)
 
+// ---- นับถอยหลังเมื่อ login ผิดครบ 10 ครั้ง (ถูกล็อกชั่วคราว) ----
+// backend ล็อกเป็นรายชื่อผู้ใช้ จึงจำไว้ว่าชื่อไหนถูกล็อก เพื่อไม่ให้บล็อกการลองชื่อผู้ใช้อื่น
+const lockRemainingSeconds = ref(0)
+const lockTotalSeconds = ref(0)
+const lockEndsAtMs = ref(0)
+const lockedUsername = ref('')
+let lockTimerId = null
+
+// วงแหวนนับถอยหลัง (SVG): เส้นรอบวงใช้คำนวณ stroke-dashoffset
+const RING_RADIUS = 56
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
+
+function normalizeUsername(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+}
+
+const isLocked = computed(
+  () =>
+    lockRemainingSeconds.value > 0 && normalizeUsername(memberId.value) === lockedUsername.value,
+)
+
+// วงแหวนจะค่อยๆ หดลงตามเวลาที่เหลือ
+const ringOffset = computed(() => {
+  const total = lockTotalSeconds.value || 1
+  const ratio = Math.min(1, Math.max(0, lockRemainingSeconds.value / total))
+  return RING_CIRCUMFERENCE * (1 - ratio)
+})
+
+// เวลาที่จะลองใหม่ได้ (เวลานาฬิกา) เช่น 13:45
+const unlockClockText = computed(() => {
+  if (!lockEndsAtMs.value) return ''
+  return new Date(lockEndsAtMs.value).toLocaleTimeString('th-TH', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+})
+
+const countdownText = computed(() => {
+  const total = Math.max(0, lockRemainingSeconds.value)
+  const minutes = String(Math.floor(total / 60)).padStart(2, '0')
+  const seconds = String(total % 60).padStart(2, '0')
+  return `${minutes}:${seconds}`
+})
+
+function stopLockCountdown() {
+  if (lockTimerId !== null) {
+    clearInterval(lockTimerId)
+    lockTimerId = null
+  }
+}
+
+function startLockCountdown(seconds, username, totalSeconds = seconds) {
+  stopLockCountdown()
+  lockedUsername.value = normalizeUsername(username)
+  lockEndsAtMs.value = Date.now() + seconds * 1000
+  lockTotalSeconds.value = Math.max(totalSeconds, seconds)
+  lockRemainingSeconds.value = seconds
+
+  // คำนวณจากเวลาสิ้นสุดทุกครั้ง (ไม่ลบทีละ 1) เพื่อให้ตัวนับแม่นยำแม้แท็บถูกพักไว้เบื้องหลัง
+  lockTimerId = setInterval(() => {
+    const remaining = Math.max(0, Math.ceil((lockEndsAtMs.value - Date.now()) / 1000))
+    lockRemainingSeconds.value = remaining
+
+    if (remaining <= 0) {
+      stopLockCountdown()
+      lockedUsername.value = ''
+      error.value = ''
+    }
+  }, 250)
+}
+
+onBeforeUnmount(stopLockCountdown)
+
 async function onSubmit() {
+  // ระหว่างถูกล็อกไม่ต้องยิง request ซ้ำ (ป้องกันการกด Enter)
+  if (isLocked.value) return
+
   error.value = ''
 
   console.log('🔐 Attempting to login...')
@@ -69,6 +148,19 @@ async function onSubmit() {
     console.log('✅ Response received:', response.status)
     const data = await response.json()
     console.log('📦 Response data:', data)
+
+    // ผิดครบ 10 ครั้ง (หรือยังอยู่ในช่วงล็อก): เริ่มนับถอยหลังตามเวลาที่ backend ส่งมา
+    if (response.status === 429) {
+      const seconds =
+        Number(data.remainingSeconds) ||
+        (data.lockedUntil ? Math.ceil((Number(data.lockedUntil) - Date.now()) / 1000) : 0)
+
+      if (seconds > 0) {
+        startLockCountdown(seconds, memberId.value, Number(data.lockoutSeconds) || seconds)
+        password.value = ''
+        return
+      }
+    }
 
     if (!response.ok || !data.success) {
       error.value = data.error || 'เกิดข้อผิดพลาดในการเข้าสู่ระบบ'
@@ -191,9 +283,54 @@ async function onSubmit() {
             </label>
           </div>
 
-          <div v-if="error" class="error-msg">{{ error }}</div>
+          <div v-if="isLocked" class="lock-card" role="alert">
+            <!-- ตัวนับเป็น aria-hidden เพราะเปลี่ยนทุกวินาที ข้อความด้านล่างเป็นตัวที่อ่านให้ screen reader -->
+            <div class="lock-ring" aria-hidden="true">
+              <svg viewBox="0 0 160 160" class="lock-ring-svg">
+                <defs>
+                  <linearGradient id="lockRingGradient" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stop-color="#c79bf6" />
+                    <stop offset="100%" stop-color="#ff93b8" />
+                  </linearGradient>
+                </defs>
+                <!-- หูแมว -->
+                <path d="M34 56 L34 14 L72 34 Z" class="ear" stroke-linejoin="round" />
+                <path d="M126 56 L126 14 L88 34 Z" class="ear" stroke-linejoin="round" />
+                <path d="M40 44 L40 26 L57 35 Z" class="ear-inner" />
+                <path d="M120 44 L120 26 L103 35 Z" class="ear-inner" />
+                <!-- วงแหวนเวลา -->
+                <circle class="ring-face" cx="80" cy="88" :r="RING_RADIUS" />
+                <circle class="ring-track" cx="80" cy="88" :r="RING_RADIUS" />
+                <circle
+                  class="ring-progress"
+                  cx="80"
+                  cy="88"
+                  :r="RING_RADIUS"
+                  :stroke-dasharray="RING_CIRCUMFERENCE"
+                  :stroke-dashoffset="ringOffset"
+                />
+              </svg>
+              <div class="ring-center">
+                <svg class="lock-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="4" y="11" width="16" height="10" rx="3" />
+                  <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+                </svg>
+                <span class="ring-time">{{ countdownText }}</span>
+              </div>
+            </div>
 
-          <button type="submit" class="btn-login">Login</button>
+            <h3 class="lock-title">บัญชีถูกล็อกชั่วคราว</h3>
+            <p class="lock-text">
+              ใส่รหัสผ่านผิดครบ 10 ครั้ง เพื่อความปลอดภัยของบัญชี
+              กรุณารอให้ครบเวลาก่อนลองอีกครั้ง
+            </p>
+            <p v-if="unlockClockText" class="lock-until">ลองใหม่ได้ตอน {{ unlockClockText }} น.</p>
+          </div>
+          <div v-else-if="error" class="error-msg">{{ error }}</div>
+
+          <button type="submit" class="btn-login" :disabled="isLocked">
+            {{ isLocked ? `รอ ${countdownText}` : 'Login' }}
+          </button>
         </form>
       </div>
     </section>
@@ -442,6 +579,157 @@ async function onSubmit() {
   padding: 0.58rem 0.72rem;
   font-size: 0.82rem;
   font-weight: 700;
+}
+
+.lock-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding: 1.1rem 1rem 1.15rem;
+  border-radius: 20px;
+  text-align: center;
+  background: linear-gradient(170deg, #fcf7ff, #fff3f8);
+  border: 1px solid #ead9fb;
+  animation: lock-shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) 1;
+}
+
+.lock-ring {
+  position: relative;
+  width: 148px;
+  height: 148px;
+  margin-bottom: 0.35rem;
+}
+
+.lock-ring-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.lock-ring-svg .ear {
+  fill: #ecdcfb;
+  stroke: #ecdcfb;
+  stroke-width: 6;
+}
+
+.lock-ring-svg .ear-inner {
+  fill: #ffc4d8;
+}
+
+.lock-ring-svg .ring-face {
+  fill: #fff;
+}
+
+.lock-ring-svg .ring-track,
+.lock-ring-svg .ring-progress {
+  fill: none;
+  stroke-width: 9;
+}
+
+.lock-ring-svg .ring-track {
+  stroke: #f1e6fc;
+}
+
+.lock-ring-svg .ring-progress {
+  stroke: url(#lockRingGradient);
+  stroke-linecap: round;
+  /* เริ่มนับจากตำแหน่ง 12 นาฬิกา */
+  transform: rotate(-90deg);
+  transform-origin: 80px 88px;
+  transition: stroke-dashoffset 0.3s linear;
+}
+
+.ring-center {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* จุดศูนย์กลางวงแหวนอยู่ต่ำกว่ากึ่งกลางกล่องเล็กน้อย (เพราะมีหูแมวด้านบน) */
+  top: 55%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+}
+
+.lock-icon {
+  color: #b678ee;
+}
+
+.ring-time {
+  font-size: 1.7rem;
+  font-weight: 800;
+  line-height: 1.1;
+  color: #2e2443;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.lock-title {
+  margin: 0.2rem 0 0.3rem;
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: #2e2443;
+}
+
+.lock-text {
+  max-width: 30ch;
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: #8f7aa9;
+}
+
+.lock-until {
+  margin: 0.7rem 0 0;
+  padding: 0.28rem 0.75rem;
+  border-radius: 999px;
+  background: #f4e7ff;
+  border: 1px solid #e4cef8;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #8554bf;
+  font-variant-numeric: tabular-nums;
+}
+
+.btn-login:disabled {
+  cursor: not-allowed;
+  color: #9c86b8;
+  background: #f1e8fb;
+  box-shadow: inset 0 0 0 1px #e2d2f5;
+  transform: none;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes lock-shake {
+  10%,
+  90% {
+    transform: translateX(-1px);
+  }
+  20%,
+  80% {
+    transform: translateX(2px);
+  }
+  30%,
+  50%,
+  70% {
+    transform: translateX(-4px);
+  }
+  40%,
+  60% {
+    transform: translateX(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lock-card {
+    animation: none;
+  }
+  .lock-ring-svg .ring-progress {
+    transition: none;
+  }
 }
 
 .login-image-side {

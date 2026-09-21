@@ -744,6 +744,87 @@ function requireAdmin(req, res, next) {
   next()
 }
 
+// ---- Login lockout (brute-force protection) ----
+// ล็อกอินผิดได้ไม่เกิน 10 ครั้งต่อ username หากผิดครบ 10 ครั้ง
+// จะถูกล็อกไม่ให้ login ชั่วคราว 10 นาที (แม้จะกรอกรหัสถูกในภายหลังก็ตาม)
+const MAX_LOGIN_ATTEMPTS = 10
+const LOGIN_LOCKOUT_MS = 10 * 60 * 1000 // 10 นาที
+
+// เก็บสถานะการพยายาม login ไว้ใน memory ต่อ 1 username
+// รูปแบบ: username -> { count, lockedUntil }
+const loginAttemptsStore = new Map()
+
+function getLoginAttemptKey(username) {
+  return String(username || '').trim().toLowerCase()
+}
+
+function getLoginLockStatus(username) {
+  const key = getLoginAttemptKey(username)
+  const entry = loginAttemptsStore.get(key)
+  if (!entry) return { locked: false, remainingMs: 0 }
+
+  if (entry.lockedUntil && entry.lockedUntil > Date.now()) {
+    return { locked: true, remainingMs: entry.lockedUntil - Date.now() }
+  }
+
+  // หมดเวลาล็อกแล้ว ให้เริ่มนับใหม่
+  if (entry.lockedUntil && entry.lockedUntil <= Date.now()) {
+    loginAttemptsStore.delete(key)
+  }
+
+  return { locked: false, remainingMs: 0 }
+}
+
+function registerFailedLoginAttempt(username) {
+  const key = getLoginAttemptKey(username)
+  const existing = loginAttemptsStore.get(key)
+  const count = (existing?.count || 0) + 1
+
+  if (count >= MAX_LOGIN_ATTEMPTS) {
+    loginAttemptsStore.set(key, {
+      count,
+      lockedUntil: Date.now() + LOGIN_LOCKOUT_MS,
+    })
+    // ผิดครบ 10 ครั้ง -> ถูกล็อกทันที ส่งเวลาที่เหลือกลับไปให้ผู้เรียกใช้
+    return { locked: true, remainingMs: LOGIN_LOCKOUT_MS }
+  }
+
+  loginAttemptsStore.set(key, { count, lockedUntil: null })
+  return { locked: false, remainingMs: 0 }
+}
+
+// สร้าง response ตอนถูกล็อก พร้อม remainingSeconds ให้ frontend ใช้นับถอยหลัง
+// (ใช้ "จำนวนวินาทีที่เหลือ" แทนเวลาสิ้นสุดแบบ timestamp เพื่อไม่ให้ผิดเพี้ยนเมื่อนาฬิกาเครื่องผู้ใช้ไม่ตรงกับเซิร์ฟเวอร์)
+function buildLockedLoginResponse(remainingMs) {
+  const remainingSeconds = Math.max(1, Math.ceil(remainingMs / 1000))
+  const remainingMinutes = Math.ceil(remainingSeconds / 60)
+  return {
+    success: false,
+    locked: true,
+    error: `เข้าสู่ระบบผิดเกินกำหนด กรุณาลองใหม่อีกครั้งใน ${remainingMinutes} นาที`,
+    remainingSeconds,
+    lockoutSeconds: Math.round(LOGIN_LOCKOUT_MS / 1000),
+    lockedUntil: Date.now() + remainingMs,
+  }
+}
+
+// บันทึกการ login ผิด แล้วตอบกลับ: ถ้าครบ 10 ครั้งให้ตอบ 429 (ถูกล็อก) ทันที
+function respondFailedLogin(res, username) {
+  const attempt = registerFailedLoginAttempt(username)
+  if (attempt.locked) {
+    return res.status(429).json(buildLockedLoginResponse(attempt.remainingMs))
+  }
+
+  return res.status(401).json({
+    success: false,
+    error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง',
+  })
+}
+
+function clearLoginAttempts(username) {
+  loginAttemptsStore.delete(getLoginAttemptKey(username))
+}
+
 async function handleLoginRequest(req, res) {
   const { username, password } = req.body || {}
 
@@ -754,6 +835,11 @@ async function handleLoginRequest(req, res) {
     })
   }
 
+  const lockStatus = getLoginLockStatus(username)
+  if (lockStatus.locked) {
+    return res.status(429).json(buildLockedLoginResponse(lockStatus.remainingMs))
+  }
+
   try {
     const [rows] = await pool.query(
       'SELECT user_id, username, role, full_name, password FROM accounts WHERE username = ? LIMIT 1',
@@ -761,10 +847,7 @@ async function handleLoginRequest(req, res) {
     )
 
     if (rows.length === 0) {
-      return res.status(401).json({
-        success: false,
-        error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง',
-      })
+      return respondFailedLogin(res, username)
     }
 
     const account = rows[0]
@@ -776,11 +859,10 @@ async function handleLoginRequest(req, res) {
       : storedPassword === String(password)
 
     if (!isValidPassword) {
-      return res.status(401).json({
-        success: false,
-        error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง',
-      })
+      return respondFailedLogin(res, username)
     }
+
+    clearLoginAttempts(username)
 
     return res.json({
       success: true,
