@@ -1336,6 +1336,17 @@ async function ensureAdminSchema() {
     ADD COLUMN IF NOT EXISTS is_active TINYINT(1) NOT NULL DEFAULT 1
   `)
 
+  // Extend the existing QR payment table without replacing or removing legacy rows.
+  // Existing records are treated as QR channels when the new type column is added.
+  await pool.query(`
+    ALTER TABLE admin_qrcodes
+    MODIFY COLUMN qr_image VARCHAR(255) NULL DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS type VARCHAR(20) NOT NULL DEFAULT 'qr',
+    ADD COLUMN IF NOT EXISTS bank_name VARCHAR(255) DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS account_name VARCHAR(255) DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS account_number VARCHAR(64) DEFAULT NULL
+  `)
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS shipping_providers (
       provider_id INT NOT NULL AUTO_INCREMENT,
@@ -6407,62 +6418,115 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =>
 })
 
 // ========== Admin QR Codes Management ==========
-// GET /api/admin/qrcodes - list all qrcodes
+const PAYMENT_CHANNEL_FIELDS = `
+  q.qr_id, q.type, q.payment_method, q.bank_name, q.account_name,
+  q.account_number, q.qr_image, q.user_id, q.is_active, q.updated_at,
+  a.username, a.full_name
+`
+
+function normalizePaymentChannelType(value) {
+  const type = String(value || 'qr').trim().toLowerCase()
+  return type === 'bank' ? 'bank' : 'qr'
+}
+
+function normalizeAccountNumber(value) {
+  return String(value || '').replace(/[\s-]/g, '')
+}
+
+function serializePaymentChannel(row) {
+  return {
+    qr_id: row.qr_id,
+    type: normalizePaymentChannelType(row.type),
+    payment_method: row.payment_method || null,
+    bank_name: row.bank_name || null,
+    account_name: row.account_name || null,
+    account_number: row.account_number || null,
+    qr_image: row.qr_image || null,
+    user_id: row.user_id,
+    username: row.username || null,
+    full_name: row.full_name || null,
+    is_active: Boolean(row.is_active),
+    updated_at: row.updated_at,
+  }
+}
+
+function validatePaymentChannel(body, file, existing = null) {
+  const type = normalizePaymentChannelType(body?.type || existing?.type || 'qr')
+  const paymentMethod = String(body?.payment_method ?? existing?.payment_method ?? '').trim()
+  const qrImage = file ? `/uploads/${file.filename}` : existing?.qr_image || null
+
+  if (type === 'qr') {
+    if (!paymentMethod) return { error: 'Payment method name is required' }
+    if (!qrImage) return { error: 'Image file is required for QR payment' }
+    return { type, paymentMethod, bankName: null, accountName: null, accountNumber: null, qrImage }
+  }
+
+  const bankName = String(body?.bank_name ?? existing?.bank_name ?? '').trim()
+  const accountName = String(body?.account_name ?? existing?.account_name ?? '').trim()
+  const accountNumber = normalizeAccountNumber(body?.account_number ?? existing?.account_number)
+
+  if (!bankName) return { error: 'Bank name is required' }
+  if (!accountName) return { error: 'Account name is required' }
+  if (!accountNumber) return { error: 'Account number is required' }
+  if (!/^\d+$/.test(accountNumber)) return { error: 'Account number must contain digits only' }
+
+  return {
+    type,
+    // Keep the legacy payment_method field populated for existing payment records.
+    paymentMethod: paymentMethod || 'bank_transfer',
+    bankName,
+    accountName,
+    accountNumber,
+    qrImage: null,
+  }
+}
+
+async function getPaymentChannel(id) {
+  const [rows] = await pool.query(
+    `SELECT ${PAYMENT_CHANNEL_FIELDS}
+     FROM admin_qrcodes q
+     LEFT JOIN accounts a ON a.user_id = q.user_id
+     WHERE q.qr_id = ?
+     LIMIT 1`,
+    [id],
+  )
+  return rows[0] || null
+}
+
+// GET /api/admin/qrcodes - list all payment channels
 app.get('/api/admin/qrcodes', authenticateToken, requireAdmin, async (_req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT q.qr_id, q.payment_method, q.qr_image, q.user_id, q.is_active, q.updated_at, a.username, a.full_name
+      `SELECT ${PAYMENT_CHANNEL_FIELDS}
        FROM admin_qrcodes q
        LEFT JOIN accounts a ON a.user_id = q.user_id
        ORDER BY q.updated_at DESC`,
     )
 
-    const list = rows.map((r) => ({
-      qr_id: r.qr_id,
-      payment_method: r.payment_method,
-      qr_image: r.qr_image || null,
-      user_id: r.user_id,
-      username: r.username || null,
-      full_name: r.full_name || null,
-      is_active: Boolean(r.is_active),
-      updated_at: r.updated_at,
-    }))
-
-    res.json(list)
+    res.json(rows.map(serializePaymentChannel))
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
 })
 
-// GET /api/qrcodes - public list of active payment QR codes
+// GET /api/qrcodes - public list of active payment channels
 app.get('/api/qrcodes', async (_req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT q.qr_id, q.payment_method, q.qr_image, q.user_id, q.is_active, q.updated_at, a.username, a.full_name
+      `SELECT ${PAYMENT_CHANNEL_FIELDS}
        FROM admin_qrcodes q
        LEFT JOIN accounts a ON a.user_id = q.user_id
        WHERE q.is_active = 1
        ORDER BY q.updated_at DESC`,
     )
 
-    const list = rows.map((r) => ({
-      qr_id: r.qr_id,
-      payment_method: r.payment_method,
-      qr_image: r.qr_image || null,
-      user_id: r.user_id,
-      username: r.username || null,
-      full_name: r.full_name || null,
-      is_active: Boolean(r.is_active),
-      updated_at: r.updated_at,
-    }))
-
-    res.json(list)
+    res.json(rows.map(serializePaymentChannel))
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
 })
 
-// POST /api/admin/qrcodes - upload a new QR image (multipart/form-data: image, payment_method)
+// POST /api/admin/qrcodes - add a QR or bank payment channel
 app.post(
   '/api/admin/qrcodes',
   authenticateToken,
@@ -6470,47 +6534,78 @@ app.post(
   upload.single('image'),
   async (req, res) => {
     try {
-      const payment_method = String(req.body?.payment_method || '').trim()
-      if (!req.file) {
-        return res.status(400).json({ error: 'Image file is required' })
-      }
-
-      const imageUrl = `/uploads/${req.file.filename}`
+      const validated = validatePaymentChannel(req.body, req.file)
+      if (validated.error) return res.status(400).json({ error: validated.error })
       const userId = req.user?.id || null
 
       const [result] = await pool.query(
-        'INSERT INTO admin_qrcodes (payment_method, qr_image, user_id, is_active) VALUES (?, ?, ?, ?)',
-        [payment_method || null, imageUrl, userId, 1],
+        `INSERT INTO admin_qrcodes
+          (type, payment_method, bank_name, account_name, account_number, qr_image, user_id, is_active)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          validated.type,
+          validated.paymentMethod,
+          validated.bankName,
+          validated.accountName,
+          validated.accountNumber,
+          validated.qrImage,
+          userId,
+          1,
+        ],
       )
 
-      const [rows] = await pool.query(
-        'SELECT qr_id, payment_method, qr_image, user_id, is_active, updated_at FROM admin_qrcodes WHERE qr_id = ? LIMIT 1',
-        [result.insertId],
-      )
-      res.status(201).json(rows[0])
+      res.status(201).json(serializePaymentChannel(await getPaymentChannel(result.insertId)))
     } catch (error) {
       res.status(500).json({ error: error.message })
     }
   },
 )
 
-// PATCH /api/admin/qrcodes/:id - update active status or payment method
-app.patch('/api/admin/qrcodes/:id', authenticateToken, requireAdmin, async (req, res) => {
+// PATCH /api/admin/qrcodes/:id - update status, details, and optionally the QR image
+app.patch('/api/admin/qrcodes/:id', authenticateToken, requireAdmin, upload.single('image'), async (req, res) => {
   const id = Number(req.params.id)
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'Invalid id' })
 
-  const { is_active, payment_method } = req.body || {}
-
   try {
+    const existing = await getPaymentChannel(id)
+    if (!existing) return res.status(404).json({ error: 'Not found' })
+    const oldImage = existing.qr_image
+
     const updates = []
     const params = []
-    if (is_active !== undefined) {
+    const body = req.body || {}
+    if (body.is_active !== undefined) {
       updates.push('is_active = ?')
-      params.push(is_active ? 1 : 0)
+      params.push(String(body.is_active).toLowerCase() === 'false' || body.is_active === 0 ? 0 : 1)
     }
-    if (payment_method !== undefined) {
-      updates.push('payment_method = ?')
-      params.push(String(payment_method || '').trim() || null)
+
+    const hasDetails =
+      body.type !== undefined ||
+      body.payment_method !== undefined ||
+      body.bank_name !== undefined ||
+      body.account_name !== undefined ||
+      body.account_number !== undefined ||
+      Boolean(req.file) ||
+      String(body.remove_qr || '').toLowerCase() === 'true'
+
+    let validated = null
+    if (hasDetails) {
+      const validationExisting = { ...existing }
+      if (String(body.remove_qr || '').toLowerCase() === 'true' && !req.file) {
+        validationExisting.qr_image = null
+      }
+      validated = validatePaymentChannel(body, req.file, validationExisting)
+      if (validated.error) return res.status(400).json({ error: validated.error })
+
+      updates.push('type = ?', 'payment_method = ?', 'bank_name = ?', 'account_name = ?', 'account_number = ?', 'qr_image = ?')
+      params.push(
+        validated.type,
+        validated.paymentMethod,
+        validated.bankName,
+        validated.accountName,
+        validated.accountNumber,
+        validated.qrImage,
+      )
     }
 
     if (updates.length === 0) return res.status(400).json({ error: 'No fields to update' })
@@ -6522,30 +6617,35 @@ app.patch('/api/admin/qrcodes/:id', authenticateToken, requireAdmin, async (req,
     )
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Not found' })
 
-    const [rows] = await pool.query(
-      'SELECT qr_id, payment_method, qr_image, user_id, is_active, updated_at FROM admin_qrcodes WHERE qr_id = ? LIMIT 1',
-      [id],
-    )
-    res.json(rows[0])
+    const newImage = validated?.qrImage
+    if (oldImage && newImage !== oldImage) {
+      const oldFilePath = path.join(uploadsDir, path.basename(oldImage))
+      try {
+        await unlink(oldFilePath)
+      } catch {
+        // Ignore missing legacy files.
+      }
+    }
+
+    res.json(serializePaymentChannel(await getPaymentChannel(id)))
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
 })
 
-// DELETE /api/admin/qrcodes/:id - remove QR entry and delete file
+// DELETE /api/admin/qrcodes/:id - remove a payment channel and its uploaded QR file
 app.delete('/api/admin/qrcodes/:id', authenticateToken, requireAdmin, async (req, res) => {
   const id = Number(req.params.id)
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'Invalid id' })
 
   try {
-    const [rows] = await pool.query('SELECT qr_image FROM admin_qrcodes WHERE qr_id = ? LIMIT 1', [
-      id,
-    ])
-    const row = rows[0]
+    const row = await getPaymentChannel(id)
+    if (!row) return res.status(404).json({ error: 'Not found' })
+
     const [result] = await pool.query('DELETE FROM admin_qrcodes WHERE qr_id = ?', [id])
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Not found' })
 
-    if (row && row.qr_image) {
+    if (row.qr_image) {
       const filePath = path.join(uploadsDir, path.basename(row.qr_image))
       try {
         await unlink(filePath)

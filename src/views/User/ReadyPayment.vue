@@ -175,8 +175,8 @@ const isInvalidSlip = computed(() =>
 const selectedPaymentMethod = ref('bank_transfer')
 
 const defaultPaymentMethods = [
-  { id: 'bank_transfer', name: 'โอนเงินผ่านธนาคาร', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px; vertical-align: middle;"><rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect><path d="M9 22v-4h6v4"></path><path d="M8 6h.01"></path><path d="M16 6h.01"></path><path d="M12 6h.01"></path><path d="M12 10h.01"></path><path d="M12 14h.01"></path><path d="M16 10h.01"></path><path d="M16 14h.01"></path><path d="M8 10h.01"></path><path d="M8 14h.01"></path></svg>' },
-  { id: 'promptpay', name: 'พร้อมเพย์', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px; vertical-align: middle;"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>' },
+  { id: 'bank_transfer', type: 'legacy', name: 'โอนเงินผ่านธนาคาร', payment_method: 'bank_transfer' },
+  { id: 'promptpay', type: 'legacy', name: 'พร้อมเพย์', payment_method: 'promptpay' },
 ]
 
 const paymentMethods = ref([])
@@ -210,7 +210,32 @@ const getSelectedPaymentMethodValue = () => {
       String(method.qr_id) === String(selectedPaymentMethod.value) ||
       String(method.id) === String(selectedPaymentMethod.value),
   )
-  return selected?.payment_method || selectedPaymentMethod.value
+  return selected?.payment_method || selected?.bank_name || selectedPaymentMethod.value
+}
+
+const copiedAccountId = ref(null)
+let copiedAccountTimer = null
+
+function formatAccountNumber(value) {
+  const digits = String(value || '').replace(/[\s-]/g, '')
+  if (digits.length === 10) return `${digits.slice(0, 3)}-${digits.slice(3, 4)}-${digits.slice(4, 9)}-${digits.slice(9)}`
+  return digits
+}
+
+async function copyAccountNumber(method) {
+  const accountNumber = String(method.account_number || '').replace(/[\s-]/g, '')
+  if (!accountNumber) return
+  try {
+    await navigator.clipboard.writeText(accountNumber)
+    copiedAccountId.value = method.qr_id || method.id
+    showNotice('คัดลอกเลขบัญชีแล้ว', 'success')
+    clearTimeout(copiedAccountTimer)
+    copiedAccountTimer = setTimeout(() => {
+      copiedAccountId.value = null
+    }, 1800)
+  } catch {
+    showNotice('ไม่สามารถคัดลอกเลขบัญชีได้', 'error')
+  }
 }
 
 const loadPaymentMethods = async () => {
@@ -221,13 +246,17 @@ const loadPaymentMethods = async () => {
     if (Array.isArray(data) && data.length > 0) {
       paymentMethods.value = data.map((item) => ({
         qr_id: item.qr_id,
+        type: item.type || 'qr',
         payment_method: item.payment_method,
+        bank_name: item.bank_name || null,
+        account_name: item.account_name || null,
+        account_number: item.account_number || null,
         qr_image: item.qr_image || null,
         full_name: item.full_name || null,
         id: item.qr_id,
       }))
     } else {
-      paymentMethods.value = defaultPaymentMethods
+      paymentMethods.value = []
     }
   } catch {
     paymentMethods.value = defaultPaymentMethods
@@ -860,18 +889,26 @@ onUnmounted(() => {
                 >
                   <div class="payment-method-summary">
                     <span v-if="method.icon" v-html="method.icon"></span>
-                    <span class="method-name">{{ method.payment_method || method.name }}</span>
+                    <span class="method-name">{{ method.type === 'bank' ? 'บัญชีธนาคาร' : method.payment_method || method.name }}</span>
                   </div>
-                  <div v-if="selectedPaymentMethod === (method.qr_id || method.id)" class="payment-method-qr">
+                  <div v-if="method.type === 'qr' && method.qr_image" class="payment-method-qr">
                     <div class="qr-label">สแกน QR เพื่อชำระเงิน</div>
                     <img
-                      v-if="method.qr_image"
                       :src="getQrImageUrl(method.qr_image)"
                       :alt="method.payment_method || method.name"
                       class="payment-method-qr-image"
                       @click.stop="viewImage(getQrImageUrl(method.qr_image))"
                     />
-                    <div v-else class="qr-missing">ยังไม่มีรูป QR สำหรับวิธีนี้</div>
+                  </div>
+                  <div v-else-if="method.type === 'bank'" class="bank-details" @click.stop>
+                    <div class="bank-details__bank">{{ method.bank_name }}</div>
+                    <div class="bank-details__name">ชื่อบัญชี: {{ method.account_name }}</div>
+                    <div class="bank-details__account-row">
+                      <span class="bank-details__account">{{ formatAccountNumber(method.account_number) }}</span>
+                      <button type="button" class="copy-account-btn" @click="copyAccountNumber(method)">
+                        {{ copiedAccountId === (method.qr_id || method.id) ? '✓ คัดลอกแล้ว' : 'คัดลอก' }}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1402,6 +1439,22 @@ onUnmounted(() => {
   text-align: center;
   font-size: 0.86rem;
 }
+.bank-details {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.95rem;
+  padding: 0.95rem;
+  border-radius: 14px;
+  background: #f6f0ff;
+  border: 1px dashed #d6bff7;
+  color: #4b376e;
+}
+.bank-details__bank { color: #35235b; font-weight: 800; }
+.bank-details__name { font-size: 0.84rem; }
+.bank-details__account-row { display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap; min-width: 0; }
+.bank-details__account { font-weight: 900; letter-spacing: 0.04em; overflow-wrap: anywhere; }
+.copy-account-btn { flex: 0 0 auto; padding: 0.45rem 0.7rem; border: 1px solid #a78bfa; border-radius: 9px; background: #fff; color: #5b21b6; font: inherit; font-size: 0.78rem; font-weight: 800; cursor: pointer; }
+.copy-account-btn:hover { background: #f0e6ff; }
 .payment-method--disabled {
   opacity: 0.55;
   cursor: not-allowed;
