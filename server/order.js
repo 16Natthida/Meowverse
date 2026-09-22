@@ -1353,9 +1353,7 @@ router.patch('/:order_id/import-fee', async (req, res) => {
 router.patch('/:order_id/china-shipping', async (req, res) => {
   const { order_id } = req.params
   const chinaShippingTotal = Number(req.body?.china_shipping_total_thb)
-  const requesterRole = String(req.headers['x-user-role'] || '').trim().toLowerCase()
-
-  if (requesterRole !== 'admin') {
+  if (!isAdminRequest(req)) {
     return res.status(403).json({ error: 'เฉพาะแอดมินเท่านั้นที่แก้ค่าส่งจีนได้' })
   }
 

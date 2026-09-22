@@ -1,17 +1,13 @@
 import express from 'express'
 import { sendServerError } from './security.js'
+import { authenticateToken, requireAdmin } from './auth.js'
 import { SHIPPING_FEE_SETTING_KEYS, DEFAULT_SHIPPING_FEES } from './shippingFees.js'
 
 const router = express.Router()
 
-function requireAdmin(req, res, next) {
-  const role = String(req.headers['x-user-role'] || '').trim().toLowerCase()
-  if (!role) return res.status(401).json({ error: 'Unauthorized' })
-  if (role !== 'admin') return res.status(403).json({ error: 'Forbidden: admin only' })
-  next()
-}
-
-router.use(requireAdmin)
+// ใช้ JWT (req.user) แทน header x-user-role ที่ client ปลอมได้
+// หมายเหตุ: router นี้ mount ที่ /api/admin จึงทำงานกับทุก request ใต้ /api/admin
+router.use(authenticateToken, requireAdmin)
 
 function normalizeProviderPayload(body = {}) {
   return {
@@ -316,7 +312,7 @@ router.patch('/orders/:orderId/shipment', async (req, res) => {
     const orderStatus = 'Shipped'
     const shippedAt = shippingStatus === 'shipped' ? new Date() : null
     const deliveredAt = shippingStatus === 'delivered' ? new Date() : null
-    const updatedBy = Number(req.headers['x-user-id']) || null
+    const updatedBy = Number(req.user?.id) || null
 
     if (shippingRows.length > 0) {
       await connection.query(

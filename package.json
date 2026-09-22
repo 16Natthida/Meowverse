@@ -13,7 +13,9 @@
     "lint": "run-s lint:*",
     "lint:oxlint": "oxlint . --fix",
     "lint:eslint": "eslint . --fix --cache",
-    "format": "prettier --write --experimental-cli src/"
+    "format": "prettier --write --experimental-cli src/",
+    "passwords:check": "node server/scripts/hash_plaintext_passwords.mjs",
+    "passwords:hash": "node server/scripts/hash_plaintext_passwords.mjs --apply"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
