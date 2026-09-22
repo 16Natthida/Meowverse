@@ -740,7 +740,7 @@ const isCancelled = computed(
       .toLowerCase() === 'cancelled',
 )
 
-const onFileChange = async (e) => {
+const onFileChange = (e) => {
   // ✅ บล็อกถ้าสถานะเป็น ReadOnly หรือชำระเงินเรียบร้อยแล้ว (Paid)
   if (isReadOnlyStage.value || isFullyPaid.value || isRoundOpen.value) return
   const file = e.target.files[0]
@@ -758,27 +758,9 @@ const onFileChange = async (e) => {
   slipFile.value = file
   slipPreview.value = URL.createObjectURL(file)
 
-  // ลบส่วนที่เคยยิง API fetch PATCH status ออกไปทั้งหมด
-  // ปล่อยให้หน้าที่การบันทึกสลิปและเปลี่ยนสถานะเป็นของฝั่ง Backend ตอนที่กด confirmPayment
-  // ถ้าสถานะเป็น Invalid import slip → อัปเดตเป็น Import_slip_submitted ทันทีที่แนบสลิปใหม่
-  const currentStatus = String(order.value?.status || '')
-    .trim()
-    .toLowerCase()
-    .replace(/_/g, ' ')
-  if (currentStatus === 'invalid import slip' && order.value?.order_id) {
-    try {
-      const res = await fetch(`${API_BASE_URL}/orders/${order.value.order_id}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'Import_slip_submitted' }),
-      })
-      if (res.ok) {
-        order.value = { ...order.value, status: 'Import_slip_submitted' }
-      }
-    } catch {
-      // ไม่รบกวน UX ถ้า call ล้มเหลว จะ retry ตอน confirmPayment
-    }
-  }
+  // ไม่เปลี่ยนสถานะออเดอร์ตอนแนบไฟล์
+  // สถานะจะเปลี่ยนเป็น Import_slip_submitted ที่ฝั่ง Backend ตอนกดยืนยัน (POST /orders/:id/payment)
+  // ถ้าเปลี่ยนตั้งแต่ตอนแนบไฟล์ ฟอร์มจะถูกล็อกทันทีจนกดยืนยันไม่ได้ และสลิปใหม่จะไม่ถูกส่งขึ้นไป
 }
 
 const editSlipImage = () => {
