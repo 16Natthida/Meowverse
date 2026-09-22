@@ -61,15 +61,22 @@ app.use(securityHeaders())
 const port = Number(process.env.PORT || process.env.API_PORT || 3001)
 const host = process.env.IP || process.env.HOST || '127.0.0.1'
 
-const frontendOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:5173'
-const LOCAL_DEV_ORIGINS = [
-  frontendOrigin,
+// FRONTEND_ORIGIN ใส่ได้หลายค่าคั่นด้วย , เช่น https://meowversepantry.com,https://www.meowversepantry.com
+const frontendOrigins = String(process.env.FRONTEND_ORIGIN || 'http://localhost:5173')
+  .split(',')
+  .map((value) => value.trim().replace(/\/+$/, ''))
+  .filter(Boolean)
+const DEV_ORIGINS = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   'http://localhost:5174',
   'http://127.0.0.1:5174',
-  'http://192.168.1.25:5173'
+  'http://192.168.1.25:5173',
 ]
+// production อนุญาตเฉพาะโดเมนใน FRONTEND_ORIGIN, dev อนุญาต localhost เพิ่ม
+const ALLOWED_ORIGINS = new Set(
+  process.env.NODE_ENV === 'production' ? frontendOrigins : [...frontendOrigins, ...DEV_ORIGINS],
+)
 const CATEGORY_NAME_MAX_LENGTH = 100
 const CATEGORY_DETAIL_MAX_LENGTH = 255
 const CATEGORY_MIN_COUNT = 4
@@ -697,11 +704,11 @@ function normalizeIntakeQuantity(value, fallback = 0) {
 // ใช้งานเหมือนเดิม: upload.single('image') — ดู server/security.js
 const upload = createImageUpload({ uploadsDir })
 
-// CORS: allow requests from LOCAL_DEV_ORIGINS and enable credentials for cookies/auth
+// CORS: อนุญาตเฉพาะ ALLOWED_ORIGINS (ดูด้านบน)
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || LOCAL_DEV_ORIGINS.includes(origin)) {
+      if (!origin || ALLOWED_ORIGINS.has(origin)) {
         return callback(null, true)
       }
       return callback(new Error('Not allowed by CORS'))

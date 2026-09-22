@@ -401,6 +401,7 @@ const ACCESS_RULES = [
   ['GET', '/api/products/public', PUBLIC],
   ['GET', '/api/products/ready-to-ship', PUBLIC],
   ['GET', '/api/products/preorder', PUBLIC],
+  ['GET', '/api/product-images', PUBLIC], // หน้าชำระเงินเรียกอยู่ (ยังไม่มีเส้นนี้ในเซิร์ฟเวอร์ → 404)
   ['GET', '/api/preorder-rounds/active', PUBLIC],
   ['GET', '/api/shipping-providers', PUBLIC],
 
