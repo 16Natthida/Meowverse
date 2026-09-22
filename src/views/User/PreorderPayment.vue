@@ -1989,7 +1989,7 @@ onMounted(async () => {
                       @click.stop="viewImage(getQrImageUrl(method.qr_image))"
                     />
                   </div>
-                  <div v-else-if="method.type === 'bank'" class="bank-details" @click.stop>
+                  <div v-else-if="method.type === 'bank'" class="bank-details">
                     <div class="bank-details__bank">{{ method.bank_name }}</div>
                     <div class="bank-details__name">ชื่อบัญชี: {{ method.account_name }}</div>
                     <div class="bank-details__account-row">
