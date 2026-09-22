@@ -201,11 +201,18 @@ const isReadOnlyStage = computed(() =>
 )
 
 // ✅ ซ่อนปุ่มขอเลื่อนกำหนดชำระเงิน และสกัดการเลือกช่องทางการโอนเมื่อออเดอร์จ่ายเสร็จสมบูรณ์/จัดส่งแล้ว
+// ชำระครบแล้วจริง (แอดมินตรวจสลิปผ่านแล้ว)
 const isFullyPaid = computed(() =>
-  ['paid', 'ready to ship', 'shipped', 'delivered', 'slip submitted', 'import slip submitted'].includes(
-    normalizedOrderStatus.value,
-  ),
+  ['paid', 'ready to ship', 'shipped', 'delivered'].includes(normalizedOrderStatus.value),
 )
+
+// แนบสลิปแล้วแต่แอดมินยังไม่ตรวจ — ยังไม่ถือว่าชำระครบ แต่ต้องล็อกไม่ให้แก้ไขซ้ำ
+const isAwaitingSlipReview = computed(() =>
+  ['slip submitted', 'import slip submitted'].includes(normalizedOrderStatus.value),
+)
+
+// ใช้ล็อกการแก้ไข/แนบสลิป/กดยืนยัน (ทั้งกรณีชำระครบแล้วและกรณีรอตรวจสลิป)
+const isPaymentActionLocked = computed(() => isFullyPaid.value || isAwaitingSlipReview.value)
 
 // ✅ ปรับเงื่อนไข Amount Due ถ้ายืนยันชำระครบ (Paid, Ready to Ship, Shipped, Delivered) ให้แสดงยอดรวม 2 รอบ
 const amountDue = computed(() => {
@@ -742,7 +749,7 @@ const isCancelled = computed(
 
 const onFileChange = (e) => {
   // ✅ บล็อกถ้าสถานะเป็น ReadOnly หรือชำระเงินเรียบร้อยแล้ว (Paid)
-  if (isReadOnlyStage.value || isFullyPaid.value || isRoundOpen.value) return
+  if (isReadOnlyStage.value || isPaymentActionLocked.value || isRoundOpen.value) return
   const file = e.target.files[0]
   if (!file) return
   if (!file.type || !file.type.startsWith('image/')) {
@@ -765,7 +772,7 @@ const onFileChange = (e) => {
 
 const editSlipImage = () => {
   // ✅ บล็อกการคลิกแก้รูปสลิป ถ้าสถานะเป็น ReadOnly หรือชำระเงินเรียบร้อยแล้ว (Paid)
-  if (isReadOnlyStage.value || isFullyPaid.value || isRoundOpen.value) return
+  if (isReadOnlyStage.value || isPaymentActionLocked.value || isRoundOpen.value) return
   if (slipFileInput.value) slipFileInput.value.click()
 }
 
@@ -1047,7 +1054,7 @@ const confirmPayment = async () => {
 }
 
 const submitPostponeRequest = async () => {
-  if (postponeSubmitting.value || isFullyPaid.value) return
+  if (postponeSubmitting.value || isPaymentActionLocked.value) return
   if (!order.value?.order_id) {
     showNotice('ไม่สามารถส่งคำขอเลื่อนสำหรับคำสั่งชั่วคราว กรุณาสร้างออเดอร์ก่อน', 'error')
     return
@@ -1659,7 +1666,7 @@ onMounted(async () => {
 
         <div class="payment-section">
           <div class="payment-sticky">
-            <div v-if="!isFullyPaid && !isMissing" class="section-card postpone-card postpone-card--prominent">
+            <div v-if="!isPaymentActionLocked && !isMissing" class="section-card postpone-card postpone-card--prominent">
               <div v-if="!isWaitingForImportFee" class="postpone-header">
                 <div>
                   <p class="postpone-title" style="display: flex; align-items: center">
@@ -1924,7 +1931,7 @@ onMounted(async () => {
             </div>
 
             <div
-              v-else-if="!isCancelled && !isMissing && !isWaitingForImportFee && !isFullyPaid"
+              v-else-if="!isCancelled && !isMissing && !isWaitingForImportFee && !isPaymentActionLocked"
               class="section-card glass-card payment-panel"
             >
               <h3 class="section-title" style="display: flex; align-items: center">
@@ -1946,7 +1953,7 @@ onMounted(async () => {
               </h3>
               <div
                 class="payment-methods"
-                :style="isFullyPaid || isMissing ? { pointerEvents: 'none', opacity: 0.75 } : {}"
+                :style="isPaymentActionLocked || isMissing ? { pointerEvents: 'none', opacity: 0.75 } : {}"
               >
                 <div
                   v-for="method in paymentMethods"
@@ -2075,7 +2082,7 @@ onMounted(async () => {
                   accept="image/*"
                   @change="onFileChange"
                   class="hidden-input"
-                  :disabled="isReadOnlyStage || isFullyPaid || isRoundOpen || isMissing"
+                  :disabled="isReadOnlyStage || isPaymentActionLocked || isRoundOpen || isMissing"
                 />
                 <div v-if="!slipImageUrl" class="upload-label" @click="editSlipImage">
                   <div class="upload-prompt">
@@ -2106,7 +2113,7 @@ onMounted(async () => {
                     title="คลิกเพื่อดูรูปภาพขนาดเต็ม"
                   />
                   <div
-                    v-if="!(isReadOnlyStage || isFullyPaid || isMissing)"
+                    v-if="!(isReadOnlyStage || isPaymentActionLocked || isMissing)"
                     class="edit-overlay"
                     @click.stop="editSlipImage"
                   >
@@ -2239,12 +2246,21 @@ onMounted(async () => {
               />
 
               <div class="summary-header">
-                <span class="summary-label">{{ isFullyPaid ? 'สถานะการชำระเงิน' : 'ยอดที่ต้องชำระ' }}</span>
+                <span class="summary-label">{{
+                  isFullyPaid || isAwaitingSlipReview ? 'สถานะการชำระเงิน' : 'ยอดที่ต้องชำระ'
+                }}</span>
                 <strong v-if="isFullyPaid" class="summary-amount summary-amount--paid">ชำระครบแล้ว</strong>
+                <strong v-else-if="isAwaitingSlipReview" class="summary-amount summary-amount--pending">
+                  {{ normalizedOrderStatus === 'import slip submitted' ? 'รอตรวจสอบสลิปค่านำเข้า' : 'รอตรวจสอบสลิป' }}
+                </strong>
                 <strong v-else class="summary-amount"> ฿{{ amountDue.toLocaleString() }} </strong>
               </div>
                <div class="summary-note">
-                 สามารถกดบันทึกเพื่ออัปเดตข้อมูลจัดส่งใหม่เข้าสู่ฐานข้อมูลได้
+                 {{
+                   isAwaitingSlipReview
+                     ? 'แนบสลิปเรียบร้อยแล้ว กรุณารอแอดมินตรวจสอบ'
+                     : 'สามารถกดบันทึกเพื่ออัปเดตข้อมูลจัดส่งใหม่เข้าสู่ฐานข้อมูลได้'
+                 }}
                </div>
                <hr class="divider" />
 
@@ -2271,7 +2287,7 @@ onMounted(async () => {
                    <input
                      v-model="termsAccepted"
                      type="checkbox"
-                     :disabled="isReadOnlyStage || isFullyPaid || isRoundOpen || termsLoading || !!termsError"
+                     :disabled="isReadOnlyStage || isPaymentActionLocked || isRoundOpen || termsLoading || !!termsError"
                    />
                    <span>ฉันได้อ่านและยอมรับกฎกติกาและเงื่อนไขของร้านแล้ว</span>
                  </label>
@@ -2283,7 +2299,7 @@ onMounted(async () => {
                  v-if="normalizedOrderStatus !== 'delayed'"
                  class="btn-checkout"
                  @click="confirmPayment"
-                 :disabled="loading || isReadOnlyStage || isFullyPaid || isRoundOpen || !termsAccepted"
+                 :disabled="loading || isReadOnlyStage || isPaymentActionLocked || isRoundOpen || !termsAccepted"
                >
                 {{
                   loading
@@ -2901,6 +2917,10 @@ onMounted(async () => {
 .summary-amount--paid {
   color: #059669;
   font-size: 1.1rem;
+}
+.summary-amount--pending {
+  color: #b45309;
+  font-size: 1.05rem;
 }
 .summary-note {
   color: #7d6e9a;
