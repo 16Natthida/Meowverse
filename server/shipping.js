@@ -1,4 +1,5 @@
 import express from 'express'
+import { sendServerError } from './security.js'
 import { SHIPPING_FEE_SETTING_KEYS, DEFAULT_SHIPPING_FEES } from './shippingFees.js'
 
 const router = express.Router()
@@ -33,7 +34,7 @@ router.get('/shipping-providers', async (req, res) => {
     res.json(rows)
   } catch (error) {
     console.error('Shipping providers API Error:', error)
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
@@ -63,7 +64,7 @@ router.post('/shipping-providers', async (req, res) => {
       return res.status(409).json({ error: 'มีรหัสบริษัทขนส่งนี้อยู่แล้ว' })
     }
     console.error('Create shipping provider error:', error)
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
@@ -99,7 +100,7 @@ router.patch('/shipping-providers/:providerId', async (req, res) => {
       return res.status(409).json({ error: 'มีรหัสบริษัทขนส่งนี้อยู่แล้ว' })
     }
     console.error('Update shipping provider error:', error)
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
@@ -127,7 +128,7 @@ router.get('/shipping-fees', async (req, res) => {
     })
   } catch (error) {
     console.error('Get shipping fees error:', error)
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
@@ -158,7 +159,7 @@ router.patch('/shipping-fees', async (req, res) => {
     res.json({ ready_fee: readyFee, preorder_fee: preorderFee })
   } catch (error) {
     console.error('Update shipping fees error:', error)
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
@@ -259,7 +260,7 @@ router.get('/shipping-orders', async (req, res) => {
     res.json(formattedOrders)
   } catch (error) {
     console.error('Shipping API Error:', error)
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
@@ -365,7 +366,7 @@ router.patch('/orders/:orderId/shipment', async (req, res) => {
   } catch (error) {
     await connection.rollback()
     console.error('Update shipment error:', error)
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   } finally {
     connection.release()
   }
@@ -393,7 +394,7 @@ router.patch('/orders/:orderId/status', async (req, res) => {
     res.json({ message: 'อัปเดตสถานะสำเร็จ', order_id: orderId })
   } catch (error) {
     console.error('Update Status Error:', error)
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 

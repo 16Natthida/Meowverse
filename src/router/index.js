@@ -1,3 +1,4 @@
+import { hasAuthSession } from '@/composables/useAuth'
 import { createRouter, createWebHistory } from 'vue-router'
 import LoginView from '../views/LoginView.vue'
 import UserDashboard from '../views/User/UserDashboard.vue'
@@ -13,9 +14,7 @@ const router = createRouter({
       path: '/',
       redirect: () => {
         // Check if user is logged in
-        const isAuthenticated = Boolean(
-          localStorage.getItem('meowverse-auth') || sessionStorage.getItem('meowverse-auth'),
-        )
+        const isAuthenticated = hasAuthSession()
 
         if (!isAuthenticated) {
           return '/login'
@@ -269,9 +268,8 @@ const router = createRouter({
 })
 
 router.beforeEach((to, from, next) => {
-  const isAuthenticated = Boolean(
-    localStorage.getItem('meowverse-auth') || sessionStorage.getItem('meowverse-auth'),
-  )
+  // ต้องมีทั้ง flag และ JWT ถึงจะถือว่าล็อกอินอยู่
+  const isAuthenticated = hasAuthSession()
 
   // ดึงข้อมูล role ของผู้ใช้
   const userRole = (() => {

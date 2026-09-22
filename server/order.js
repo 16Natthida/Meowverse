@@ -6,8 +6,41 @@ import { getShippingFeeSettings } from './shippingFees.js'
 import { getFlavorPrice } from './productPricing.js'
 import { getBelowMinimumCartIds } from './preorderCartEligibility.js'
 import { calculateChinaShippingBreakdown, calculateChinaShippingTotal } from './chinaShipping.js'
+import { isAdminRequest, requireOwnership } from './auth.js'
+import { signUploadUrl } from './security.js'
 
 const router = express.Router()
+
+// สิทธิ์ระดับเส้นกำหนดไว้ใน server/auth.js (ACCESS_RULES)
+// ตรงนี้เพิ่มการเช็คว่า user เป็นเจ้าของออเดอร์ทุกเส้นที่มี :order_id (admin ผ่านได้ทุกออเดอร์)
+router.param('order_id', requireOwnership('orders', 'order_id', 'ไม่พบออเดอร์ที่ระบุ'))
+
+// ลูกค้าเปลี่ยนสถานะออเดอร์เองได้กรณีเดียว: แนบสลิปค่านำเข้าใหม่หลังถูกปฏิเสธ
+// (Invalid import slip → Import_slip_submitted) สถานะอื่นทำได้เฉพาะแอดมิน
+async function restrictCustomerStatusChange(req, res, next) {
+  if (isAdminRequest(req)) return next()
+
+  if (req.body?.status !== 'Import_slip_submitted') {
+    return res.status(403).json({ error: 'คุณไม่มีสิทธิ์เปลี่ยนสถานะออเดอร์นี้' })
+  }
+
+  try {
+    const [rows] = await getDB(req).query('SELECT status FROM orders WHERE order_id = ? LIMIT 1', [
+      req.params.order_id,
+    ])
+    const currentStatus = String(rows[0]?.status || '')
+      .trim()
+      .toLowerCase()
+      .replace(/_/g, ' ')
+    if (currentStatus !== 'invalid import slip') {
+      return res.status(403).json({ error: 'คุณไม่มีสิทธิ์เปลี่ยนสถานะออเดอร์นี้' })
+    }
+    return next()
+  } catch (err) {
+    console.error('[restrictCustomerStatusChange]', err)
+    return res.status(500).json({ error: 'เกิดข้อผิดพลาดในการตรวจสอบสิทธิ์' })
+  }
+}
 
 async function getShippingFee(items, runner) {
   const hasPreorder = items.some(isPreorderItem)
@@ -1090,11 +1123,9 @@ router.patch('/:order_id/confirm-receipt', async (req, res) => {
 
 router.get('/:order_id', async (req, res) => {
   const { order_id } = req.params
-  // ผู้เรียก API ต้องระบุตัวตนมาด้วย (query ?user_id=) เพื่อให้เช็คสิทธิ์เจ้าของออเดอร์ได้
-  // รองรับ role admin ผ่าน header x-user-role ให้แอดมินดูออเดอร์ของลูกค้าคนไหนก็ได้
-  const requestUserId = req.query.user_id
-  const requesterRole = String(req.headers['x-user-role'] || '').toLowerCase()
-  const isAdmin = requesterRole === 'admin'
+  // ตัวตนมาจาก JWT (req.user) — admin ดูออเดอร์ของลูกค้าคนไหนก็ได้
+  const isAdmin = isAdminRequest(req)
+  const requestUserId = req.user?.id
 
   try {
     const db = getDB(req)
@@ -1173,8 +1204,9 @@ router.get('/:order_id', async (req, res) => {
       shipped_at: order.shipped_at || null,
       delivered_at: order.delivered_at || null,
       // slip แยกตาม type ให้ frontend ใช้ตัดสินใจเอง
-      slip_url: orderFeePayment?.slip_img || null, // สลิปรอบแรก (Order_fee)
-      import_fee_slip_url: importFeePayment?.slip_img || null, // สลิปรอบค่านำเข้า
+      // URL สลิปแบบมีลายเซ็น (หมดอายุ ~1 ชม.) — ไฟล์สลิปเปิดตรงๆ โดยไม่มีลายเซ็นไม่ได้
+      slip_url: signUploadUrl(orderFeePayment?.slip_img) || null, // สลิปรอบแรก (Order_fee)
+      import_fee_slip_url: signUploadUrl(importFeePayment?.slip_img) || null, // สลิปรอบค่านำเข้า
       payment_method: latestPayment?.payment_method || null,
       payment_status: latestPayment?.status || null,
     }
@@ -1446,7 +1478,7 @@ router.patch('/:order_id/cancel', async (req, res) => {
 // PATCH /api/orders/:order_id/status
 // อัปเดตสถานะออเดอร์ (ใช้เมื่อแอดมินปฏิเสธสลิป → Invalid slip)
 // ─────────────────────────────────────────────
-router.patch('/:order_id/status', async (req, res) => {
+router.patch('/:order_id/status', restrictCustomerStatusChange, async (req, res) => {
   const { order_id } = req.params
   const { status } = req.body || {}
 

@@ -1,11 +1,12 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../../composables/useAuth'
 
 const router = useRouter()
-const { getUser } = useAuth()
-const currentUser = computed(() => getUser())
+const { logoutAllDevices } = useAuth()
+const loggingOutAll = ref(false)
+const logoutAllError = ref(null)
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 
 const profile = ref({
@@ -36,10 +37,9 @@ function updateStoredUser(data) {
   stored.setItem('meowverse-user', JSON.stringify({ ...existing, ...data }))
 }
 
+// JWT ถูกแนบให้อัตโนมัติโดย src/utils/authFetch.js
 const authHeaders = () => ({
   'Content-Type': 'application/json',
-  'x-user-role': String(currentUser.value?.role || '').toLowerCase() || 'user',
-  'x-user-id': String(currentUser.value?.user_id || currentUser.value?.id || ''),
 })
 
 async function fetchProfile() {
@@ -103,6 +103,21 @@ async function saveProfile() {
     error.value = err.message
   } finally {
     saving.value = false
+  }
+}
+
+// ออกจากระบบทุกอุปกรณ์ — ใช้เมื่อลืม logout ที่เครื่องอื่น หรือสงสัยว่ามีคนเข้าบัญชี
+async function handleLogoutAllDevices() {
+  if (!window.confirm('ออกจากระบบในทุกอุปกรณ์ รวมถึงเครื่องนี้ใช่หรือไม่?')) return
+  loggingOutAll.value = true
+  logoutAllError.value = null
+  try {
+    await logoutAllDevices()
+    router.push('/login')
+  } catch (err) {
+    logoutAllError.value = err.message
+  } finally {
+    loggingOutAll.value = false
   }
 }
 
@@ -177,6 +192,22 @@ onMounted(async () => {
         <div class="message-row">
           <p v-if="success" class="success-box">{{ success }}</p>
           <p v-if="!success && !error" class="hint-text">คุณสามารถแก้ไขข้อมูลส่วนตัวในหน้านี้ได้</p>
+        </div>
+
+        <div class="security-section">
+          <div>
+            <p class="profile-label">ความปลอดภัยของบัญชี</p>
+            <p class="hint-text">ลืมออกจากระบบที่เครื่องอื่น หรือสงสัยว่ามีคนใช้บัญชีของคุณ?</p>
+            <p v-if="logoutAllError" class="error-box">{{ logoutAllError }}</p>
+          </div>
+          <button
+            class="btn btn--danger-outline"
+            type="button"
+            @click="handleLogoutAllDevices"
+            :disabled="loggingOutAll"
+          >
+            {{ loggingOutAll ? 'กำลังออกจากระบบ...' : 'ออกจากระบบทุกอุปกรณ์' }}
+          </button>
         </div>
       </div>
     </div>
@@ -326,6 +357,36 @@ textarea {
 .btn--primary {
   background: linear-gradient(160deg, #7d5cff, #5d3aff);
   color: #fff;
+}
+
+.security-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid #ece4ff;
+}
+
+.security-section .hint-text {
+  margin-top: 0.25rem;
+}
+
+.btn--danger-outline {
+  background: #fff;
+  color: #b91c1c;
+  border: 1.5px solid #f5b5b5;
+}
+
+.btn--danger-outline:hover:not(:disabled) {
+  background: #fef2f2;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .success-box,

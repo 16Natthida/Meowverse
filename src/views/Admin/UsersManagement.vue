@@ -100,7 +100,15 @@
 
           <div class="form-group">
             <label for="edit-password">รหัสผ่าน (ปล่อยว่างไว้เพื่อไม่เปลี่ยนแปลง):</label>
-            <input v-model="editingUser.password" type="password" id="edit-password" />
+            <input
+              v-model="editingUser.password"
+              type="password"
+              id="edit-password"
+              placeholder="อย่างน้อย 8 ตัวอักษร"
+              minlength="8"
+              maxlength="72"
+              autocomplete="new-password"
+            />
           </div>
 
           <div class="form-group">

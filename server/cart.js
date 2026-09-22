@@ -6,7 +6,11 @@
 import express from 'express'
 import { getFlavorPrice } from './productPricing.js'
 import { getBelowMinimumCartIds } from './preorderCartEligibility.js'
+import { requireOwnership } from './auth.js'
 const router = express.Router()
+
+// user แก้/ลบได้เฉพาะรายการในตะกร้าของตัวเอง (สิทธิ์ระดับเส้นอยู่ใน server/auth.js)
+router.param('cart_id', requireOwnership('cart', 'cart_id', 'ไม่พบสินค้าในตะกร้า'))
 
 function normalizeItemType(value) {
   const type = String(value || '')

@@ -2,12 +2,37 @@ import cors from 'cors'
 import bcrypt from 'bcryptjs'
 import dotenv from 'dotenv'
 import express from 'express'
-import multer from 'multer'
 import mysql from 'mysql2/promise'
 import path from 'node:path'
 import { mkdirSync } from 'node:fs'
 import { unlink } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
+import {
+  assertAuthConfig,
+  authenticateToken,
+  authorizeApiRequest,
+  ensureAuthSchema,
+  requireAdmin,
+  requireOwnership,
+  revokeAllUserTokens,
+  revokeToken,
+  signAccessToken,
+} from './auth.js'
+import {
+  apiErrorHandler,
+  apiRateLimiter,
+  createImageUpload,
+  createUploadsGuard,
+  loginRateLimiter,
+  parseTrustProxy,
+  registerRateLimiter,
+  safeEqualStrings,
+  securityHeaders,
+  sendServerError,
+  signUploadUrl,
+  uploadsStaticOptions,
+  validatePassword,
+} from './security.js'
 import cartRouter from './cart.js'
 import orderRouter, { deleteOrder, restoreReadyOrderStock } from './order.js'
 import shippingRouter from './shipping.js'
@@ -22,8 +47,16 @@ import {
 } from './productPricing.js'
 
 dotenv.config()
+assertAuthConfig()
 
 const app = express()
+
+// ถ้า API อยู่หลัง reverse proxy (nginx / Cloudflare) ให้ตั้ง TRUST_PROXY=1 ใน .env
+// เพื่อให้ rate limit เห็น IP จริงของผู้ใช้
+app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY))
+
+// Security headers (CSP, frame-ancestors, nosniff ฯลฯ) — ดู server/security.js
+app.use(securityHeaders())
 
 const port = Number(process.env.PORT || process.env.API_PORT || 3001)
 const host = process.env.IP || process.env.HOST || '127.0.0.1'
@@ -63,7 +96,7 @@ const pool = mysql.createPool({
   password: process.env.DB_PASSWORD || '',
   database: process.env.DB_NAME || 'meowverse',
   waitForConnections: true,
-  connectionLimit: 70,
+  connectionLimit: 100,
   queueLimit: 0,
 })
 
@@ -660,28 +693,9 @@ function normalizeIntakeQuantity(value, fallback = 0) {
   return Math.max(0, Math.trunc(parsed))
 }
 
-const uploadStorage = multer.diskStorage({
-  destination: (_req, _file, callback) => {
-    callback(null, uploadsDir)
-  },
-  filename: (_req, file, callback) => {
-    const extension = path.extname(file.originalname) || '.jpg'
-    const safeName = `${Date.now()}-${Math.round(Math.random() * 1e9)}${extension}`
-    callback(null, safeName)
-  },
-})
-
-const upload = multer({
-  storage: uploadStorage,
-  limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (_req, file, callback) => {
-    // อนุญาตเฉพาะไฟล์รูปภาพเท่านั้น (ใช้กับสลิปโอนเงินและรูปสินค้า/QR code)
-    if (!file.mimetype || !file.mimetype.startsWith('image/')) {
-      return callback(new Error('อนุญาตเฉพาะไฟล์รูปภาพเท่านั้น'))
-    }
-    callback(null, true)
-  },
-})
+// อัปโหลดรูป: ตรวจชนิดไฟล์จากเนื้อไฟล์จริง, ตั้งชื่อ/นามสกุลเอง, สลิปแยกไป uploads/slips/
+// ใช้งานเหมือนเดิม: upload.single('image') — ดู server/security.js
+const upload = createImageUpload({ uploadsDir })
 
 // CORS: allow requests from LOCAL_DEV_ORIGINS and enable credentials for cookies/auth
 app.use(
@@ -693,10 +707,21 @@ app.use(
       return callback(new Error('Not allowed by CORS'))
     },
     credentials: true,
+    // token ที่ต่ออายุแล้วส่งกลับมาใน header นี้ (ดู server/auth.js)
+    exposedHeaders: ['X-Refreshed-Token'],
   }),
 )
 app.use(express.json({ limit: '2mb' }))
-app.use('/uploads', express.static(uploadsDir))
+// ไฟล์สลิปต้องมี URL ที่เซ็นแล้ว, ทุกไฟล์ถูก sandbox ไม่ให้รันสคริปต์ได้
+app.use('/uploads', createUploadsGuard({ db: pool }), express.static(uploadsDir, uploadsStaticOptions))
+
+// ตรวจสิทธิ์ทุกเส้นใต้ /api จากตาราง ACCESS_RULES ใน server/auth.js (default = admin only)
+// ต้องอยู่ก่อน mount router ทุกตัว
+app.use('/api', apiRateLimiter)
+app.use('/api', authorizeApiRequest)
+// user ทั่วไปเข้าถึงได้เฉพาะออเดอร์ของตัวเอง (admin ผ่านได้ทุกออเดอร์)
+app.param('order_id', requireOwnership('orders', 'order_id', 'ไม่พบออเดอร์ที่ระบุ'))
+
 app.use('/api/cart', cartRouter)
 app.use('/api/orders', orderRouter)
 app.use('/api/admin', shippingRouter)
@@ -714,35 +739,11 @@ app.get('/api/shipping-providers', async (_req, res) => {
     res.json(rows)
   } catch (error) {
     console.error('Public shipping providers API Error:', error)
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
-function authenticateToken(req, res, next) {
-  const roleHeader = String(req.headers['x-user-role'] || '')
-    .trim()
-    .toLowerCase()
-  const userIdHeader = String(req.headers['x-user-id'] || '').trim()
-
-  if (!roleHeader) {
-    return res.status(401).json({ error: 'Unauthorized' })
-  }
-
-  req.user = {
-    role: roleHeader,
-    id: userIdHeader ? Number(userIdHeader) : null,
-  }
-
-  next()
-}
-
-function requireAdmin(req, res, next) {
-  if (req.user?.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden: admin only' })
-  }
-
-  next()
-}
+// authenticateToken / requireAdmin ย้ายไปอยู่ที่ server/auth.js (ใช้ JWT แทน header x-user-*)
 
 // ---- Login lockout (brute-force protection) ----
 // ล็อกอินผิดได้ไม่เกิน 10 ครั้งต่อ username หากผิดครบ 10 ครั้ง
@@ -842,7 +843,7 @@ async function handleLoginRequest(req, res) {
 
   try {
     const [rows] = await pool.query(
-      'SELECT user_id, username, role, full_name, password FROM accounts WHERE username = ? LIMIT 1',
+      'SELECT user_id, username, role, full_name, password, token_version FROM accounts WHERE username = ? LIMIT 1',
       [String(username).trim()],
     )
 
@@ -856,16 +857,36 @@ async function handleLoginRequest(req, res) {
 
     const isValidPassword = isHashedPassword
       ? await bcrypt.compare(String(password), storedPassword)
-      : storedPassword === String(password)
+      : Boolean(storedPassword) && safeEqualStrings(storedPassword, String(password))
 
     if (!isValidPassword) {
       return respondFailedLogin(res, username)
     }
 
+    // บัญชีเก่าที่ยังเก็บรหัสผ่านแบบไม่เข้ารหัส → แปลงเป็น bcrypt ทันทีที่ login สำเร็จ
+    if (!isHashedPassword) {
+      try {
+        const upgradedHash = await bcrypt.hash(String(password), 10)
+        await pool.query('UPDATE accounts SET password = ? WHERE user_id = ?', [
+          upgradedHash,
+          account.user_id,
+        ])
+      } catch (upgradeError) {
+        console.error('[login] failed to upgrade legacy password hash:', upgradeError.message)
+      }
+    }
+
     clearLoginAttempts(username)
+
+    // "จดจำฉัน" → token อายุยาวขึ้น (เฉพาะ user ทั่วไป) — ดู getTokenPolicy ใน server/auth.js
+    const remember = req.body?.remember === true || req.body?.remember === 'true'
+    const { token, expiresAt } = signAccessToken(account, { remember })
 
     return res.json({
       success: true,
+      token,
+      tokenType: 'Bearer',
+      expiresAt,
       user: {
         user_id: account.user_id,
         username: account.username,
@@ -874,51 +895,47 @@ async function handleLoginRequest(req, res) {
       },
     })
   } catch (error) {
-    return res.status(500).json({ success: false, error: error.message })
+    return sendServerError(res, error, 'error', { success: false })
   }
 }
 
-app.post('/login', handleLoginRequest)
-app.post('/api/login', handleLoginRequest)
+app.post('/login', loginRateLimiter, handleLoginRequest)
+app.post('/api/login', loginRateLimiter, handleLoginRequest)
 
-app.post('/register', async (req, res) => {
-  const { username, password, full_name } = req.body || {}
-
-  if (!username || !password || !full_name) {
-    return res.status(400).json({ success: false, error: 'กรุณากรอกข้อมูลให้ครบถ้วน' })
-  }
-
-  const trimmedUsername = String(username).trim()
-
+// ออกจากระบบเครื่องนี้: ยกเลิก token ใบที่ใช้อยู่
+app.post('/api/logout', async (req, res) => {
   try {
-    const [existing] = await pool.query(
-      'SELECT user_id FROM accounts WHERE username = ? LIMIT 1',
-      [trimmedUsername],
-    )
-    if (existing.length > 0) {
-      return res.status(409).json({ success: false, error: 'ชื่อผู้ใช้นี้มีอยู่แล้ว กรุณาใช้ชื่ออื่น' })
-    }
-
-    const hashedPassword = await bcrypt.hash(String(password), 10)
-    await pool.query(
-      'INSERT INTO accounts (username, password, full_name, role) VALUES (?, ?, ?, "User")',
-      [trimmedUsername, hashedPassword, String(full_name).trim()],
-    )
-
-    return res.json({ success: true, message: 'ลงทะเบียนสำเร็จ' })
+    await revokeToken(pool, {
+      tokenId: req.user.tokenId,
+      userId: req.user.id,
+      expiresAtSeconds: req.user.tokenExpiresAt,
+    })
+    return res.json({ success: true })
   } catch (error) {
-    if (error.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ success: false, error: 'ชื่อผู้ใช้นี้มีอยู่แล้ว กรุณาใช้ชื่ออื่น' })
-    }
-    return res.status(500).json({ success: false, error: error.message })
+    return sendServerError(res, error)
   }
 })
 
-app.post('/api/register', async (req, res) => {
+// ออกจากระบบทุกอุปกรณ์: token ทุกใบของบัญชีนี้ใช้ไม่ได้ทันที
+app.post('/api/logout-all', async (req, res) => {
+  try {
+    await revokeAllUserTokens(pool, req.user.id)
+    return res.json({ success: true })
+  } catch (error) {
+    return sendServerError(res, error)
+  }
+})
+
+app.post('/register', registerRateLimiter, async (req, res) => {
   const { username, password, full_name } = req.body || {}
 
   if (!username || !password || !full_name) {
     return res.status(400).json({ success: false, error: 'กรุณากรอกข้อมูลให้ครบถ้วน' })
+  }
+
+  const passwordError = validatePassword(password, { username })
+  if (passwordError) {
+    return res.status(400).json({ success: false, error: passwordError })
   }
 
   const trimmedUsername = String(username).trim()
@@ -943,7 +960,45 @@ app.post('/api/register', async (req, res) => {
     if (error.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ success: false, error: 'ชื่อผู้ใช้นี้มีอยู่แล้ว กรุณาใช้ชื่ออื่น' })
     }
-    return res.status(500).json({ success: false, error: error.message })
+    return sendServerError(res, error, 'error', { success: false })
+  }
+})
+
+app.post('/api/register', registerRateLimiter, async (req, res) => {
+  const { username, password, full_name } = req.body || {}
+
+  if (!username || !password || !full_name) {
+    return res.status(400).json({ success: false, error: 'กรุณากรอกข้อมูลให้ครบถ้วน' })
+  }
+
+  const passwordError = validatePassword(password, { username })
+  if (passwordError) {
+    return res.status(400).json({ success: false, error: passwordError })
+  }
+
+  const trimmedUsername = String(username).trim()
+
+  try {
+    const [existing] = await pool.query(
+      'SELECT user_id FROM accounts WHERE username = ? LIMIT 1',
+      [trimmedUsername],
+    )
+    if (existing.length > 0) {
+      return res.status(409).json({ success: false, error: 'ชื่อผู้ใช้นี้มีอยู่แล้ว กรุณาใช้ชื่ออื่น' })
+    }
+
+    const hashedPassword = await bcrypt.hash(String(password), 10)
+    await pool.query(
+      'INSERT INTO accounts (username, password, full_name, role) VALUES (?, ?, ?, "User")',
+      [trimmedUsername, hashedPassword, String(full_name).trim()],
+    )
+
+    return res.json({ success: true, message: 'ลงทะเบียนสำเร็จ' })
+  } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ success: false, error: 'ชื่อผู้ใช้นี้มีอยู่แล้ว กรุณาใช้ชื่ออื่น' })
+    }
+    return sendServerError(res, error, 'error', { success: false })
   }
 })
 
@@ -952,6 +1007,11 @@ app.post('/api/users', authenticateToken, requireAdmin, async (req, res) => {
 
   if (!username || !password || !full_name) {
     return res.status(400).json({ error: 'Username, password, and full_name required' })
+  }
+
+  const passwordError = validatePassword(password, { username })
+  if (passwordError) {
+    return res.status(400).json({ error: passwordError })
   }
 
   const safeRole = String(role || '')
@@ -992,7 +1052,7 @@ app.post('/api/users', authenticateToken, requireAdmin, async (req, res) => {
     if (error.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: 'ชื่อผู้ใช้นี้มีอยู่แล้ว กรุณาใช้ชื่ออื่น' })
     }
-    return res.status(500).json({ error: error.message })
+    return sendServerError(res, error)
   }
 })
 
@@ -1022,7 +1082,7 @@ app.get('/api/users/me', authenticateToken, async (req, res) => {
       notes: user.notes || '',
     })
   } catch (error) {
-    return res.status(500).json({ error: error.message })
+    return sendServerError(res, error)
   }
 })
 
@@ -1050,7 +1110,7 @@ app.put('/api/users/me', authenticateToken, async (req, res) => {
 
     return res.json({ message: 'Profile updated successfully' })
   } catch (error) {
-    return res.status(500).json({ error: error.message })
+    return sendServerError(res, error)
   }
 })
 
@@ -1064,6 +1124,13 @@ app.put('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res
 
   if (!username || !full_name) {
     return res.status(400).json({ error: 'Username and full_name are required' })
+  }
+
+  if (password !== undefined && password !== null && String(password).trim()) {
+    const passwordError = validatePassword(password, { username })
+    if (passwordError) {
+      return res.status(400).json({ error: passwordError })
+    }
   }
 
   try {
@@ -1088,6 +1155,8 @@ app.put('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res
       const hashedPassword = await bcrypt.hash(password, 10)
       updateFields.push('password = ?')
       updateValues.push(hashedPassword)
+      // เปลี่ยนรหัสผ่านแล้ว → token เก่าทุกเครื่องของ user คนนี้ใช้ไม่ได้ทันที
+      updateFields.push('token_version = token_version + 1')
     }
 
     if (phone_number !== undefined) {
@@ -1113,7 +1182,7 @@ app.put('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res
 
     return res.json({ message: 'User updated successfully' })
   } catch (error) {
-    return res.status(500).json({ error: error.message })
+    return sendServerError(res, error)
   }
 })
 
@@ -1137,7 +1206,7 @@ app.delete('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, 
 
     return res.json({ message: 'User deleted successfully' })
   } catch (error) {
-    return res.status(500).json({ error: error.message })
+    return sendServerError(res, error)
   }
 })
 
@@ -1885,7 +1954,7 @@ app.get('/api/health', async (_req, res) => {
     await pool.query('SELECT 1')
     res.json({ ok: true })
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -1902,7 +1971,7 @@ app.get('/api/categories', async (_req, res) => {
       })),
     )
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -1964,7 +2033,7 @@ app.post('/api/categories', async (req, res) => {
       isActive: true,
     })
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2003,7 +2072,7 @@ app.patch('/api/categories/:id/status', async (req, res) => {
       isActive: Boolean(rows[0].isActive),
     })
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2049,7 +2118,7 @@ app.delete('/api/categories/:id', async (req, res) => {
     await pool.query('DELETE FROM categories WHERE cat_id = ?', [categoryId])
     res.status(204).send()
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2058,7 +2127,7 @@ app.get('/api/products', async (_req, res) => {
     const rows = await queryAllProducts()
     res.json(rows)
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2117,7 +2186,7 @@ app.get('/api/site-settings/banner', async (_req, res) => {
       imageUrl: rows[0]?.imageUrl || DEFAULT_BANNER_IMAGE_URL,
     })
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2132,7 +2201,7 @@ app.get('/api/site-settings/logo', async (_req, res) => {
       imageUrl: rows[0]?.imageUrl || DEFAULT_BRAND_LOGO_URL,
     })
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2154,7 +2223,7 @@ app.get('/api/site-settings/theme', async (_req, res) => {
       accent: settingsMap.get('theme_accent') || DEFAULT_THEME_ACCENT,
     })
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2178,7 +2247,7 @@ app.put('/api/site-settings/banner', authenticateToken, requireAdmin, async (req
 
     res.json({ imageUrl })
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2197,7 +2266,7 @@ app.put('/api/site-settings/logo', authenticateToken, requireAdmin, async (req, 
 
     res.json({ imageUrl })
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2224,7 +2293,7 @@ app.put('/api/site-settings/theme', authenticateToken, requireAdmin, async (req,
 
     res.json({ primary, accent })
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2285,7 +2354,7 @@ app.post('/api/products', async (req, res) => {
     res.status(201).json(createdProduct)
   } catch (error) {
     await connection.rollback()
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   } finally {
     connection.release()
   }
@@ -2366,7 +2435,7 @@ app.put('/api/products/:id', async (req, res) => {
     res.json(updatedProduct)
   } catch (error) {
     await connection.rollback()
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   } finally {
     connection.release()
   }
@@ -2402,7 +2471,7 @@ app.patch('/api/products/:id/status', async (req, res) => {
     const [updatedProduct] = await queryProductsByIds([productId])
     res.json(updatedProduct)
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2419,7 +2488,7 @@ app.delete('/api/products/:id', async (req, res) => {
 
     res.status(204).send()
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2545,7 +2614,7 @@ app.get('/api/products/public', async (req, res) => {
 
     res.json(products)
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2627,7 +2696,7 @@ app.get('/api/products/ready-to-ship', async (req, res) => {
 
     res.json(products)
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2721,7 +2790,7 @@ app.get('/api/products/preorder', async (req, res) => {
 
     res.json(products)
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2806,7 +2875,7 @@ app.get('/api/products/preorder', async (req, res) => {
 
     res.json(products)
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2885,7 +2954,7 @@ app.patch('/api/products/:id/stock', async (req, res) => {
 
     res.json(updatedProduct)
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2952,7 +3021,7 @@ app.get('/api/products/alerts/low-stock', async (req, res) => {
 
     res.json(alerts)
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -2979,7 +3048,7 @@ app.get('/api/preorder-rounds', authenticateToken, requireAdmin, async (_req, re
 
     res.json(rounds.filter((round) => !isImportFeeOnlyRoundName(round.name)))
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -3005,7 +3074,7 @@ app.get('/api/preorder-rounds/active', async (_req, res) => {
 
     res.json(rounds.filter((round) => !isImportFeeOnlyRoundName(round.round_name)))
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -3034,7 +3103,7 @@ app.get('/api/preorder-notifications', async (req, res) => {
     )
     res.json({ notifications: rows })
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -3111,7 +3180,7 @@ app.get('/api/admin/preorder-progress', authenticateToken, requireAdmin, async (
 
     res.json({ progress })
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -3258,7 +3327,7 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
       products,
     })
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -3307,7 +3376,7 @@ app.post('/api/preorder-rounds', authenticateToken, requireAdmin, async (req, re
 
     res.status(201).json(newRound)
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -3402,7 +3471,7 @@ app.put('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
 
     res.json({ ...updatedRound[0], autoOrderSummary })
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -3420,7 +3489,7 @@ app.delete('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (r
 
     res.status(204).send()
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -3526,7 +3595,7 @@ app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, a
 
     res.json({ message: 'Products added to round successfully' })
   } catch (error) {
-    res.status(500).json({ message: error.message })
+    sendServerError(res, error, 'message')
   }
 })
 
@@ -3552,7 +3621,7 @@ app.delete(
 
       res.status(204).send()
     } catch (error) {
-      res.status(500).json({ message: error.message })
+      sendServerError(res, error, 'message')
     }
   },
 )
@@ -3642,7 +3711,7 @@ app.put(
 
       res.json({ message: 'Product updated successfully' })
     } catch (error) {
-      res.status(500).json({ message: error.message })
+      sendServerError(res, error, 'message')
     }
   },
 )
@@ -3672,7 +3741,7 @@ app.get(
 
       res.json(stockInfo)
     } catch (error) {
-      res.status(500).json({ message: error.message })
+      sendServerError(res, error, 'message')
     }
   },
 )
@@ -3836,7 +3905,7 @@ app.get(
       }
       res.json(Array.from(roundMap.values()))
     } catch (error) {
-      res.status(500).json({ message: error.message })
+      sendServerError(res, error, 'message')
     }
   },
 )
@@ -4039,7 +4108,7 @@ app.put(
       })
     } catch (error) {
       await connection.rollback()
-      res.status(500).json({ success: false, message: error.message })
+      sendServerError(res, error, 'message', { success: false })
     } finally {
       connection.release()
     }
@@ -4051,7 +4120,8 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
   const { order_id } = req.params
   const { payment_method, shipping_name, shipping_phone, shipping_address, notes } = req.body
   const { shipping_carrier } = req.body
-  const slip_url = req.file ? `/uploads/${req.file.filename}` : null
+  // สลิปเก็บใน uploads/slips/ (ต้องใช้ URL ที่เซ็นแล้วถึงจะเปิดดูได้)
+  const slip_url = req.file ? req.file.publicUrl : null
 
   // บังคับให้แนบสลิปการโอนเงินเสมอก่อนบันทึกการชำระเงิน (กันเคส bypass ฝั่ง frontend)
   if (!slip_url) {
@@ -4250,7 +4320,7 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
   } catch (error) {
     await connection.rollback()
     console.error('Database Error:', error)
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   } finally {
     connection.release()
   }
@@ -4311,7 +4381,7 @@ app.post('/api/orders/:order_id/shipping', async (req, res) => {
   } catch (error) {
     await connection.rollback()
     console.error('Database Error:', error)
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   } finally {
     connection.release()
   }
@@ -4330,9 +4400,10 @@ app.get('/api/payments', async (_req, res) => {
        LEFT JOIN accounts a ON o.user_id = a.user_id
        ORDER BY p.Slip_date DESC`,
     )
-    res.json(rows)
+    // ส่ง URL สลิปแบบมีลายเซ็น (หมดอายุใน ~1 ชม.) เพราะไฟล์สลิปเปิดตรงๆ ไม่ได้แล้ว
+    res.json(rows.map((row) => ({ ...row, slip_img: signUploadUrl(row.slip_img) })))
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    sendServerError(res, err)
   }
 })
 
@@ -4407,12 +4478,12 @@ app.patch('/api/payments/:pay_id/status', async (req, res) => {
       res.json({ success: true })
     } catch (error) {
       await connection.rollback()
-      res.status(500).json({ error: error.message })
+      sendServerError(res, error)
     } finally {
       connection.release()
     }
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    sendServerError(res, err)
   }
 })
 
@@ -4562,7 +4633,7 @@ app.get('/api/admin/inventory-intake/orders', authenticateToken, requireAdmin, a
 
     res.json(orders)
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
@@ -4818,7 +4889,7 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
 
     res.json(rounds)
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
@@ -5256,7 +5327,7 @@ app.post(
     } catch (error) {
       await connection.rollback()
       console.error('[POST /api/admin/inventory-intake/rounds/:round_id/process]', error)
-      res.status(500).json({ error: error.message })
+      sendServerError(res, error)
     } finally {
       connection.release()
     }
@@ -5489,7 +5560,7 @@ app.post(
       })
     } catch (error) {
       await connection.rollback()
-      res.status(500).json({ error: error.message })
+      sendServerError(res, error)
     } finally {
       connection.release()
     }
@@ -5668,7 +5739,7 @@ app.patch(
     } catch (error) {
       await connection.rollback()
       console.error('[PATCH /api/admin/refunds/orders/:order_id/status]', error)
-      res.status(500).json({ error: error.message })
+      sendServerError(res, error)
     } finally {
       connection.release()
     }
@@ -5829,7 +5900,7 @@ app.patch(
       })
     } catch (error) {
       await connection.rollback()
-      res.status(500).json({ error: error.message })
+      sendServerError(res, error)
     } finally {
       connection.release()
     }
@@ -6024,7 +6095,7 @@ app.get('/api/dashboard/overview', authenticateToken, requireAdmin, async (_req,
       latestProducts,
     })
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
@@ -6055,7 +6126,7 @@ app.get('/api/admin/user-stats', authenticateToken, requireAdmin, async (_req, r
       totalAccounts: totalUsers + totalAdmins,
     })
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
@@ -6167,7 +6238,7 @@ app.get('/api/admin/orders', authenticateToken, requireAdmin, async (req, res) =
       })),
     )
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
@@ -6284,7 +6355,7 @@ app.get('/api/admin/order-item-summary', authenticateToken, requireAdmin, async 
       })),
     )
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
@@ -6451,7 +6522,7 @@ app.get(
         rounds: [...roundMap.values()].sort((a, b) => Number(b.round_id) - Number(a.round_id)),
       })
     } catch (error) {
-      res.status(500).json({ error: error.message })
+      sendServerError(res, error)
     }
   },
 )
@@ -6495,7 +6566,7 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =>
 
     res.json(users)
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
@@ -6587,7 +6658,7 @@ app.get('/api/admin/qrcodes', authenticateToken, requireAdmin, async (_req, res)
 
     res.json(rows.map(serializePaymentChannel))
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
@@ -6604,7 +6675,7 @@ app.get('/api/qrcodes', async (_req, res) => {
 
     res.json(rows.map(serializePaymentChannel))
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
@@ -6638,7 +6709,7 @@ app.post(
 
       res.status(201).json(serializePaymentChannel(await getPaymentChannel(result.insertId)))
     } catch (error) {
-      res.status(500).json({ error: error.message })
+      sendServerError(res, error)
     }
   },
 )
@@ -6711,7 +6782,7 @@ app.patch('/api/admin/qrcodes/:id', authenticateToken, requireAdmin, upload.sing
 
     res.json(serializePaymentChannel(await getPaymentChannel(id)))
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
@@ -6738,7 +6809,7 @@ app.delete('/api/admin/qrcodes/:id', authenticateToken, requireAdmin, async (req
 
     res.status(204).send()
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    sendServerError(res, error)
   }
 })
 
@@ -6752,13 +6823,13 @@ app.use((req, res, next) => {
   next()
 })
 
-app.use((error, _req, res, _next) => {
-  res.status(500).json({ message: error.message })
-})
+// ซ่อนรายละเอียด error ภายใน และแปลง error ของการอัปโหลด/CORS เป็นข้อความที่เข้าใจได้
+app.use(apiErrorHandler)
 
 async function startServer() {
   try {
     await ensureAdminSchema()
+    await ensureAuthSchema(pool)
 
     autoSyncPreorderRoundStatuses().catch((error) => {
       console.error('[auto-sync] initial run failed:', error.message)

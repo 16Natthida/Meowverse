@@ -24,7 +24,15 @@
 
             <div class="field-group">
               <label>รหัสผ่าน</label>
-              <input v-model="form.password" type="password" placeholder="password" required />
+              <input
+                v-model="form.password"
+                type="password"
+                placeholder="อย่างน้อย 8 ตัวอักษร"
+                minlength="8"
+                maxlength="72"
+                autocomplete="new-password"
+                required
+              />
             </div>
           </div>
 
@@ -166,16 +174,11 @@ async function onSubmit() {
 
   loading.value = true
   try {
-    const userRaw =
-      localStorage.getItem('meowverse-user') || sessionStorage.getItem('meowverse-user')
-    const user = userRaw ? JSON.parse(userRaw) : null
-
+    // JWT ถูกแนบให้อัตโนมัติโดย src/utils/authFetch.js
     const response = await fetch(`${API_BASE_URL}/users`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-user-role': String(user?.role || '').toLowerCase(),
-        'x-user-id': String(user?.id || ''),
       },
       body: JSON.stringify(form.value),
     })

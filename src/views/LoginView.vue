@@ -142,6 +142,8 @@ async function onSubmit() {
       body: JSON.stringify({
         username: memberId.value.trim(),
         password: password.value,
+        // ติ๊ก "จดจำฉัน" → อยู่ในระบบได้นานขึ้น (7 วัน, ต่ออายุอัตโนมัติเมื่อใช้งาน)
+        remember: remember.value,
       }),
     })
 
@@ -176,7 +178,8 @@ async function onSubmit() {
     }
 
     console.log('👤 User data:', userData)
-    login(userData, remember.value)
+    // เก็บ JWT ไว้แนบกับทุก request (ดู src/utils/authFetch.js)
+    login(userData, remember.value, data.token)
 
     // redirect ตามแต่ละ role
     if (userData.role === 'admin' || userData.role === 'Admin') {

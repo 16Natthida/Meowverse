@@ -8,27 +8,11 @@ const isLoadingCurrentRound = ref(false)
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
 async function requestJson(path, options = {}) {
-  const userDataStr =
-    localStorage.getItem('meowverse-user') || sessionStorage.getItem('meowverse-user')
-  let userId = null
-  let userRole = 'admin'
-
-  if (userDataStr) {
-    try {
-      const userData = JSON.parse(userDataStr)
-      userId = userData.user_id || userData.id
-      userRole = userData.role || 'admin'
-    } catch {
-      // Fall back to default values when the stored payload cannot be parsed.
-    }
-  }
-
+  // JWT ถูกแนบให้อัตโนมัติโดย src/utils/authFetch.js
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      'x-user-id': String(userId || ''),
-      'x-user-role': userRole,
       ...options.headers,
     },
   })
