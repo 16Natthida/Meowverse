@@ -200,10 +200,47 @@ function resolveImageUrl(url) {
 }
 
 function parseFlavorsText(text) {
-  return String(text || '')
-    .split(/\r?\n|,/)
-    .map((item) => item.trim())
+  const rawText = String(text || '').trim()
+  if (!rawText) return []
+
+  let rawItems
+  try {
+    const parsed = JSON.parse(rawText)
+    rawItems = Array.isArray(parsed) ? parsed : [parsed]
+  } catch {
+    rawItems = rawText.split(/\r?\n|,/)
+  }
+
+  const flavors = rawItems
+    .flatMap((item) => {
+      if (Array.isArray(item)) return item
+
+      const value = String(item || '').trim()
+      if (!value) return []
+
+      // Accept a JSON array pasted into the normal comma/newline input without
+      // saving brackets and escaped quotation marks as part of the flavor name.
+      try {
+        const parsed = JSON.parse(value)
+        return Array.isArray(parsed) ? parsed : [parsed]
+      } catch {
+        return [value]
+      }
+    })
+    .map((item) =>
+      String(item || '')
+        .trim()
+        .replace(/^\[+\s*/, '')
+        .replace(/\s*\]+$/, '')
+        .replace(/^(?:\\?\")+|(?:\\?\")+$/g, '')
+        .trim(),
+    )
     .filter(Boolean)
+
+  return flavors.filter(
+    (flavor, index) =>
+      flavors.findIndex((item) => item.toLocaleLowerCase() === flavor.toLocaleLowerCase()) === index,
+  )
 }
 
 function setFlavorItems(items) {

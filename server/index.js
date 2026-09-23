@@ -1234,6 +1234,14 @@ function mapProductRow(row, imageUrlMap) {
     flavorStockMap = {}
   }
 
+  const flavorPrices = parseFlavorPricesMap(row.flavorPrices)
+  const basePrice = getLowestFlavorPrice(flavorPrices, 'ready', row.basePrice)
+  const preorderPrice = getLowestFlavorPrice(
+    flavorPrices,
+    'preorder',
+    Number(row.preorderPrice) > 0 ? row.preorderPrice : basePrice,
+  )
+
   return {
     id: row.id,
     name: row.name,
@@ -1242,9 +1250,9 @@ function mapProductRow(row, imageUrlMap) {
     categoryName: row.categoryName || '',
     stock: Number(row.stock) || 0,
     flavorStock: flavorStockMap,
-    flavorPrices: parseFlavorPricesMap(row.flavorPrices),
-    basePrice: Number(row.basePrice) || 0,
-    preorderPrice: Number(row.preorderPrice) || 0,
+    flavorPrices,
+    basePrice,
+    preorderPrice,
     chinaShippingFeeThb: Number(row.chinaShippingFeeThb) || 0,
     price: Number(row.price ?? row.basePrice) || 0,
     preorderRoundId: row.preorderRoundId ? Number(row.preorderRoundId) : null,
@@ -1488,6 +1496,24 @@ async function ensureAdminSchema() {
     ADD COLUMN IF NOT EXISTS ready_to_ship_enabled TINYINT(1) NOT NULL DEFAULT 1,
     ADD COLUMN IF NOT EXISTS is_recommended TINYINT(1) NOT NULL DEFAULT 0
   `)
+
+  // Older databases created this column as VARCHAR(255). Long flavor lists were
+  // silently truncated and became invalid JSON. Only alter legacy schemas so a
+  // normal server restart does not rebuild or lock the products table needlessly.
+  const [flavorColumns] = await pool.query(`
+    SELECT DATA_TYPE AS dataType
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'products'
+      AND COLUMN_NAME = 'flavors'
+    LIMIT 1
+  `)
+  if (!['text', 'mediumtext', 'longtext'].includes(String(flavorColumns[0]?.dataType || ''))) {
+    await pool.query(`
+      ALTER TABLE products
+      MODIFY COLUMN flavors TEXT DEFAULT NULL
+    `)
+  }
 
   await pool.query(`
     ALTER TABLE categories
@@ -2596,28 +2622,38 @@ app.get('/api/products/public', async (req, res) => {
       }
     }
 
-    const products = productRows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      description: row.description || '',
-      flavors: parseFlavorList(row.flavors),
-      sku: row.sku || '',
-      categoryId: row.categoryId,
-      categoryName: row.categoryName || '',
-      stock: Number(row.stock) || 0,
-      flavorStock: parseFlavorStockMap(row.flavorStock),
-      flavorPrices: parseFlavorPricesMap(row.flavorPrices),
-      basePrice: Number(row.basePrice) || 0,
-      preorderPrice: Number(row.preorderPrice) || 0,
-      price: Number(row.price ?? row.basePrice) || 0,
-      preorderRoundId: row.preorderRoundId ? Number(row.preorderRoundId) : null,
-      chinaShippingFeeThb: Number(row.chinaShippingFeeThb) || 0,
-      imageUrls: imageUrlMap.get(row.id) || [],
-      images: fullImageMap.get(row.id) || [],
-      preorderEnabled: Boolean(row.preorderEnabled),
-      readyToShipEnabled: Boolean(row.readyToShipEnabled),
-      isRecommended: Boolean(row.isRecommended),
-    }))
+    const products = productRows.map((row) => {
+      const flavorPrices = parseFlavorPricesMap(row.flavorPrices)
+      const basePrice = getLowestFlavorPrice(flavorPrices, 'ready', row.basePrice)
+      const preorderPrice = getLowestFlavorPrice(
+        flavorPrices,
+        'preorder',
+        Number(row.preorderPrice) > 0 ? row.preorderPrice : basePrice,
+      )
+
+      return {
+        id: row.id,
+        name: row.name,
+        description: row.description || '',
+        flavors: parseFlavorList(row.flavors),
+        sku: row.sku || '',
+        categoryId: row.categoryId,
+        categoryName: row.categoryName || '',
+        stock: Number(row.stock) || 0,
+        flavorStock: parseFlavorStockMap(row.flavorStock),
+        flavorPrices,
+        basePrice,
+        preorderPrice,
+        price: Number(row.price ?? basePrice) || 0,
+        preorderRoundId: row.preorderRoundId ? Number(row.preorderRoundId) : null,
+        chinaShippingFeeThb: Number(row.chinaShippingFeeThb) || 0,
+        imageUrls: imageUrlMap.get(row.id) || [],
+        images: fullImageMap.get(row.id) || [],
+        preorderEnabled: Boolean(row.preorderEnabled),
+        readyToShipEnabled: Boolean(row.readyToShipEnabled),
+        isRecommended: Boolean(row.isRecommended),
+      }
+    })
 
     res.json(products)
   } catch (error) {
@@ -3230,6 +3266,7 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
         p.stock_qty AS stock,
         p.base_price AS basePrice,
         p.preorder_price AS preorderPrice,
+        p.flavor_prices AS flavorPrices,
         prp.quantity_available AS quantityAvailable,
         COALESCE(prp.quantity_sold, 0) AS quantitySold,
         COALESCE(prp.minimum_order_qty, 0) AS minimumOrderQty,
@@ -3262,6 +3299,7 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
         p.stock_qty AS stock,
         p.base_price AS basePrice,
         p.preorder_price AS preorderPrice,
+        p.flavor_prices AS flavorPrices,
         prp.quantity_available AS quantityAvailable,
         0 AS quantitySold,
         COALESCE(prp.minimum_order_qty, 0) AS minimumOrderQty,
@@ -3309,25 +3347,41 @@ app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req,
       }
     }
 
-    const products = productRows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      sku: row.sku || '',
-      categoryId: row.categoryId,
-      categoryName: row.categoryName || '',
-      stock: Number(row.stock) || 0,
-      basePrice: Number(row.basePrice) || 0,
-      quantityAvailable: Number(row.quantityAvailable) || 0,
-      quantitySold: Number(row.quantitySold) || 0,
-      minimumOrderQty: Number(row.minimumOrderQty) || 0,
-      quantityReserved: Number(row.quantityReserved) || 0,
-      quantityRemaining: Number(row.quantityRemaining) || 0,
-      roundPrice: row.roundPrice ? Number(row.roundPrice) : Number(row.basePrice) || 0,
-      chinaShippingFeeThb: Number(row.chinaShippingFeeThb) || 0,
-      imageUrls: imageUrlMap.get(row.id) || [],
-      preorderEnabled: Boolean(row.preorderEnabled),
-      readyToShipEnabled: Boolean(row.readyToShipEnabled),
-    }))
+    const products = productRows.map((row) => {
+      const flavorPrices = parseFlavorPricesMap(row.flavorPrices)
+      const basePrice = getLowestFlavorPrice(flavorPrices, 'ready', row.basePrice)
+      const preorderPrice = getLowestFlavorPrice(
+        flavorPrices,
+        'preorder',
+        Number(row.preorderPrice) > 0 ? row.preorderPrice : basePrice,
+      )
+      const storedRoundPrice = Number(row.roundPrice)
+
+      return {
+        id: row.id,
+        name: row.name,
+        sku: row.sku || '',
+        categoryId: row.categoryId,
+        categoryName: row.categoryName || '',
+        stock: Number(row.stock) || 0,
+        basePrice,
+        preorderPrice,
+        flavorPrices,
+        quantityAvailable: Number(row.quantityAvailable) || 0,
+        quantitySold: Number(row.quantitySold) || 0,
+        minimumOrderQty: Number(row.minimumOrderQty) || 0,
+        quantityReserved: Number(row.quantityReserved) || 0,
+        quantityRemaining: Number(row.quantityRemaining) || 0,
+        roundPrice:
+          Number.isFinite(storedRoundPrice) && storedRoundPrice > 0
+            ? storedRoundPrice
+            : preorderPrice,
+        chinaShippingFeeThb: Number(row.chinaShippingFeeThb) || 0,
+        imageUrls: imageUrlMap.get(row.id) || [],
+        preorderEnabled: Boolean(row.preorderEnabled),
+        readyToShipEnabled: Boolean(row.readyToShipEnabled),
+      }
+    })
 
     res.json({
       ...round,
@@ -3528,21 +3582,33 @@ app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, a
     }
 
     const [productRows] = await pool.query(
-      'SELECT prod_id AS prodId, base_price AS basePrice FROM products WHERE prod_id IN (?)',
+      `SELECT prod_id AS prodId,
+              base_price AS basePrice,
+              preorder_price AS preorderPrice,
+              flavor_prices AS flavorPrices
+         FROM products
+        WHERE prod_id IN (?)`,
       [productIds.map((pid) => Number(pid))],
     )
 
-    const productPriceMap = new Map(
-      productRows.map((row) => [String(row.prodId), Number(row.basePrice) || 0]),
-    )
+    const suggestedPriceMap = new Map(
+      productRows.map((row) => {
+        const flavorPrices = Object.values(parseFlavorPricesMap(row.flavorPrices))
+          .map((entry) => Number(entry.preorderPrice))
+          .filter((price) => Number.isFinite(price) && price > 0)
+        const preorderPrice = Number(row.preorderPrice)
+        const basePrice = Number(row.basePrice)
+        const suggestedPrice =
+          flavorPrices.length > 0
+            ? Math.min(...flavorPrices)
+            : Number.isFinite(preorderPrice) && preorderPrice > 0
+              ? preorderPrice
+              : Number.isFinite(basePrice) && basePrice > 0
+                ? basePrice
+                : 0
 
-    const [preorderPriceRows] = await pool.query(
-      'SELECT prod_id AS prodId, preorder_price AS preorderPrice FROM products WHERE prod_id IN (?)',
-      [productIds.map((pid) => Number(pid))],
-    )
-
-    const preorderPriceMap = new Map(
-      preorderPriceRows.map((row) => [String(row.prodId), Number(row.preorderPrice) || 0]),
+        return [String(row.prodId), suggestedPrice]
+      }),
     )
 
     for (const [index, pid] of productIds.entries()) {
@@ -3552,10 +3618,14 @@ app.post('/api/preorder-rounds/:id/products', authenticateToken, requireAdmin, a
         minimumOrderQtys && minimumOrderQtys[index] !== undefined
           ? Number(minimumOrderQtys[index])
           : 0
-      const roundPriceValue =
+      const requestedRoundPrice =
         roundPrices && roundPrices[index] !== undefined && roundPrices[index] !== null
           ? Number(roundPrices[index])
-          : (preorderPriceMap.get(String(pid)) ?? productPriceMap.get(String(pid)) ?? 0)
+          : null
+      const roundPriceValue =
+        Number.isFinite(requestedRoundPrice) && requestedRoundPrice > 0
+          ? requestedRoundPrice
+          : (suggestedPriceMap.get(String(pid)) ?? 0)
       const chinaShippingFeeValue =
         chinaShippingFeesThb && chinaShippingFeesThb[index] !== undefined && chinaShippingFeesThb[index] !== null
           ? Number(chinaShippingFeesThb[index])

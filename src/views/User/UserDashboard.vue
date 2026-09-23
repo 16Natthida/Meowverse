@@ -378,8 +378,12 @@ const fetchProducts = async () => {
       flavorStock: parseFlavorStock(p.flavorStock ?? p.flavor_stock),
       flavorPrices: parseFlavorPrices(p.flavorPrices ?? p.flavor_prices),
       price: p.basePrice ?? p.price ?? 0,
-      // For preorder items prefer the round-specific price (p.price comes from preorder_round_products subquery)
-      preorderPrice: p.price ?? p.preorderPrice ?? p.preorder_price ?? p.basePrice ?? 0,
+      // A stored round price of 0 means "not configured". Keep the product preorder
+      // price as the fallback instead of allowing 0 to hide the existing price.
+      preorderPrice:
+        (p.preorderRoundId != null || p.preorder_round_id != null) && Number(p.price) > 0
+          ? Number(p.price)
+          : p.preorderPrice ?? p.preorder_price ?? p.basePrice ?? 0,
       chinaShippingFeeThb: Number(p.chinaShippingFeeThb ?? p.china_shipping_fee_thb) || 0,
       image: p.imageUrls?.[0] ?? p.image_url?.[0] ?? p.imageUrl ?? p.image ?? null,
       categoryId: p.categoryId != null ? Number(p.categoryId) : null,
@@ -838,13 +842,32 @@ function getProductPrice(product) {
     ([flavor]) => normalizeFlavorValue(flavor) === flavorKey,
   )?.[1]
 
-  if (itemType === 'preorder') {
-    if (flavorEntry?.preorderPrice != null) return flavorEntry.preorderPrice
-    return product.preorderPrice ?? product.price
+  const priceKey = itemType === 'preorder' ? 'preorderPrice' : 'readyPrice'
+  const selectedFlavorPrice = Number(flavorEntry?.[priceKey])
+  if (Number.isFinite(selectedFlavorPrice) && selectedFlavorPrice > 0) {
+    return selectedFlavorPrice
   }
 
-  if (flavorEntry?.readyPrice != null) return flavorEntry.readyPrice
-  return product.price
+  // Product cards do not have a selected flavor yet, so advertise the lowest
+  // configured flavor price. Once a flavor is selected, use only that flavor's
+  // price and then fall back to the product-level price below.
+  if (!flavorKey) {
+    const flavorPrices = Object.values(product?.flavorPrices || {})
+      .map((entry) => Number(entry?.[priceKey]))
+      .filter((price) => Number.isFinite(price) && price > 0)
+
+    if (flavorPrices.length > 0) {
+      return Math.min(...flavorPrices)
+    }
+  }
+
+  if (itemType === 'preorder') {
+    const preorderPrice = Number(product.preorderPrice)
+    if (Number.isFinite(preorderPrice) && preorderPrice > 0) return preorderPrice
+  }
+
+  const basePrice = Number(product.price)
+  return Number.isFinite(basePrice) ? basePrice : 0
 }
 
 

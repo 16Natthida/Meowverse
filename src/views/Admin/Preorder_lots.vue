@@ -641,6 +641,12 @@ function normalizeProduct(product) {
       ? (() => { try { return JSON.parse(rawFlavorStock) } catch { return {} } })()
       : rawFlavorStock
     : {}
+  const rawFlavorPrices = product.flavorPrices ?? product.flavor_prices
+  const parsedFlavorPrices = rawFlavorPrices
+    ? typeof rawFlavorPrices === 'string'
+      ? (() => { try { return JSON.parse(rawFlavorPrices) } catch { return {} } })()
+      : rawFlavorPrices
+    : {}
   return {
     ...product,
     id: product.id ?? product.prod_id,
@@ -659,6 +665,7 @@ function normalizeProduct(product) {
     imageUrls: product.imageUrls ?? (product.image_url ? [product.image_url] : []),
     flavors: parsedFlavors,
     flavorStock: parsedFlavorStock,
+    flavorPrices: parsedFlavorPrices,
   }
 }
 
@@ -921,6 +928,20 @@ function getSuggestedRoundPrice(product) {
   const roundPrice = Number(product.roundPrice)
   if (Number.isFinite(roundPrice) && roundPrice > 0) {
     return roundPrice
+  }
+
+  const flavorPreorderPrices = Object.values(product.flavorPrices || {})
+    .map((entry) => {
+      const rawPrice =
+        entry && typeof entry === 'object'
+          ? entry.preorderPrice ?? entry.preorder_price
+          : entry
+      return Number(rawPrice)
+    })
+    .filter((price) => Number.isFinite(price) && price > 0)
+
+  if (flavorPreorderPrices.length > 0) {
+    return Math.min(...flavorPreorderPrices)
   }
 
   const preorderPrice = Number(product.preorderPrice)
