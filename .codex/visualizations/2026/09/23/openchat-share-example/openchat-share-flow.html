@@ -1,0 +1,244 @@
+<div id="openchat-share-flow">
+  <div class="viz-controls" aria-label="เลือกขั้นตอนตัวอย่าง">
+    <button type="button" class="btn btn-primary" data-step="1" aria-pressed="true">1 หน้าโพสต์</button>
+    <button type="button" class="btn" data-step="2" aria-pressed="false">2 คัดลอกไป OpenChat</button>
+    <button type="button" class="btn" data-step="3" aria-pressed="false">3 หลังส่งแล้ว</button>
+  </div>
+
+  <section class="card oc-phone" aria-live="polite">
+    <div class="oc-screen" data-screen="1">
+      <header class="oc-header">
+        <span class="oc-brand">Meowverse</span>
+        <span class="viz-badge">โพสต์</span>
+      </header>
+      <div class="oc-author">
+        <span class="oc-avatar" aria-hidden="true">🐱</span>
+        <span><strong>มะลิและโมจิ</strong><br><span class="text-small text-muted">5 นาทีที่แล้ว</span></span>
+      </div>
+      <div class="oc-photo" role="img" aria-label="ภาพตัวอย่างแมวสีส้มกำลังนอนบนหมอน">🐈</div>
+      <p><strong>วันนี้โมจิยอมนอนบนหมอนใหม่แล้ว 🧡</strong></p>
+      <p class="text-muted">จากตอนแรกไม่ยอมเข้าใกล้ ตอนนี้ยึดเป็นที่ประจำเรียบร้อย</p>
+      <div class="oc-meta text-small text-muted"><span>♡ 128</span><span>ความคิดเห็น 18</span></div>
+      <button type="button" class="btn btn-primary btn-block" data-next="2">
+        <i data-lucide="send" aria-hidden="true"></i> แชร์ไป OpenChat
+      </button>
+    </div>
+
+    <div class="oc-screen" data-screen="2" hidden>
+      <header class="oc-header">
+        <span class="oc-brand">เตรียมแชร์</span>
+        <span class="viz-badge">LINE OpenChat</span>
+      </header>
+      <label class="form-label" for="oc-share-text">ข้อความที่จะนำไปวางในห้อง</label>
+      <textarea id="oc-share-text" class="form-control" rows="7" readonly>🐾 เจอโพสต์น้องแมวน่ารักจาก Meowverse
+
+วันนี้โมจิยอมนอนบนหมอนใหม่แล้ว 🧡
+
+ดูโพสต์เต็ม: https://meowverse.example/post/mochi</textarea>
+      <p class="text-small text-muted oc-note">เว็บไซต์เตรียมข้อความให้ จากนั้นผู้ใช้เลือกห้อง OpenChat วางข้อความ และกดส่งเอง</p>
+      <div class="viz-row">
+        <button type="button" class="btn btn-primary" id="oc-copy">
+          <i data-lucide="copy" aria-hidden="true"></i> คัดลอกข้อความ
+        </button>
+        <button type="button" class="btn" data-next="3">ดูตัวอย่างหลังส่ง</button>
+      </div>
+      <div id="oc-copy-status" class="text-small text-muted" aria-live="polite"></div>
+    </div>
+
+    <div class="oc-screen" data-screen="3" hidden>
+      <header class="oc-header">
+        <span>
+          <strong>ทาสแมวแห่งประเทศไทย</strong><br>
+          <span class="text-small text-muted">OpenChat · สมาชิก 2.4K คน</span>
+        </span>
+        <i data-lucide="more-horizontal" aria-hidden="true"></i>
+      </header>
+      <div class="oc-chat" aria-label="ตัวอย่างข้อความในห้อง OpenChat">
+        <div class="oc-day text-small text-muted">วันนี้</div>
+        <div class="oc-other">
+          <span class="oc-avatar" aria-hidden="true">😺</span>
+          <span><span class="text-small text-muted">แมวส้มไม่ใช่แมว</span><br><span class="oc-bubble">น้องน่ารักมากเลยครับ</span></span>
+        </div>
+        <div class="oc-own">
+          <div class="oc-bubble oc-bubble-own">
+            🐾 เจอโพสต์น้องแมวน่ารักจาก Meowverse<br><br>
+            วันนี้โมจิยอมนอนบนหมอนใหม่แล้ว 🧡
+            <div class="oc-link-preview">
+              <div class="oc-preview-image" aria-hidden="true">🐈</div>
+              <div>
+                <strong>วันนี้โมจิยอมนอนบนหมอนใหม่แล้ว</strong><br>
+                <span class="text-small text-muted">meowverse.example</span>
+              </div>
+            </div>
+          </div>
+          <span class="text-small text-muted">อ่านแล้ว · 14:32</span>
+        </div>
+      </div>
+      <div class="oc-composer text-muted"><i data-lucide="image" aria-hidden="true"></i><span>ข้อความ</span><i data-lucide="smile" aria-hidden="true"></i></div>
+    </div>
+  </section>
+</div>
+
+<style>
+  #openchat-share-flow {
+    display: grid;
+    gap: 16px;
+    width: 100%;
+  }
+  #openchat-share-flow .oc-phone {
+    width: min(100%, 430px);
+    margin-inline: auto;
+    overflow: hidden;
+  }
+  #openchat-share-flow .oc-screen {
+    display: grid;
+    gap: 14px;
+  }
+  #openchat-share-flow .oc-header,
+  #openchat-share-flow .oc-author,
+  #openchat-share-flow .oc-meta,
+  #openchat-share-flow .oc-other,
+  #openchat-share-flow .oc-composer {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  #openchat-share-flow .oc-header,
+  #openchat-share-flow .oc-meta {
+    justify-content: space-between;
+  }
+  #openchat-share-flow .oc-brand {
+    font-weight: 500;
+  }
+  #openchat-share-flow .oc-avatar {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--viz-series-1) 16%, var(--muted));
+  }
+  #openchat-share-flow .oc-photo {
+    display: grid;
+    place-items: center;
+    min-height: 220px;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--viz-series-1) 18%, var(--muted));
+    font-size: clamp(68px, 18vw, 112px);
+  }
+  #openchat-share-flow p {
+    margin: 0;
+  }
+  #openchat-share-flow textarea {
+    resize: none;
+  }
+  #openchat-share-flow .oc-note {
+    margin-top: -4px;
+  }
+  #openchat-share-flow .oc-chat {
+    display: grid;
+    gap: 16px;
+    min-height: 370px;
+    padding-block: 8px;
+  }
+  #openchat-share-flow .oc-day {
+    text-align: center;
+  }
+  #openchat-share-flow .oc-other {
+    align-items: flex-end;
+  }
+  #openchat-share-flow .oc-own {
+    display: grid;
+    justify-items: end;
+    gap: 5px;
+    margin-left: 44px;
+  }
+  #openchat-share-flow .oc-bubble {
+    display: inline-block;
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: var(--muted);
+    color: var(--foreground);
+  }
+  #openchat-share-flow .oc-bubble-own {
+    background: color-mix(in srgb, var(--viz-series-1) 18%, var(--muted));
+  }
+  #openchat-share-flow .oc-link-preview {
+    display: grid;
+    grid-template-columns: 68px 1fr;
+    gap: 10px;
+    align-items: center;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  #openchat-share-flow .oc-preview-image {
+    display: grid;
+    place-items: center;
+    min-height: 58px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--viz-series-2) 16%, var(--muted));
+    font-size: 32px;
+  }
+  #openchat-share-flow .oc-composer {
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-radius: 999px;
+    background: var(--muted);
+  }
+  #openchat-share-flow [hidden] {
+    display: none;
+  }
+  @media (max-width: 420px) {
+    #openchat-share-flow .oc-photo {
+      min-height: 170px;
+    }
+    #openchat-share-flow .oc-chat {
+      min-height: 320px;
+    }
+  }
+</style>
+
+<script>
+  (() => {
+    const root = document.getElementById('openchat-share-flow');
+    const stepButtons = Array.from(root.querySelectorAll('[data-step]'));
+    const screens = Array.from(root.querySelectorAll('[data-screen]'));
+    const nextButtons = Array.from(root.querySelectorAll('[data-next]'));
+    const copyButton = root.querySelector('#oc-copy');
+    const shareText = root.querySelector('#oc-share-text');
+    const copyStatus = root.querySelector('#oc-copy-status');
+
+    function showStep(step) {
+      screens.forEach((screen) => {
+        screen.hidden = screen.dataset.screen !== String(step);
+      });
+      stepButtons.forEach((button) => {
+        const active = button.dataset.step === String(step);
+        button.setAttribute('aria-pressed', String(active));
+        button.classList.toggle('btn-primary', active);
+      });
+    }
+
+    stepButtons.forEach((button) => {
+      button.addEventListener('click', () => showStep(button.dataset.step));
+    });
+    nextButtons.forEach((button) => {
+      button.addEventListener('click', () => showStep(button.dataset.next));
+    });
+    copyButton.addEventListener('click', async () => {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(shareText.value);
+        }
+        copyStatus.textContent = 'คัดลอกแล้ว — ขั้นต่อไปคือเปิดห้อง OpenChat แล้ววางข้อความ';
+        copyButton.textContent = 'คัดลอกแล้ว ✓';
+      } catch (error) {
+        shareText.focus();
+        shareText.select();
+        copyStatus.textContent = 'เลือกข้อความให้แล้ว กดคัดลอกจากเมนูของอุปกรณ์ได้เลย';
+      }
+    });
+  })();
+</script>
