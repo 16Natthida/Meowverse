@@ -416,8 +416,9 @@ const fetchProducts = async () => {
       categoryName: p.categoryName ?? '',
       stock: p.stock ?? 0,
       isPreorder:
-        Boolean(p.preorderEnabled ?? p.isPreorder ?? false) &&
-        (p.preorderRoundId != null || p.preorder_round_id != null),
+        // An active round membership is authoritative. The product-level flag
+        // can be stale when a product is added to a round from the admin page.
+        p.preorderRoundId != null || p.preorder_round_id != null,
       isReadyToShip:
         p.readyToShipEnabled != null || p.isReadyToShip != null
           ? Boolean(p.readyToShipEnabled ?? p.isReadyToShip)
@@ -1014,6 +1015,30 @@ const totalPages = computed(() =>
   Math.max(1, Math.ceil(filteredProducts.value.length / itemsPerPage)),
 )
 
+const paginationItems = computed(() => {
+  const total = totalPages.value
+  const current = currentPage.value
+
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, index) => index + 1)
+  }
+
+  const pages = new Set([1, total, current - 1, current, current + 1])
+  const items = []
+
+  for (let page = 1; page <= total; page += 1) {
+    if (!pages.has(page)) continue
+
+    const previous = items[items.length - 1]
+    if (typeof previous === 'number' && page - previous > 1) {
+      items.push(`ellipsis-${page}`)
+    }
+    items.push(page)
+  }
+
+  return items
+})
+
 const paginatedProducts = computed(() => {
   const start = (currentPage.value - 1) * itemsPerPage
   return filteredProducts.value.slice(start, start + itemsPerPage)
@@ -1572,12 +1597,36 @@ onMounted(async () => {
 
       <div v-if="totalPages > 1" class="pagination">
         <button
-          v-for="page in totalPages"
-          :key="page"
-          :class="['page-btn', { 'page-btn--active': currentPage === page }]"
-          @click="goToPage(page)"
+          class="pagination__nav"
+          type="button"
+          :disabled="currentPage === 1"
+          aria-label="ไปหน้าก่อนหน้า"
+          @click="goToPage(currentPage - 1)"
         >
-          {{ page }}
+          ก่อนหน้า
+        </button>
+
+        <template v-for="item in paginationItems" :key="item">
+          <button
+            v-if="typeof item === 'number'"
+            :class="['page-btn', { 'page-btn--active': currentPage === item }]"
+            :aria-label="`ไปหน้าที่ ${item}`"
+            :aria-current="currentPage === item ? 'page' : undefined"
+            @click="goToPage(item)"
+          >
+            {{ item }}
+          </button>
+          <span v-else class="pagination__ellipsis" aria-hidden="true">…</span>
+        </template>
+
+        <button
+          class="pagination__nav"
+          type="button"
+          :disabled="currentPage === totalPages"
+          aria-label="ไปหน้าถัดไป"
+          @click="goToPage(currentPage + 1)"
+        >
+          ถัดไป
         </button>
       </div>
     </section>
@@ -2978,7 +3027,63 @@ onMounted(async () => {
   justify-content: center;
   gap: 0.45rem;
   margin-top: 2rem;
+  align-items: center;
+  flex-wrap: wrap;
 }
+
+.pagination__ellipsis {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-weight: 800;
+  user-select: none;
+}
+
+.pagination__nav {
+  min-height: 34px;
+  padding: 0 0.75rem;
+  border: 1px solid #d8c4f0;
+  border-radius: 999px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.96), rgba(248, 241, 255, 0.9));
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.pagination__nav:hover:not(:disabled) {
+  border-color: #bf93eb;
+  color: var(--primary);
+  background: #f7efff;
+}
+
+.pagination__nav:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 480px) {
+  .pagination {
+    gap: 0.3rem;
+  }
+
+  .pagination__nav {
+    padding: 0 0.55rem;
+    font-size: 0.72rem;
+  }
+
+  .pagination__ellipsis,
+  .page-btn {
+    width: 30px;
+    height: 30px;
+  }
+}
+
 .page-btn {
   width: 34px;
   height: 34px;

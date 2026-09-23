@@ -2570,7 +2570,19 @@ app.get('/api/products/public', async (req, res) => {
         p.is_recommended AS isRecommended
       FROM products p
       LEFT JOIN categories c ON c.cat_id = p.cat_id
-      WHERE (p.ready_to_ship_enabled = 1 OR p.preorder_enabled = 1)
+      WHERE (
+          p.ready_to_ship_enabled = 1
+          OR p.preorder_enabled = 1
+          OR EXISTS (
+            SELECT 1
+            FROM preorder_round_products active_prp
+            JOIN preorder_rounds active_round ON active_round.round_id = active_prp.round_id
+            WHERE active_prp.prod_id = p.prod_id
+              AND LOWER(active_round.status) IN ('active', 'open', 'scheduled')
+              AND active_round.start_date <= NOW()
+              AND active_round.end_date >= NOW()
+          )
+        )
         AND (c.is_active = 1 OR c.cat_id IS NULL)
     `
     const params = []
