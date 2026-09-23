@@ -70,7 +70,9 @@ const form = reactive({
 const categoryForm = reactive({
   name: '',
   detail: '',
+  imageUrl: '',
 })
+const isCategoryImageUploading = ref(false)
 
 const categoryMap = computed(() => {
   return new Map(store.categories.map((category) => [category.id, category.name]))
@@ -331,6 +333,28 @@ function clearImage(index) {
   form.imageUrls.splice(index, 1)
 }
 
+async function handleCategoryImageSelected(event) {
+  const file = (event.target.files || [])[0]
+  if (!file) {
+    return
+  }
+
+  isCategoryImageUploading.value = true
+  try {
+    const result = await store.uploadProductImage(file)
+    categoryForm.imageUrl = result.url
+  } catch {
+    setNotice('error', `อัปโหลดรูปไม่สำเร็จ: ${file.name}`)
+  } finally {
+    isCategoryImageUploading.value = false
+    event.target.value = ''
+  }
+}
+
+function clearCategoryImage() {
+  categoryForm.imageUrl = ''
+}
+
 function isSkuDuplicate(sku, currentProductId = null) {
   const normalizedSku = String(sku || '').trim().toLowerCase()
   if (!normalizedSku) return false
@@ -434,11 +458,13 @@ async function submitCategoryForm() {
     const createdCategory = await store.createCategory({
       name: categoryName,
       detail: categoryDetail,
+      imageUrl: categoryForm.imageUrl,
     })
 
     form.categoryId = createdCategory.id
     categoryForm.name = ''
     categoryForm.detail = ''
+    categoryForm.imageUrl = ''
     setNotice('success', 'เพิ่มหมวดหมู่เรียบร้อยแล้ว')
     categoryPanelOpen.value = false
   } catch (error) {
@@ -519,6 +545,7 @@ function closeCategoryForm() {
   categoryPanelOpen.value = false
   categoryForm.name = ''
   categoryForm.detail = ''
+  categoryForm.imageUrl = ''
 }
 
 function editProduct(product) {
@@ -832,8 +859,24 @@ onUnmounted(() => {
               />
             </label>
 
+            <label class="upload-field">
+              รูปภาพหมวดหมู่
+              <input
+                :disabled="isCategoryImageUploading"
+                accept="image/*"
+                type="file"
+                @change="handleCategoryImageSelected"
+              />
+            </label>
+            <p v-if="isCategoryImageUploading" class="compact">กำลังอัปโหลดรูป...</p>
+
+            <div v-if="categoryForm.imageUrl" class="category-image-preview">
+              <img :src="categoryForm.imageUrl" alt="ตัวอย่างรูปหมวดหมู่" />
+              <button class="ghost" type="button" @click="clearCategoryImage">ลบรูป</button>
+            </div>
+
             <div class="form-actions">
-              <button :disabled="isCategorySubmitting || isLoading" type="submit">
+              <button :disabled="isCategorySubmitting || isLoading || isCategoryImageUploading" type="submit">
                 {{ isCategorySubmitting ? 'กำลังเพิ่ม...' : 'บันทึกหมวดหมู่' }}
               </button>
               <button class="ghost" type="button" @click="closeCategoryForm">ยกเลิก</button>
@@ -856,6 +899,13 @@ onUnmounted(() => {
               class="category-item"
               :class="{ 'category-item--inactive': category.isActive === false }"
             >
+              <img
+                v-if="category.imageUrl"
+                class="category-item__thumb"
+                :src="category.imageUrl"
+                :alt="category.name"
+              />
+              <div v-else class="category-item__thumb category-item__thumb--empty">📁</div>
               <div class="category-item__content">
                 <p class="category-name">
                   {{ category.name }}
@@ -2015,8 +2065,40 @@ onUnmounted(() => {
   opacity: 0.72;
 }
 
+.category-item__thumb {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid #eadff5;
+  background: #f7f2fb;
+}
+
+.category-item__thumb--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+}
+
 .category-item__content {
   min-width: 0;
+  flex: 1;
+}
+
+.category-image-preview {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.category-image-preview img {
+  width: 56px;
+  height: 56px;
+  border-radius: 10px;
+  object-fit: cover;
+  border: 1px solid #eadff5;
 }
 
 .category-item__actions {

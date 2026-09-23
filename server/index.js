@@ -1516,7 +1516,8 @@ async function ensureAdminSchema() {
 
   await pool.query(`
     ALTER TABLE categories
-    ADD COLUMN IF NOT EXISTS is_active TINYINT(1) NOT NULL DEFAULT 1
+    ADD COLUMN IF NOT EXISTS is_active TINYINT(1) NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS cat_image VARCHAR(255) DEFAULT NULL
   `)
 
   // Extend the existing QR payment table without replacing or removing legacy rows.
@@ -1993,7 +1994,7 @@ app.get('/api/health', async (_req, res) => {
 app.get('/api/categories', async (_req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT cat_id AS id, cat_name AS name, cat_detail AS detail, is_active AS isActive FROM categories ORDER BY cat_name ASC',
+      'SELECT cat_id AS id, cat_name AS name, cat_detail AS detail, cat_image AS imageUrl, is_active AS isActive FROM categories ORDER BY cat_name ASC',
     )
 
     res.json(
@@ -2012,6 +2013,8 @@ app.post('/api/categories', async (req, res) => {
   const name = String(payload.name || '').trim()
   const detailText = String(payload.detail || '').trim()
   const detail = detailText || null
+  const imageUrlText = String(payload.imageUrl || '').trim()
+  const imageUrl = imageUrlText || null
 
   if (!name) {
     res.status(400).json({ message: 'Category name is required.' })
@@ -2044,14 +2047,15 @@ app.post('/api/categories', async (req, res) => {
     }
 
     const [insertResult] = await pool.query(
-      'INSERT INTO categories (cat_name, cat_detail, is_active) VALUES (?, ?, 1)',
-      [name, detail],
+      'INSERT INTO categories (cat_name, cat_detail, cat_image, is_active) VALUES (?, ?, ?, 1)',
+      [name, detail, imageUrl],
     )
 
     res.status(201).json({
       id: insertResult.insertId,
       name,
       detail,
+      imageUrl,
       isActive: true,
     })
   } catch (error) {
@@ -2080,7 +2084,7 @@ app.patch('/api/categories/:id/status', async (req, res) => {
     }
 
     const [rows] = await pool.query(
-      'SELECT cat_id AS id, cat_name AS name, cat_detail AS detail, is_active AS isActive FROM categories WHERE cat_id = ? LIMIT 1',
+      'SELECT cat_id AS id, cat_name AS name, cat_detail AS detail, cat_image AS imageUrl, is_active AS isActive FROM categories WHERE cat_id = ? LIMIT 1',
       [categoryId],
     )
 

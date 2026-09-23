@@ -59,12 +59,14 @@ export function useAdminProductStore() {
 
   async function createCategory(payload) {
     const detailText = String(payload.detail || '').trim()
+    const imageUrlText = String(payload.imageUrl || '').trim()
 
     const newCategory = await requestJson('/categories', {
       method: 'POST',
       body: JSON.stringify({
         name: String(payload.name || '').trim(),
         detail: detailText || null,
+        imageUrl: imageUrlText || null,
       }),
     })
 

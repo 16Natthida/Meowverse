@@ -13,6 +13,7 @@ import { mkdirSync } from 'node:fs'
 import { open, rename, unlink } from 'node:fs/promises'
 import helmet from 'helmet'
 import multer from 'multer'
+import sharp from 'sharp'
 import { rateLimit } from 'express-rate-limit'
 import { deriveKey } from './auth.js'
 
@@ -285,6 +286,34 @@ async function readFileHead(filePath, size = 32) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// ย่อ/บีบอัดรูปสินค้า-หมวดหมู่ตอนอัปโหลด (ลดขนาดไฟล์ → หน้าเว็บโหลดไวขึ้น)
+// - ย่อด้านที่ยาวที่สุดไม่เกิน OPTIMIZE_MAX_SIDE px (ไม่ขยายรูปเล็ก)
+// - แปลงเป็น WebP (รองรับพื้นหลังโปร่งใส) แล้วตัด metadata/GPS ออก
+// - ข้าม: สลิป (ต้องอ่านตัวเลขชัด), GIF (กันแอนิเมชันหาย), HEIC (sharp อ่านไม่ได้)
+// - ถ้าบีบแล้วไฟล์ไม่เล็กลง หรือเกิด error → ใช้ไฟล์ต้นฉบับตามเดิม
+// ---------------------------------------------------------------------------
+const OPTIMIZE_MAX_SIDE = 1200
+const OPTIMIZE_WEBP_QUALITY = 80
+const OPTIMIZABLE_EXTENSIONS = new Set(['jpg', 'png', 'webp'])
+
+async function optimizeImageToWebp(sourcePath, destinationPath) {
+  const input = sharp(sourcePath, { limitInputPixels: 50_000_000 })
+  const { pages } = await input.metadata()
+  if (pages > 1) return null // รูปเคลื่อนไหว (animated WebP) → ไม่แตะ กันแอนิเมชันหาย
+  const info = await input
+    .rotate() // ใช้ EXIF orientation ก่อนตัด metadata ไม่งั้นรูปจากมือถือจะหมุนผิด
+    .resize({
+      width: OPTIMIZE_MAX_SIDE,
+      height: OPTIMIZE_MAX_SIDE,
+      fit: 'inside',
+      withoutEnlargement: true,
+    })
+    .webp({ quality: OPTIMIZE_WEBP_QUALITY })
+    .toFile(destinationPath)
+  return info.size
+}
+
 // สร้างตัวรับอัปโหลดรูป — ใช้แทน multer เดิม: upload.single('image')
 // - สลิป (field "slip") เก็บแยกใน uploads/slips/ ซึ่งต้องใช้ URL ที่เซ็นแล้วถึงจะเปิดได้
 // - ตั้งชื่อไฟล์เองทั้งหมด (สุ่ม) และนามสกุลมาจากชนิดไฟล์จริง
@@ -332,15 +361,41 @@ export function createImageUpload({ uploadsDir }) {
         return sendJsonError(res, 400, INVALID_IMAGE_MESSAGE)
       }
 
-      const finalName = req.file.filename.replace(/\.upload$/, `.${extension}`)
-      const finalPath = path.join(path.dirname(req.file.path), finalName)
-      await rename(req.file.path, finalPath)
+      let finalExtension = extension
+      let finalName = req.file.filename.replace(/\.upload$/, `.${extension}`)
+      let finalPath = path.join(path.dirname(req.file.path), finalName)
+      let finalSize = req.file.size
+      let optimized = false
+
+      if (req.file.fieldname !== 'slip' && OPTIMIZABLE_EXTENSIONS.has(extension)) {
+        const webpName = req.file.filename.replace(/\.upload$/, '.webp')
+        const webpPath = path.join(path.dirname(req.file.path), webpName)
+        try {
+          const webpSize = await optimizeImageToWebp(req.file.path, webpPath)
+          if (webpSize && webpSize < req.file.size) {
+            await unlink(req.file.path).catch(() => {})
+            finalExtension = 'webp'
+            finalName = webpName
+            finalPath = webpPath
+            finalSize = webpSize
+            optimized = true
+          } else {
+            await unlink(webpPath).catch(() => {}) // ไม่เล็กลง → เก็บต้นฉบับ
+          }
+        } catch (optimizeError) {
+          console.warn('[upload] optimize failed, keeping original:', optimizeError.message)
+          await unlink(webpPath).catch(() => {})
+        }
+      }
+
+      if (!optimized) await rename(req.file.path, finalPath)
 
       const relative = path.relative(uploadsDir, finalPath).split(path.sep).join('/')
       Object.assign(req.file, {
         filename: finalName,
         path: finalPath,
-        mimetype: IMAGE_MIME_BY_EXT[extension],
+        mimetype: IMAGE_MIME_BY_EXT[finalExtension],
+        size: finalSize,
         publicUrl: `/uploads/${relative}`,
       })
       return next()
@@ -420,6 +475,10 @@ export const uploadsStaticOptions = {
   dotfiles: 'deny',
   setHeaders(res, filePath) {
     res.setHeader('X-Content-Type-Options', 'nosniff')
+    // ชื่อไฟล์สุ่มไม่ซ้ำเสมอ → cache ยาวได้ (สลิปถูกตั้ง Cache-Control แบบ private ไว้แล้วใน uploadsGuard)
+    if (!res.getHeader('Cache-Control')) {
+      res.setHeader('Cache-Control', 'public, max-age=2592000, immutable')
+    }
     res.setHeader(
       'Content-Security-Policy',
       "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox",
