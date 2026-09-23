@@ -9,6 +9,22 @@ const route = useRoute()
 const { logout, getUser } = useAuth()
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '/api'
 
+function resolveProductImageUrl(value) {
+  const url = String(value || '').trim()
+  if (!url) return ''
+
+  if (/^(https?:)?\/\//i.test(url) || url.startsWith('data:') || url.startsWith('blob:')) {
+    return url
+  }
+
+  // Product uploads are served by the API server, not the Vite dev server.
+  if (url.startsWith('/uploads') && /^https?:\/\//i.test(API_BASE_URL)) {
+    return `${new URL(API_BASE_URL).origin}${url}`
+  }
+
+  return url
+}
+
 const currentUser = computed(() => getUser())
 const showUserMenu = ref(false)
 const userMenuRef = ref(null)
@@ -174,6 +190,7 @@ const iconMap = [
   { keyword: 'อาหารเม็ด', icon: '/images/category-icons/dry-cat-food.png' },
   { keyword: 'ฟรีซดราย', icon: '/images/category-icons/freeze-dry-cat-food.png' },
   { keyword: 'ขนมแมวเลีย', icon: '/images/category-icons/lickable-cat-treats.png' },
+  { keyword: 'ขนมคน', icon: '/images/category-icons/Snacks.png' },
   { keyword: 'ขนม', icon: '/images/category-icons/cat-treats.png' },
   { keyword: 'ทูน่า', icon: '/images/category-icons/tuna-fish-food.png' },
   { keyword: 'ปลา', icon: '/images/category-icons/tuna-fish-food.png' },
@@ -192,7 +209,7 @@ const iconMap = [
   { keyword: 'ขายดี', icon: '/images/category-icons/best-seller.png' },
   { keyword: 'อาหาร', icon: '/images/category-icons/dry-cat-food.png' },
   { keyword: 'ชุดทดลอง', icon: '/images/category-icons/promotion.png' },
-  { keyword: 'ของใช้และของเล่นแมว', icon: '/images/category-icons/Item.jpg' },  
+  { keyword: 'ของใช้และของเล่นแมว', icon: '/images/category-icons/Item.jpg' },
   { keyword: 'ซุปแมว', icon: '/images/category-icons/soup.jpg' },
   { keyword: 'อื่นๆ', icon: '/images/category-icons/digestive-care.png' },
 ]
@@ -366,10 +383,17 @@ const fetchProducts = async () => {
           ? Boolean(p.readyToShipEnabled ?? p.isReadyToShip)
           : !(p.preorderEnabled ?? p.isPreorder ?? false),
       imageUrls: Array.isArray(p.imageUrls)
-        ? p.imageUrls.map((item) => (typeof item === 'string' ? item : item?.url || '')).filter(Boolean)
+        ? p.imageUrls
+            .map((item) => resolveProductImageUrl(typeof item === 'string' ? item : item?.url || ''))
+            .filter(Boolean)
         : [],
       images: Array.isArray(p.images)
-        ? p.images.map((img) => ({ url: img?.url || img || '', flavor: img?.flavor || '' })).filter((img) => img.url)
+        ? p.images
+            .map((img) => ({
+              url: resolveProductImageUrl(img?.url || img || ''),
+              flavor: img?.flavor || '',
+            }))
+            .filter((img) => img.url)
         : [],
       id: p.id,
       name: p.name,
@@ -385,7 +409,9 @@ const fetchProducts = async () => {
           ? Number(p.price)
           : p.preorderPrice ?? p.preorder_price ?? p.basePrice ?? 0,
       chinaShippingFeeThb: Number(p.chinaShippingFeeThb ?? p.china_shipping_fee_thb) || 0,
-      image: p.imageUrls?.[0] ?? p.image_url?.[0] ?? p.imageUrl ?? p.image ?? null,
+      image: resolveProductImageUrl(
+        p.imageUrls?.[0] ?? p.image_url?.[0] ?? p.imageUrl ?? p.image ?? null,
+      ),
       categoryId: p.categoryId != null ? Number(p.categoryId) : null,
       categoryName: p.categoryName ?? '',
       stock: p.stock ?? 0,
@@ -982,7 +1008,6 @@ const recommendedProducts = computed(() => {
         product.description.toLowerCase().includes(keyword)
       )
     })
-    .slice(0, 6)
 })
 
 const totalPages = computed(() =>
@@ -2625,17 +2650,23 @@ onMounted(async () => {
   box-shadow: 0 4px 12px rgba(165, 112, 54, 0.12);
 }
 .recommended-products__grid {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  display: flex;
+  overflow-x: auto;
   gap: 0.7rem;
+  padding: 0 0.1rem 0.45rem;
+  scroll-behavior: smooth;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: thin;
 }
 .recommended-card {
+  flex: 0 0 calc((100% - 3.5rem) / 6);
   min-width: 0;
   overflow: hidden;
   border: 1px solid rgba(237, 205, 157, 0.9);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.88);
   cursor: pointer;
+  scroll-snap-align: start;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 .recommended-card:hover {
@@ -3637,7 +3668,11 @@ onMounted(async () => {
 }
 @media (max-width: 480px) {
   .recommended-products__grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
+
+  .recommended-card {
+    flex-basis: calc((100% - 0.55rem) / 2);
   }
 
   .cat-btn {
@@ -3661,9 +3696,13 @@ onMounted(async () => {
   }
 }
 
-@media (max-width: 900px) {
+@media (min-width: 481px) and (max-width: 900px) {
   .recommended-products__grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.6rem;
+  }
+
+  .recommended-card {
+    flex-basis: calc((100% - 1.2rem) / 3);
   }
 
   .detail-modal {
@@ -3733,6 +3772,17 @@ onMounted(async () => {
     max-height: none;
     aspect-ratio: auto;
     touch-action: pan-y;
+  }
+
+  .detail-layout {
+    grid-template-columns: 1fr;
+    max-height: none;
+    overflow-y: visible;
+  }
+
+  .detail-media {
+    border-right: none;
+    border-bottom: 1px solid #eadff5;
   }
 
   .detail-thumb-row {

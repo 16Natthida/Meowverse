@@ -80,7 +80,6 @@ const ALLOWED_ORIGINS = new Set(
 const CATEGORY_NAME_MAX_LENGTH = 100
 const CATEGORY_DETAIL_MAX_LENGTH = 255
 const CATEGORY_MIN_COUNT = 4
-const CATEGORY_MAX_COUNT = 10
 const DEFAULT_BANNER_IMAGE_URL = '/images/cat.jpg'
 const DEFAULT_BRAND_LOGO_URL = ''
 const DEFAULT_THEME_PRIMARY = '#b673ee'
@@ -2041,16 +2040,6 @@ app.post('/api/categories', async (req, res) => {
 
     if (existingRows.length > 0) {
       res.status(409).json({ message: 'Category already exists.' })
-      return
-    }
-
-    const [countRows] = await pool.query('SELECT COUNT(*) AS total FROM categories')
-    const totalCategories = Number(countRows?.[0]?.total) || 0
-
-    if (totalCategories >= CATEGORY_MAX_COUNT) {
-      res.status(400).json({
-        message: `You can create up to ${CATEGORY_MAX_COUNT} categories only.`,
-      })
       return
     }
 
