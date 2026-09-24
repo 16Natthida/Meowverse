@@ -19,6 +19,7 @@ const deletingId = ref(null)
 const activeCartView = ref('ready')
 const isCheckingOut = ref(false)
 const preorderNotifications = ref([])
+const selectedIds = ref(new Set())
 
 // Cache รูปภาพรายสินค้า: { [prod_id]: { default: url, [flavor]: url } }
 const productImageMap = ref({})
@@ -158,11 +159,22 @@ const fetchCart = async () => {
     } else if (hasPreorderItems) {
       activeCartView.value = 'preorder'
     }
+
+    // เลือกสินค้าที่ซื้อได้ทุกชิ้นเป็นค่าเริ่มต้นตอนโหลดครั้งแรก (ผู้ใช้ยกเลิกติ๊กเองได้ทีหลัง)
+    // ครั้งต่อ ๆ ไป (เช่น หลังลบสินค้า) จะเลือกเฉพาะรายการที่เพิ่งเพิ่มเข้ามาใหม่ให้อัตโนมัติ
+    const nextSelected = new Set(selectedIds.value)
+    cartItems.value.forEach((item) => {
+      if (!item.preorderUnavailableReason && !nextSelected.has(item.cart_id)) {
+        nextSelected.add(item.cart_id)
+      }
+    })
+    selectedIds.value = nextSelected
   } catch (err) {
     if (isGuideMode(route)) {
       error.value = null
       cartItems.value = GUIDE_CART_ITEMS.map((item) => ({ ...item }))
       activeCartView.value = 'ready'
+      selectedIds.value = new Set(cartItems.value.map((item) => item.cart_id))
     } else {
       error.value = err.message
     }
@@ -209,6 +221,7 @@ const removeItem = async (item) => {
   deletingId.value = item.cart_id
   if (isGuideMode(route)) {
     cartItems.value = cartItems.value.filter((cartItem) => cartItem.cart_id !== item.cart_id)
+    selectedIds.value.delete(item.cart_id)
     deletingId.value = null
     showNotice('โหมดสาธิต: ลบรายการตัวอย่างแล้ว (ยังไม่ลบข้อมูลจริง)', 'success')
     return
@@ -261,11 +274,42 @@ const activeItems = computed(() =>
   (activeCartView.value === 'preorder' ? preorderItems.value : readyToShipItems.value)
     .filter((item) => !item.preorderUnavailableReason),
 )
+
+// ── SELECTION (checkbox แบบ Shopee) ──
+function isSelected(item) {
+  return selectedIds.value.has(item.cart_id)
+}
+function toggleSelect(item) {
+  const next = new Set(selectedIds.value)
+  if (next.has(item.cart_id)) {
+    next.delete(item.cart_id)
+  } else {
+    next.add(item.cart_id)
+  }
+  selectedIds.value = next
+}
+const allSelectedInView = computed(() => {
+  if (activeItems.value.length === 0) return false
+  return activeItems.value.every((item) => selectedIds.value.has(item.cart_id))
+})
+function toggleSelectAll() {
+  const next = new Set(selectedIds.value)
+  if (allSelectedInView.value) {
+    activeItems.value.forEach((item) => next.delete(item.cart_id))
+  } else {
+    activeItems.value.forEach((item) => next.add(item.cart_id))
+  }
+  selectedIds.value = next
+}
+
+const selectedActiveItems = computed(() =>
+  activeItems.value.filter((item) => selectedIds.value.has(item.cart_id)),
+)
 const activeSubtotal = computed(() =>
-  activeItems.value.reduce((sum, item) => sum + item.price * item.qty, 0),
+  selectedActiveItems.value.reduce((sum, item) => sum + item.price * item.qty, 0),
 )
 const activeLabel = computed(() =>
-  activeCartView.value === 'preorder' ? 'ยอดพรีออเดอร์ในแท็บนี้' : 'ยอดพร้อมส่งในแท็บนี้',
+  activeCartView.value === 'preorder' ? 'ยอดพรีออเดอร์ที่เลือก' : 'ยอดพร้อมส่งที่เลือก',
 )
 const checkoutLabel = computed(() =>
   activeCartView.value === 'preorder' ? 'สั่งซื้อพรีออเดอร์' : 'สั่งซื้อพร้อมส่ง',
@@ -303,7 +347,7 @@ const checkout = async () => {
     return
   }
 
-  if (activeItems.value.length === 0) {
+  if (selectedActiveItems.value.length === 0) {
     showNotice('กรุณาเลือกสินค้าที่ต้องการชำระเงิน', 'error')
     return
   }
@@ -311,10 +355,10 @@ const checkout = async () => {
   isCheckingOut.value = true
 
   try {
-    // ส่งเฉพาะรายการของแท็บที่กำลังเลือก (frontend จะส่ง subset ให้ backend)
+    // ส่งเฉพาะรายการที่ติ๊กเลือกไว้ (frontend จะส่ง subset ให้ backend)
     const payload = {
       user_id: userId,
-      items: activeItems.value.map((it) => ({
+      items: selectedActiveItems.value.map((it) => ({
         cart_id: it.cart_id,
         prod_id: it.prod_id,
         pre_item_id: it.pre_item_id ?? null,
@@ -348,7 +392,7 @@ const checkout = async () => {
         'pending_order_data',
         JSON.stringify({
           user_id: userId,
-          items: activeItems.value,
+          items: selectedActiveItems.value,
           order_type: data.order_type,
           shipping_fee: data.shipping_fee,
           total_amount: data.total_amount,
@@ -384,8 +428,9 @@ const checkout = async () => {
     setTimeout(() => router.push(`/ready-payment/${orderData.order_id}`), 1500)
 
     // อัปเดตตะกร้าฝั่ง client ให้ตรงกับฝั่งเซิร์ฟเวอร์ (รายการที่สั่งซื้อแล้วถูกลบออกจากตะกร้า)
-    const orderedCartIds = new Set(activeItems.value.map((it) => it.cart_id))
+    const orderedCartIds = new Set(selectedActiveItems.value.map((it) => it.cart_id))
     cartItems.value = cartItems.value.filter((it) => !orderedCartIds.has(it.cart_id))
+    orderedCartIds.forEach((id) => selectedIds.value.delete(id))
   } catch (err) {
     console.error('[checkout] Error:', err)
     const msg = String(err?.message || err || '')
@@ -601,6 +646,16 @@ onMounted(fetchCart)
                 :key="item.cart_id"
                 :class="['cart-item', { 'cart-item--deleting': deletingId === item.cart_id }]"
               >
+                <!-- Select checkbox -->
+                <label class="item-checkbox">
+                  <input
+                    type="checkbox"
+                    :checked="isSelected(item)"
+                    @change="toggleSelect(item)"
+                  />
+                  <span class="item-checkbox__box" aria-hidden="true"></span>
+                </label>
+
                 <!-- Thumbnail -->
                 <div class="item-img">
                   <img
@@ -731,6 +786,17 @@ onMounted(fetchCart)
                 :key="item.cart_id"
                 :class="['cart-item', { 'cart-item--deleting': deletingId === item.cart_id }]"
               >
+                <!-- Select checkbox -->
+                <label class="item-checkbox">
+                  <input
+                    type="checkbox"
+                    :disabled="!!item.preorderUnavailableReason"
+                    :checked="isSelected(item)"
+                    @change="toggleSelect(item)"
+                  />
+                  <span class="item-checkbox__box" aria-hidden="true"></span>
+                </label>
+
                 <!-- Thumbnail -->
                 <div class="item-img">
                   <img
@@ -876,7 +942,7 @@ onMounted(fetchCart)
 
             <button
               class="btn-checkout"
-              :disabled="activeItems.length === 0 || isCheckingOut"
+              :disabled="selectedActiveItems.length === 0 || isCheckingOut"
               @click="checkout"
             >
               <svg
@@ -914,6 +980,32 @@ onMounted(fetchCart)
           </div>
         </aside>
       </div>
+    </div>
+
+    <!-- ── MOBILE STICKY CHECKOUT BAR ── -->
+    <div v-if="!loading && !error && cartItems.length > 0" class="mobile-checkout-bar">
+      <label class="mobile-checkout-bar__all">
+        <input
+          type="checkbox"
+          :checked="allSelectedInView"
+          @change="toggleSelectAll"
+        />
+        <span class="item-checkbox__box" aria-hidden="true"></span>
+        <span>ทั้งหมด</span>
+      </label>
+
+      <div class="mobile-checkout-bar__total">
+        <span class="mobile-checkout-bar__label">{{ activeLabel }}</span>
+        <span class="mobile-checkout-bar__price">฿{{ activeSubtotal.toLocaleString() }}</span>
+      </div>
+
+      <button
+        class="mobile-checkout-bar__btn"
+        :disabled="selectedActiveItems.length === 0 || isCheckingOut"
+        @click="checkout"
+      >
+        {{ isCheckingOut ? 'กำลังสั่งซื้อ...' : `${checkoutLabel} (${selectedActiveItems.length})` }}
+      </button>
     </div>
   </div>
 </template>
@@ -1234,6 +1326,57 @@ onMounted(fetchCart)
   pointer-events: none;
 }
 
+/* Select checkbox */
+.item-checkbox {
+  position: relative;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.item-checkbox input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+.item-checkbox__box {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  border: 2px solid #d8c6f0;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+.item-checkbox__box::after {
+  content: '';
+  width: 6px;
+  height: 10px;
+  border-right: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(45deg) scale(0);
+  transition: transform 0.15s ease;
+  margin-bottom: 2px;
+}
+.item-checkbox input:checked + .item-checkbox__box {
+  background: linear-gradient(180deg, #cda2fb, #b97be8);
+  border-color: #b97be8;
+}
+.item-checkbox input:checked + .item-checkbox__box::after {
+  transform: rotate(45deg) scale(1);
+}
+.item-checkbox input:disabled + .item-checkbox__box {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* Item image */
 .item-img {
   width: 72px;
@@ -1484,6 +1627,11 @@ onMounted(fetchCart)
   border-color: #c9adf0;
 }
 
+/* ── MOBILE STICKY CHECKOUT BAR (hidden on desktop) ── */
+.mobile-checkout-bar {
+  display: none;
+}
+
 /* ── SHIPPING PROGRESS ── */
 .ship-progress-card {
   background: linear-gradient(165deg, rgba(255, 255, 255, 0.97), rgba(251, 246, 255, 0.95));
@@ -1580,59 +1728,161 @@ onMounted(fetchCart)
 }
 @media (max-width: 600px) {
   .content {
-    padding: 1rem;
+    padding: 0.75rem 0.75rem 6.5rem;
   }
+
+  /* Shopee-style compact list, no right sidebar — summary lives in the sticky bottom bar */
+  .cart-summary {
+    display: none;
+  }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .view-toggle {
+    margin-top: 0.5rem;
+  }
+  .view-toggle__btn {
+    padding: 0.5rem 0.85rem;
+    font-size: 0.82rem;
+    flex: 1;
+    text-align: center;
+  }
+
   .cart-item {
+    position: relative;
     flex-wrap: wrap;
-    gap: 0.6rem;
+    align-items: flex-start;
+    gap: 0.55rem;
+    padding: 0.7rem 2.4rem 0.65rem 0.6rem;
+  }
+  .item-checkbox {
+    order: 1;
+    margin-top: 2px;
   }
   .item-img {
-    width: 100%;
-    height: 180px;
-    max-width: 100%;
-    border-radius: 14px;
-    box-shadow: 0 4px 12px rgba(132, 86, 179, 0.18);
-    border: 1px solid rgba(255, 255, 255, 0.8);
-    order: 1;
-    flex: 1 1 100%;
-    margin: 0 auto;
+    order: 2;
+    width: 64px;
+    height: 64px;
+    flex: 0 0 64px;
+    border-radius: 10px;
   }
   .item-info {
-    order: 2;
-    flex: 1 1 auto;
-  }
-  .cart-item::after {
-    content: '';
     order: 3;
-    flex-basis: 100%;
-    width: 0;
-    height: 0;
-    margin-top: -0.6rem;
+    flex: 1 1 auto;
+    min-width: 0;
   }
+  .item-name {
+    font-size: 0.86rem;
+  }
+
+  /* Qty row moves to its own full-width line under the checkbox/thumbnail */
   .item-qty {
     order: 4;
+    flex: 1 1 100%;
+    justify-content: flex-end;
+    margin-top: 0.15rem;
   }
+
+  /* Per-line subtotal is redundant with the sticky bottom total on mobile */
   .item-subtotal {
-    order: 5;
-    flex: 1;
-    text-align: right;
+    display: none;
   }
+
   .delete-btn {
-    order: 6;
+    order: 5;
+    position: absolute;
+    top: 0.55rem;
+    right: 0.55rem;
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    min-height: 28px;
   }
+
   .navbar {
-    padding: 0 1rem;
+    padding: 0 0.85rem;
   }
   .navbar__title {
     font-size: 0.88rem;
   }
   .qty-btn {
-    width: 34px;
-    height: 34px;
+    width: 30px;
+    height: 30px;
   }
-  .delete-btn {
-    min-width: 34px;
-    min-height: 34px;
+
+  /* ── Sticky bottom checkout bar (Shopee-style) ── */
+  .mobile-checkout-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    background: #fff;
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -6px 18px rgba(79, 62, 108, 0.12);
+    padding: 0.6rem 0.75rem;
+    padding-bottom: calc(0.6rem + env(safe-area-inset-bottom, 0px));
+  }
+  .mobile-checkout-bar__all {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex-shrink: 0;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .mobile-checkout-bar__all input {
+    position: absolute;
+    opacity: 0;
+    width: 20px;
+    height: 20px;
+    margin: 0;
+    cursor: pointer;
+  }
+  .mobile-checkout-bar__total {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    line-height: 1.25;
+  }
+  .mobile-checkout-bar__label {
+    font-size: 0.66rem;
+    font-weight: 700;
+    color: var(--muted);
+  }
+  .mobile-checkout-bar__price {
+    font-size: 1.05rem;
+    font-weight: 900;
+    color: var(--primary-dark);
+  }
+  .mobile-checkout-bar__btn {
+    flex-shrink: 0;
+    border: none;
+    border-radius: 999px;
+    padding: 0.65rem 1.1rem;
+    background: linear-gradient(180deg, #cda2fb, #b97be8);
+    color: #fff;
+    font-family: inherit;
+    font-weight: 900;
+    font-size: 0.82rem;
+    white-space: nowrap;
+    cursor: pointer;
+    box-shadow: 0 8px 18px rgba(132, 86, 179, 0.3);
+  }
+  .mobile-checkout-bar__btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    box-shadow: none;
   }
 }
 </style>

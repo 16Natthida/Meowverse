@@ -14,7 +14,22 @@ const selectedOrderLoading = ref(false)
 const selectedOrderError = ref('')
 const typeFilter = ref('all')
 const filterStatus = ref('all')
-const showStatusFilters = ref(false)
+const search = ref('')
+const expandedCards = ref(new Set())
+
+function toggleCard(payId) {
+  const next = new Set(expandedCards.value)
+  if (next.has(payId)) {
+    next.delete(payId)
+  } else {
+    next.add(payId)
+  }
+  expandedCards.value = next
+}
+
+function isCardExpanded(payId) {
+  return expandedCards.value.has(payId)
+}
 
 const filteredPayments = computed(() => {
   return payments.value.filter((payment) => {
@@ -23,7 +38,13 @@ const filteredPayments = computed(() => {
     const matchesType =
       typeFilter.value === 'all' ||
       String(payment.Order_type || '').toLowerCase() === typeFilter.value
-    return matchesStatus && matchesType
+    const query = search.value.trim().toLowerCase()
+    const matchesSearch =
+      !query ||
+      `${payment.pay_id} ${payment.order_id} ${formatOrderNo(payment.order_id)} ${payment.username || ''}`
+        .toLowerCase()
+        .includes(query)
+    return matchesStatus && matchesType && matchesSearch
   })
 })
 
@@ -39,22 +60,6 @@ const typeCount = computed(() => ({
     (payment) => String(payment.Order_type || '').toLowerCase() === 'pending_import',
   ).length,
 }))
-
-const currentTypeLabel = computed(() => {
-  if (typeFilter.value === 'preorder') return 'พรีออเดอร์'
-  if (typeFilter.value === 'ready') return 'พร้อมส่ง'
-  if (typeFilter.value === 'pending_import') return 'รออนุมัติรอบ 2'
-  return 'ทั้งหมด'
-})
-// เพิ่มตัวเลือกประเภท Pending_import ใน filter
-// ...existing code...
-
-const currentStatusLabel = computed(() => {
-  if (filterStatus.value === 'Pending') return 'รอตรวจสอบ'
-  if (filterStatus.value === 'Approved') return 'อนุมัติแล้ว'
-  if (filterStatus.value === 'Rejected') return 'ปฏิเสธแล้ว'
-  return 'ทั้งหมด'
-})
 
 const statusConfig = {
   Pending: { text: 'รอตรวจสอบ', color: '#f59e0b', bg: '#fffbeb' },
@@ -86,7 +91,30 @@ function resolveSlipUrl(value) {
   return url.startsWith('/') ? url : `/${url}`
 }
 
+function orderTypeLabel(payment) {
+  if (payment.Order_type === 'Preorder') return 'Preorder'
+  if (payment.Order_type === 'Pending_import') return 'Pending Import'
+  return 'Ready Stock'
+}
+
+function orderTypeClass(payment) {
+  if (payment.Order_type === 'Preorder') return 'status status--pending'
+  if (payment.Order_type === 'Pending_import') return 'status status--pending-import'
+  return 'status status--paid'
+}
+
+function formatAmount(value) {
+  return Number(value).toLocaleString('th-TH', { minimumFractionDigits: 2 })
+}
+
+function formatOrderNo(value) {
+  return String(value).padStart(3, '0')
+}
+
+const totalCount = computed(() => payments.value.length)
+
 function resetFilters() {
+  search.value = ''
   typeFilter.value = 'all'
   filterStatus.value = 'all'
 }
@@ -235,98 +263,54 @@ onMounted(() => {
 
 <template>
   <div class="admin-support-page">
-    <AdminPageHeader title="จัดการสลิปการชำระเงิน" description="ตรวจสอบ อนุมัติ และดูหลักฐานการโอนเงินสำหรับออเดอร์พรีออเดอร์"></AdminPageHeader>
+    <AdminPageHeader
+      title="จัดการสลิปการชำระเงิน"
+      description="ตรวจสอบ อนุมัติ และดูหลักฐานการโอนเงินสำหรับออเดอร์พรีออเดอร์"
+    >
+      <div class="header-actions">
+        <button class="btn-primary" type="button" :disabled="slipLoading" @click="fetchPayments">
+          {{ slipLoading ? 'กำลังโหลด...' : 'รีเฟรชข้อมูล' }}
+        </button>
+      </div>
+    </AdminPageHeader>
 
-    <section class="kpi-grid">
-      <article class="kpi-card">
-        <p class="kpi-label">สลิปรอตรวจสอบ</p>
-        <p class="kpi-value">{{ countByStatus('Pending') }}</p>
-      </article>
-      <article class="kpi-card">
-        <p class="kpi-label">อนุมัติแล้ว</p>
-        <p class="kpi-value">{{ countByStatus('Approved') }}</p>
-      </article>
-      <article class="kpi-card">
-        <p class="kpi-label">ปฏิเสธแล้ว</p>
-        <p class="kpi-value">{{ countByStatus('Rejected') }}</p>
-      </article>
+    <div v-if="slipError" class="error-box">{{ slipError }}</div>
+
+    <section class="summary-grid">
+      <div class="summary-card summary-card--purple">
+        <span>สลิปทั้งหมด</span><strong>{{ totalCount }}</strong>
+      </div>
+      <div class="summary-card summary-card--orange">
+        <span>รอตรวจสอบ</span><strong>{{ countByStatus('Pending') }}</strong>
+      </div>
+      <div class="summary-card summary-card--green">
+        <span>อนุมัติแล้ว</span><strong>{{ countByStatus('Approved') }}</strong>
+      </div>
+      <div class="summary-card summary-card--red">
+        <span>ปฏิเสธแล้ว</span><strong>{{ countByStatus('Rejected') }}</strong>
+      </div>
     </section>
 
-    <section class="panel">
-      <header class="panel-head panel-head--stacked">
-        <div>
-          <h2>จัดการสลิปการชำระเงิน</h2>
-          <p>ตรวจสอบ อนุมัติ และจัดการสลิปชำระเงินสำหรับออเดอร์พรีออเดอร์</p>
-        </div>
-        <button class="ghost-btn" type="button" @click="fetchPayments">รีเฟรช</button>
-      </header>
+    <section class="filter-panel">
+      <input v-model="search" type="search" placeholder="ค้นหาเลขออเดอร์ รหัสชำระ หรือรหัสสมาชิก" />
+      <select id="type-filter" v-model="typeFilter" aria-label="ประเภทสลิป">
+        <option value="all">ทุกประเภท ({{ typeCount.all }})</option>
+        <option value="preorder">พรีออเดอร์ ({{ typeCount.preorder }})</option>
+        <option value="ready">พร้อมส่ง ({{ typeCount.ready }})</option>
+        <option value="pending_import">รออนุมัติรอบ 2 ({{ typeCount.pending_import }})</option>
+      </select>
+      <select id="status-filter" v-model="filterStatus" aria-label="สถานะการตรวจ">
+        <option value="all">ทุกสถานะ</option>
+        <option value="Pending">รอตรวจสอบ</option>
+        <option value="Approved">อนุมัติแล้ว</option>
+        <option value="Rejected">ปฏิเสธแล้ว</option>
+      </select>
+      <button class="btn-secondary" type="button" @click="resetFilters">ล้างตัวกรอง</button>
+    </section>
 
-      <div class="filter-shell">
-        <div class="filter-shell__top">
-          <div class="filter-summary-row">
-            <span class="filter-summary-label">ตัวกรองปัจจุบัน</span>
-            <div class="filter-summary-chips">
-              <span class="summary-chip">ประเภท: {{ currentTypeLabel }}</span>
-              <span class="summary-chip">สถานะ: {{ currentStatusLabel }}</span>
-            </div>
-          </div>
-
-          <button
-            class="ghost-btn filter-shell__toggle"
-            type="button"
-            @click="showStatusFilters = !showStatusFilters"
-          >
-            ตัวกรอง
-            <span class="filter-shell__toggle-badge">{{ typeCount.all }}</span>
-          </button>
-        </div>
-
-        <transition name="filter-drop">
-          <div v-if="showStatusFilters" class="filter-popover">
-            <div class="filter-grid">
-              <div class="filter-field">
-                <label for="type-filter">ประเภทสลิป</label>
-                <select id="type-filter" v-model="typeFilter" class="filter-select">
-                  <option value="all">ทั้งหมด ({{ typeCount.all }})</option>
-                  <option value="preorder">พรีออเดอร์ ({{ typeCount.preorder }})</option>
-                  <option value="ready">พร้อมส่ง ({{ typeCount.ready }})</option>
-                  <option value="pending_import">
-                    รออนุมัติรอบ 2 ({{ typeCount.pending_import }})
-                  </option>
-                </select>
-              </div>
-
-              <div class="filter-field">
-                <label for="status-filter">สถานะการตรวจ</label>
-                <select id="status-filter" v-model="filterStatus" class="filter-select">
-                  <option value="all">ทั้งหมด</option>
-                  <option value="Pending">รอตรวจสอบ</option>
-                  <option value="Approved">อนุมัติแล้ว</option>
-                  <option value="Rejected">ปฏิเสธแล้ว</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="filter-actions">
-              <button class="ghost-btn filter-secondary-btn" type="button" @click="resetFilters">
-                ล้างตัวกรอง
-              </button>
-              <button
-                class="primary-btn filter-secondary-btn"
-                type="button"
-                @click="showStatusFilters = false"
-              >
-                เสร็จแล้ว
-              </button>
-            </div>
-          </div>
-        </transition>
-      </div>
-
-      <div v-if="slipError" class="state-box state-box--error">{{ slipError }}</div>
-      <p v-if="slipLoading" class="loading-message">กำลังโหลดข้อมูลสลิป...</p>
-
-      <div v-else-if="filteredPayments.length === 0" class="empty-box">
+    <section class="table-card">
+      <div v-if="slipLoading && payments.length === 0" class="empty-state">กำลังโหลดข้อมูลสลิป...</div>
+      <div v-else-if="filteredPayments.length === 0" class="empty-state">
         ไม่พบรายการสลิปชำระเงินในขณะนี้
       </div>
 
@@ -432,6 +416,102 @@ onMounted(() => {
           </tbody>
         </table>
       </div>
+
+      <div
+        v-if="filteredPayments.length"
+        class="slip-cards"
+        aria-label="รายการสลิปชำระเงินสำหรับมือถือและแท็บเล็ต"
+      >
+        <article
+          v-for="payment in filteredPayments"
+          :key="`card-${payment.pay_id}`"
+          class="slip-card"
+          :class="{ 'slip-card--expanded': isCardExpanded(payment.pay_id) }"
+        >
+          <button
+            class="slip-card__summary"
+            type="button"
+            :aria-expanded="isCardExpanded(payment.pay_id)"
+            @click="toggleCard(payment.pay_id)"
+          >
+            <span class="slip-card__title">
+              <strong>Order #{{ formatOrderNo(payment.order_id) }}</strong>
+              <small>#{{ payment.pay_id }} · ฿{{ formatAmount(payment.amount) }}</small>
+            </span>
+            <span class="slip-card__summary-side">
+              <span
+                class="status-pill"
+                :style="{
+                  color: (statusConfig[payment.status] || {}).color,
+                  background: (statusConfig[payment.status] || {}).bg,
+                }"
+              >
+                {{ (statusConfig[payment.status] || {}).text || payment.status }}
+              </span>
+              <span class="slip-card__chevron" aria-hidden="true">⌄</span>
+            </span>
+          </button>
+
+          <div v-if="isCardExpanded(payment.pay_id)" class="slip-card__details">
+            <div class="slip-card__detail-row">
+              <span>รหัสชำระเงิน</span>
+              <strong>#{{ payment.pay_id }}</strong>
+            </div>
+            <div class="slip-card__detail-row">
+              <span>รหัสสมาชิก</span>
+              <strong>{{ payment.username || '-' }}</strong>
+            </div>
+            <div class="slip-card__detail-row">
+              <span>ประเภทออเดอร์</span>
+              <span :class="orderTypeClass(payment)">{{ orderTypeLabel(payment) }}</span>
+            </div>
+            <div class="slip-card__detail-row">
+              <span>ประเภทสลิป</span>
+              <span v-if="payment.type === 'Import_Fee'" class="badge badge--import-fee">💰 จ่ายค่านำเข้า</span>
+              <span v-else class="badge badge--order-fee">🧾 ค่าสินค้า</span>
+            </div>
+            <div class="slip-card__detail-row">
+              <span>ยอดเงิน</span>
+              <strong class="slip-card__amount">฿{{ formatAmount(payment.amount) }}</strong>
+            </div>
+            <div class="slip-card__detail-row">
+              <span>วิธีชำระ</span>
+              <strong>{{ paymentMethodLabel[payment.payment_method] || payment.payment_method || '-' }}</strong>
+            </div>
+            <div class="slip-card__detail-row">
+              <span>วันที่</span>
+              <strong>{{ formatDate(payment.Slip_date) }}</strong>
+            </div>
+            <div class="slip-card__detail-row">
+              <span>หลักฐาน</span>
+              <button v-if="payment.slip_img" class="slip-view-btn" type="button" @click="openSlip(payment)">
+                ดูสลิป 🖼️
+              </button>
+              <span v-else class="no-slip">ไม่มีไฟล์</span>
+            </div>
+
+            <div class="slip-card__actions">
+              <template v-if="payment.status === 'Pending'">
+                <button
+                  class="btn-approve"
+                  type="button"
+                  @click="updatePaymentStatus(payment.pay_id, 'Approved', payment.order_id)"
+                >
+                  ✓ อนุมัติ
+                </button>
+                <button
+                  class="btn-reject"
+                  type="button"
+                  @click="updatePaymentStatus(payment.pay_id, 'Rejected', payment.order_id)"
+                >
+                  ✕ ปฏิเสธ
+                </button>
+              </template>
+              <span v-else class="done-text">ดำเนินการแล้ว</span>
+            </div>
+          </div>
+        </article>
+      </div>
     </section>
 
     <transition name="fade">
@@ -518,370 +598,171 @@ onMounted(() => {
   background:
     radial-gradient(circle at top left, rgba(255, 183, 214, 0.25), transparent 28%),
     radial-gradient(circle at top right, rgba(180, 145, 255, 0.18), transparent 26%), #faf7ff;
-  color: #2c2440;
+  color: #493765;
   display: grid;
+  align-content: start;
   gap: 1rem;
 }
 
-.hero-panel,
-.panel,
-.kpi-card,
-.state-box,
-.empty-box,
-.slip-modal {
-  box-shadow: 0 18px 32px rgba(140, 99, 174, 0.08);
+.admin-support-page > * {
+  min-width: 0;
 }
 
-.hero-panel {
-  padding: 1.1rem 1.2rem;
-  border-radius: 18px;
-  border: 1px solid rgba(160, 126, 191, 0.14);
-  background:
-    radial-gradient(circle at right top, rgba(255, 147, 184, 0.32), transparent 52%),
-    rgba(255, 255, 255, 0.88);
-}
-
-.eyebrow {
-  margin: 0 0 0.35rem;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  font-size: 0.78rem;
-  color: #a45bd6;
-  font-weight: 700;
-}
-
-.hero-copy h1,
-.panel-head h2,
-.panel-head h3 {
-  color: #432f61;
-  font-weight: 900;
-}
-
-.hero-copy h1 {
-  font-size: clamp(1.4rem, 2vw, 1.9rem);
-}
-
-.hero-copy p {
-  margin-top: 0.45rem;
-  color: #6b5a84;
-  line-height: 1.6;
-}
-
-.kpi-grid {
-  display: grid;
-  gap: 0.8rem;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-}
-
-.kpi-card {
-  border-radius: 15px;
-  border: 1px solid rgba(160, 126, 191, 0.14);
-  background: rgba(255, 255, 255, 0.88);
-  padding: 0.9rem;
-}
-
-.kpi-label {
-  font-size: 0.76rem;
-  color: #8d7aad;
-  font-weight: 700;
-}
-
-.kpi-value {
-  font-size: 1.5rem;
-  color: #432f61;
-  font-weight: 900;
-  margin-top: 0.15rem;
-}
-
-.panel {
-  border-radius: 16px;
-  border: 1px solid rgba(160, 126, 191, 0.14);
-  background: rgba(255, 255, 255, 0.92);
-  padding: 0.95rem;
-}
-
-.panel-head {
+.header-actions {
   display: flex;
-  justify-content: space-between;
-  gap: 0.7rem;
-  align-items: center;
-  margin-bottom: 0.8rem;
+  gap: 0.6rem;
+  flex-wrap: wrap;
 }
 
-.panel-head--stacked {
-  flex-direction: column;
-  align-items: start;
+/* ---------- buttons ---------- */
+button {
+  font: inherit;
 }
 
-.panel-head p {
-  color: #8d7cad;
-  font-size: 0.8rem;
-  margin-top: 0.25rem;
-}
-
-.ghost-btn,
-.primary-btn,
-.filter-btn,
+.btn-primary,
+.btn-secondary,
 .btn-approve,
 .btn-reject,
-.slip-view-btn {
+.slip-view-btn,
+.close-btn {
   border: 0;
-  border-radius: 999px;
+  border-radius: 10px;
+  padding: 0.65rem 1rem;
+  font: inherit;
+  font-weight: 800;
   cursor: pointer;
-  font-weight: 700;
 }
 
-.ghost-btn {
-  background: #f3ecff;
-  color: #7d4db2;
-  padding: 0.8rem 1.1rem;
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: wait;
 }
 
-.primary-btn {
-  background: linear-gradient(135deg, #a55eea, #ff7eb6);
+.btn-primary {
+  background: #9b6ad4;
   color: #fff;
-  padding: 0.8rem 1.1rem;
 }
 
-.intake-grid {
+.btn-secondary {
+  background: #f2eaff;
+  color: #6f50a0;
+}
+
+.slip-view-btn {
+  background: #f8f2ff;
+  border: 1px solid #dbc8f4;
+  color: #6f50a0;
+  padding: 0.4rem 0.8rem;
+  border-radius: 999px;
+}
+
+.btn-approve {
+  background: #ecfdf5;
+  color: #059669;
+  border: 1px solid #6ee7b7;
+  padding: 0.45rem 0.8rem;
+  border-radius: 999px;
+}
+
+.btn-reject {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fca5a5;
+  padding: 0.45rem 0.8rem;
+  border-radius: 999px;
+}
+
+.close-btn {
+  background: transparent;
+  padding: 0.3rem 0.5rem;
+  font-size: 1.25rem;
+  color: #7d6b96;
+}
+
+.error-box {
+  padding: 0.8rem 1rem;
+  border: 1px solid #f0b8c1;
+  border-radius: 12px;
+  background: #fff0f2;
+  color: #9f3346;
+}
+
+/* ---------- summary cards ---------- */
+.summary-grid {
   display: grid;
-  grid-template-columns: 360px minmax(0, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1rem;
 }
 
-.order-list {
-  display: grid;
-  gap: 0.8rem;
+.summary-card {
+  padding: 1.1rem 1.2rem;
+  border: 1px solid #e6d9f3;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 6px 18px rgba(75, 45, 106, 0.07);
 }
 
+.summary-card span {
+  display: block;
+  color: #806d98;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.summary-card strong {
+  display: block;
+  margin-top: 0.25rem;
+  color: #4b3568;
+  font-size: 1.9rem;
+}
+
+.summary-card--green { border-color: #b9e7d2; background: #f4fff8; }
+.summary-card--orange { border-color: #f4dbac; background: #fffaf0; }
+.summary-card--purple { border-color: #d9c4f0; background: #faf7ff; }
+.summary-card--red { border-color: #f5c6c6; background: #fff6f6; }
+
+/* ---------- filters ---------- */
 .filter-panel {
   display: grid;
-  gap: 0.9rem;
-  margin-bottom: 1rem;
+  grid-template-columns: 1.5fr 1fr 1fr auto;
+  gap: 0.8rem;
   padding: 1rem;
-  border: 1px solid rgba(230, 218, 244, 0.95);
-  border-radius: 20px;
-  background:
-    radial-gradient(circle at top right, rgba(255, 231, 243, 0.58), transparent 30%),
-    linear-gradient(180deg, rgba(250, 247, 255, 0.94), rgba(255, 255, 255, 0.99));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
-}
-
-.filter-shell {
-  display: grid;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
-}
-
-.filter-shell__top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-
-.filter-summary-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-}
-
-.filter-summary-label {
-  font-size: 0.78rem;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #9a88b2;
-}
-
-.filter-summary-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-}
-
-.summary-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.38rem 0.7rem;
-  border-radius: 999px;
-  background: rgba(125, 77, 178, 0.08);
-  color: #6d4c9c;
-  font-size: 0.76rem;
-  font-weight: 700;
-  border: 1px solid rgba(125, 77, 178, 0.1);
-}
-
-.filter-shell__toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.75rem 1rem;
-  background: rgba(243, 236, 255, 0.95);
-  border: 1px solid #e3d5f7;
-  color: #6c4a99;
-  box-shadow: 0 10px 20px rgba(124, 92, 160, 0.08);
-}
-
-.filter-shell__toggle-badge {
-  min-width: 1.5rem;
-  height: 1.5rem;
-  padding: 0 0.45rem;
-  border-radius: 999px;
+  border: 1px solid #e6d9f3;
+  border-radius: 16px;
   background: #fff;
-  color: #7d4db2;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.75rem;
-  font-weight: 800;
 }
 
-.filter-popover {
-  border-radius: 18px;
-  border: 1px solid rgba(230, 218, 244, 0.95);
-  background: rgba(255, 255, 255, 0.98);
-  padding: 1rem;
-  box-shadow: 0 18px 30px rgba(129, 103, 164, 0.12);
+.filter-panel input,
+.filter-panel select {
+  min-width: 0;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #d9cbea;
+  border-radius: 10px;
+  background: #fff;
+  color: #493765;
+  font: inherit;
 }
 
-.filter-grid {
-  display: grid;
-  gap: 0.9rem;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
-.filter-field {
-  display: grid;
-  gap: 0.45rem;
-}
-
-.filter-field label {
-  font-size: 0.82rem;
-  font-weight: 800;
-  color: #5d447e;
-}
-
-.filter-select {
-  width: 100%;
-  border-radius: 14px;
-  border: 1px solid #e2d5f3;
-  background: #fbf9ff;
-  color: #4d3b6c;
-  padding: 0.82rem 0.95rem;
+.filter-panel input:focus,
+.filter-panel select:focus {
   outline: none;
-}
-
-.filter-select:focus {
   border-color: #b38ae4;
   box-shadow: 0 0 0 3px rgba(165, 94, 234, 0.12);
 }
 
-.filter-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.6rem;
-  margin-top: 0.95rem;
-  flex-wrap: wrap;
-}
-
-.filter-secondary-btn {
-  padding: 0.72rem 1rem;
-}
-
-.filter-chip-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.filter-chip-group--status .filter-btn {
-  color: #5d447e;
-}
-
-.filter-divider {
-  height: 1px;
-  background: linear-gradient(90deg, transparent, #e6d8f6 18%, #e6d8f6 82%, transparent);
-}
-
-.filter-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
+/* ---------- table card ---------- */
+.table-card {
+  overflow: hidden;
+  border: 1px solid #e6d9f3;
+  border-radius: 16px;
   background: #fff;
-  color: #7d4db2;
-  padding: 0.58rem 0.9rem;
-  border: 1px solid #e6daf4;
-  box-shadow: 0 4px 12px rgba(124, 92, 160, 0.05);
+  box-shadow: 0 6px 18px rgba(75, 45, 106, 0.06);
 }
 
-.filter-dot {
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 999px;
-  background: currentColor;
-  opacity: 0.55;
-}
-
-.filter-dot--all {
-  color: #7d4db2;
-}
-
-.filter-dot--pending {
-  color: #f59e0b;
-}
-
-.filter-dot--approved {
-  color: #10b981;
-}
-
-.filter-dot--rejected {
-  color: #ef4444;
-}
-
-.filter-btn:hover {
-  border-color: #d5c1ea;
-}
-
-.filter-btn.active {
-  background: linear-gradient(135deg, #a55eea, #ff7eb6);
-  color: #fff;
-  border-color: transparent;
-  box-shadow: 0 10px 20px rgba(165, 94, 234, 0.2);
-}
-
-.filter-count {
-  min-width: 1.65rem;
-  height: 1.35rem;
-  padding: 0 0.45rem;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.18);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.75rem;
-  font-weight: 800;
-}
-
-.filter-btn:not(.active) .filter-count {
-  background: #f7f0ff;
-  color: #7d4db2;
-}
-
-.filter-drop-enter-active,
-.filter-drop-leave-active {
-  transition:
-    opacity 0.18s ease,
-    transform 0.18s ease;
-}
-
-.filter-drop-enter-from,
-.filter-drop-leave-to {
-  opacity: 0;
-  transform: translateY(-4px);
+.empty-state {
+  padding: 3rem 1rem;
+  text-align: center;
+  color: #806d98;
 }
 
 .table-scroll {
@@ -895,28 +776,17 @@ onMounted(() => {
   table-layout: fixed;
 }
 
-.slip-table th:nth-child(1),
-.slip-table td:nth-child(1) { width: 8%; }
-.slip-table th:nth-child(2),
-.slip-table td:nth-child(2) { width: 8%; }
-.slip-table th:nth-child(3),
-.slip-table td:nth-child(3) { width: 9%; }
-.slip-table th:nth-child(4),
-.slip-table td:nth-child(4) { width: 10%; }
-.slip-table th:nth-child(5),
-.slip-table td:nth-child(5) { width: 11%; }
-.slip-table th:nth-child(6),
-.slip-table td:nth-child(6) { width: 9%; }
-.slip-table th:nth-child(7),
-.slip-table td:nth-child(7) { width: 9%; }
-.slip-table th:nth-child(8),
-.slip-table td:nth-child(8) { width: 12%; }
-.slip-table th:nth-child(9),
-.slip-table td:nth-child(9) { width: 9%; }
-.slip-table th:nth-child(10),
-.slip-table td:nth-child(10) { width: 8%; }
-.slip-table th:nth-child(11),
-.slip-table td:nth-child(11) { width: 7%; }
+.slip-table th:nth-child(1), .slip-table td:nth-child(1) { width: 8%; }
+.slip-table th:nth-child(2), .slip-table td:nth-child(2) { width: 8%; }
+.slip-table th:nth-child(3), .slip-table td:nth-child(3) { width: 9%; }
+.slip-table th:nth-child(4), .slip-table td:nth-child(4) { width: 10%; }
+.slip-table th:nth-child(5), .slip-table td:nth-child(5) { width: 11%; }
+.slip-table th:nth-child(6), .slip-table td:nth-child(6) { width: 9%; }
+.slip-table th:nth-child(7), .slip-table td:nth-child(7) { width: 9%; }
+.slip-table th:nth-child(8), .slip-table td:nth-child(8) { width: 12%; }
+.slip-table th:nth-child(9), .slip-table td:nth-child(9) { width: 9%; }
+.slip-table th:nth-child(10), .slip-table td:nth-child(10) { width: 8%; }
+.slip-table th:nth-child(11), .slip-table td:nth-child(11) { width: 7%; }
 
 .slip-table th,
 .slip-table td {
@@ -927,12 +797,21 @@ onMounted(() => {
 }
 
 .slip-table th {
+  background: #faf7ff;
   color: #826ea1;
-  text-transform: uppercase;
   letter-spacing: 0.05em;
   font-size: 0.72rem;
 }
 
+.member-code {
+  display: inline-block;
+  color: #6b7280;
+  font-weight: 600;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+/* ---------- pills / badges ---------- */
 .status,
 .status-pill,
 .badge {
@@ -942,81 +821,14 @@ onMounted(() => {
   font-weight: 700;
 }
 
-.status {
-  padding: 0.2rem 0.6rem;
-  font-size: 0.7rem;
-}
-
-.status--pending {
-  background: #ffe7d5;
-  color: #b55a1f;
-}
-
-.status--paid {
-  background: #ddf7ee;
-  color: #277a62;
-}
-
-.status-pill {
-  padding: 3px 12px;
-  font-size: 0.75rem;
-}
-
-.badge {
-  padding: 0.34rem 0.72rem;
-  font-size: 0.76rem;
-}
-
-.badge--pending {
-  background: #fff4d9;
-  color: #b76b00;
-}
-
-.badge--ready {
-  background: #e2f8eb;
-  color: #16794c;
-}
-
-.badge--partial {
-  background: #eef2ff;
-  color: #5753c9;
-}
-
-.badge--missing {
-  background: #fde2e1;
-  color: #b42318;
-}
-
-.badge--import-fee {
-  background: #f3e8ff;
-  color: #7c3aed;
-}
-
-.badge--order-fee {
-  background: #f0fdf4;
-  color: #16a34a;
-}
-
-.slip-view-btn {
-  background: #f8f2ff;
-  border: 1px solid #dbc8f4;
-  color: #6f50a0;
-  padding: 0.4rem 0.8rem;
-}
-
-.btn-approve {
-  background: #ecfdf5;
-  color: #059669;
-  border: 1px solid #6ee7b7;
-  padding: 0.45rem 0.8rem;
-}
-
-.btn-reject {
-  background: #fef2f2;
-  color: #dc2626;
-  border: 1px solid #fca5a5;
-  padding: 0.45rem 0.8rem;
-}
+.status { padding: 0.2rem 0.6rem; font-size: 0.7rem; }
+.status--pending { background: #ffe7d5; color: #b55a1f; }
+.status--paid { background: #ddf7ee; color: #277a62; }
+.status--pending-import { background: #f3e8ff; color: #a259e6; font-weight: 800; }
+.status-pill { padding: 3px 12px; font-size: 0.75rem; white-space: nowrap; }
+.badge { padding: 0.34rem 0.72rem; font-size: 0.76rem; }
+.badge--import-fee { background: #f3e8ff; color: #7c3aed; }
+.badge--order-fee { background: #f0fdf4; color: #16a34a; }
 
 .done-text,
 .no-slip {
@@ -1030,6 +842,12 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 
+/* ---------- mobile / tablet cards ---------- */
+.slip-cards {
+  display: none;
+}
+
+/* ---------- modal ---------- */
 .slip-modal-overlay {
   position: fixed;
   inset: 0;
@@ -1042,10 +860,14 @@ onMounted(() => {
 }
 
 .slip-modal {
+  display: flex;
+  flex-direction: column;
   background: #fff;
   border-radius: 20px;
   width: min(720px, 100%);
+  max-height: calc(100dvh - 2rem);
   overflow: hidden;
+  box-shadow: 0 18px 32px rgba(140, 99, 174, 0.08);
 }
 
 .slip-modal-head {
@@ -1057,6 +879,12 @@ onMounted(() => {
   border-bottom: 1px solid #eee;
 }
 
+.slip-modal-head h3 {
+  margin: 0;
+  color: #432f61;
+  font-size: 1.1rem;
+}
+
 .slip-modal-member {
   margin: 0.25rem 0 0;
   font-size: 0.85rem;
@@ -1064,16 +892,10 @@ onMounted(() => {
   font-weight: 600;
 }
 
-.member-code {
-  display: inline-block;
-  color: #6b7280;
-  font-weight: 600;
-  font-size: 0.85rem;
-  white-space: nowrap;
-}
-
 .slip-modal-body {
   padding: 1rem;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .slip-img-full {
@@ -1093,40 +915,6 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 
-
-.form-group {
-  margin-top: 0.8rem;
-}
-
-.form-group label {
-  display: block;
-  margin-bottom: 0.35rem;
-  color: #4c1d95;
-  font-weight: 700;
-}
-
-.error-box {
-  margin-top: 0.75rem;
-  color: #b42318;
-  background: #fff1f0;
-  border: 1px solid #fda29b;
-  border-radius: 12px;
-  padding: 0.7rem;
-}
-
-.state-wrap {
-  padding: 0.85rem 0;
-  color: #7d4db2;
-}
-
-.close-btn {
-  background: transparent;
-  border: 0;
-  font-size: 1.25rem;
-  cursor: pointer;
-  color: #7d6b96;
-}
-
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.2s;
@@ -1137,94 +925,212 @@ onMounted(() => {
   opacity: 0;
 }
 
-@media (max-width: 760px) {
+/* ---------- tablet + mobile (same look as preorder-progress) ---------- */
+@media (max-width: 900px) {
   .admin-support-page {
-    padding: 1rem;
-  }
-}
-
-@media (max-width: 760px) {
-  .table-scroll {
-    overflow: visible;
+    min-height: auto;
+    padding: 0 0 2rem;
+    background: none;
   }
 
-  .slip-table,
-  .slip-table thead,
-  .slip-table tbody,
-  .slip-table tr,
-  .slip-table td {
-    display: block;
+  .summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .filter-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-panel .btn-secondary {
     width: 100%;
   }
 
-  .slip-table thead {
+  .table-scroll {
     display: none;
   }
 
-  .slip-table tr {
-    margin-bottom: 0.85rem;
-    padding: 0.8rem;
-    border: 1px solid #eadcf6;
-    border-radius: 14px;
-    background: #fff;
-    box-shadow: 0 5px 16px rgba(84, 54, 113, 0.06);
+  .slip-cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 0.75rem;
+    padding: 0.7rem;
+    background: #faf7ff;
   }
 
-  .slip-table td {
+  .slip-card {
+    overflow: hidden;
+    border: 1px solid #e6d9f3;
+    border-radius: 15px;
+    background: #fff;
+    box-shadow: 0 5px 14px rgba(75, 45, 106, 0.06);
+  }
+
+  .slip-card--expanded {
+    border-color: #cdb1eb;
+    box-shadow: 0 7px 18px rgba(121, 78, 163, 0.12);
+  }
+
+  .slip-card__summary {
     display: flex;
-    align-items: flex-start;
+    width: 100%;
+    min-width: 0;
+    align-items: center;
     justify-content: space-between;
     gap: 0.7rem;
-    padding: 0.45rem 0;
+    margin: 0;
+    padding: 0.9rem;
     border: 0;
-    text-align: right;
-  }
-
-  .slip-table td::before {
-    flex: 0 0 auto;
-    color: #8a789f;
-    font-size: 0.72rem;
-    font-weight: 700;
+    border-radius: 0;
+    background: #fff;
+    color: #493765;
+    font: inherit;
+    font-weight: 800;
     text-align: left;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
   }
 
-  .slip-table td:nth-child(1)::before { content: 'รหัสชำระเงิน'; }
-  .slip-table td:nth-child(2)::before { content: 'ออเดอร์'; }
-  .slip-table td:nth-child(3)::before { content: 'รหัสสมาชิก'; }
-  .slip-table td:nth-child(4)::before { content: 'ประเภท'; }
-  .slip-table td:nth-child(5)::before { content: 'ประเภทสลิป'; }
-  .slip-table td:nth-child(6)::before { content: 'ยอดเงิน'; }
-  .slip-table td:nth-child(7)::before { content: 'วิธีชำระ'; }
-  .slip-table td:nth-child(8)::before { content: 'วันที่'; }
-  .slip-table td:nth-child(9)::before { content: 'สถานะ'; }
-  .slip-table td:nth-child(10)::before { content: 'หลักฐาน'; }
-
-  .slip-table td:last-child {
-    display: block;
-    padding-top: 0.7rem;
+  .slip-card__summary:hover,
+  .slip-card__summary:focus-visible {
+    background: #fcf9ff;
+    outline: none;
   }
 
-  .slip-table td:last-child::before {
-    display: none;
-  }
-
-  .slip-table td:last-child .action-btns,
-  .slip-table td:last-child button {
-    width: 100%;
-  }
-
-  .slip-table td:last-child .action-btns {
+  .slip-card__title {
     display: grid;
+    min-width: 0;
+    gap: 0.2rem;
+  }
+
+  .slip-card__title strong {
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+  }
+
+  .slip-card__title small {
+    color: #9a8aaa;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  .slip-card__summary-side {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
     gap: 0.45rem;
   }
+
+  .slip-card__chevron {
+    display: inline-grid;
+    width: 1.65rem;
+    height: 1.65rem;
+    place-items: center;
+    border-radius: 999px;
+    background: #f2eaff;
+    color: #8054aa;
+    font-size: 1.2rem;
+    line-height: 1;
+    transition: transform 0.2s ease;
+  }
+
+  .slip-card--expanded .slip-card__chevron {
+    transform: rotate(180deg);
+  }
+
+  .slip-card__details {
+    display: grid;
+    gap: 0.1rem;
+    padding: 0.2rem 0.9rem 0.85rem;
+    border-top: 1px solid #f0e9f7;
+  }
+
+  .slip-card__detail-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.7rem;
+    min-height: 2.4rem;
+    padding: 0.45rem 0;
+    border-bottom: 1px solid #f5eff9;
+  }
+
+  .slip-card__detail-row > span:first-child {
+    flex: 0 0 auto;
+    color: #806d98;
+    font-size: 0.82rem;
+  }
+
+  .slip-card__detail-row > strong,
+  .slip-card__detail-row > span:not(:first-child) {
+    min-width: 0;
+    color: #493765;
+    font-size: 0.86rem;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+
+  .slip-card__detail-row > .status,
+  .slip-card__detail-row > .badge {
+    flex: 0 0 auto;
+    font-size: 0.75rem;
+  }
+
+  .slip-card__amount {
+    color: #4e3672;
+    font-weight: 900;
+  }
+
+  .slip-card__actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+    padding-top: 0.75rem;
+  }
+
+  .slip-card__actions .btn-approve,
+  .slip-card__actions .btn-reject {
+    min-height: 2.6rem;
+  }
+
+  .slip-card__actions .done-text {
+    grid-column: 1 / -1;
+    text-align: center;
+  }
 }
-@media (max-width: 760px) {
-  .slip-table { min-width: 0; table-layout: fixed; }
-  /* Override the desktop nth-child widths when the table becomes card rows. */
-  .slip-table td:nth-child(n) { width: 100%; }
-  .slip-table td { min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
-  .slip-table td::before { max-width: 40%; }
-  .slip-table td > * { min-width: 0; max-width: 58%; overflow-wrap: anywhere; }
-  .slip-table td:last-child > * { max-width: 100%; }
+
+@media (max-width: 600px) {
+  .slip-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .summary-card {
+    padding: 0.9rem 1rem;
+  }
+
+  .summary-card strong {
+    font-size: 1.6rem;
+  }
+
+  .slip-modal-overlay {
+    padding: 0.5rem;
+  }
+
+  .slip-modal {
+    max-height: calc(100dvh - 1rem);
+    border-radius: 16px;
+  }
+
+  .slip-modal-foot {
+    flex-direction: column;
+  }
+
+  .slip-modal-foot > button,
+  .slip-modal-foot > .status-pill {
+    width: 100%;
+    justify-content: center;
+    min-height: 2.6rem;
+  }
 }
 </style>
