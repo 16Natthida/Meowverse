@@ -65,7 +65,6 @@ export function usePreorderStore() {
 
   async function fetchRoundDetail(roundId) {
     isLoadingCurrentRound.value = true
-    currentRound.value = null
 
     try {
       currentRound.value = await requestJson(`/preorder-rounds/${roundId}`)

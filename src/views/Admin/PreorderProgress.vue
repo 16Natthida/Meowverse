@@ -12,6 +12,7 @@ const progress = ref([])
 const selectedRound = ref('')
 const selectedStatus = ref('all')
 const search = ref('')
+const expandedRows = ref(new Set())
 let refreshTimer = null
 
 function authHeaders() {
@@ -101,6 +102,27 @@ function roundStatusLabel(status) {
   return status || '-'
 }
 
+function rowKey(row) {
+  return `${row.roundId}-${row.productId}`
+}
+
+function isExpanded(row) {
+  return expandedRows.value.has(rowKey(row))
+}
+
+function toggleRow(row) {
+  const next = new Set(expandedRows.value)
+  const key = rowKey(row)
+
+  if (next.has(key)) {
+    next.delete(key)
+  } else {
+    next.add(key)
+  }
+
+  expandedRows.value = next
+}
+
 function startRefresh() {
   stopRefresh()
   refreshTimer = window.setInterval(loadProgress, 15000)
@@ -163,8 +185,9 @@ onUnmounted(stopRefresh)
     <section class="table-card">
       <div v-if="loading && progress.length === 0" class="empty-state">กำลังโหลดข้อมูล...</div>
       <div v-else-if="filteredProgress.length === 0" class="empty-state">ไม่พบรายการตามตัวกรอง</div>
-      <div v-else class="table-wrap">
-        <table>
+      <div v-else>
+        <div class="table-wrap">
+          <table>
           <thead>
             <tr>
               <th>สินค้า</th>
@@ -190,8 +213,63 @@ onUnmounted(stopRefresh)
                 </span>
               </td>
             </tr>
-          </tbody>
-        </table>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="progress-cards" aria-label="รายการสรุปยอดพรีออเดอร์สำหรับมือถือ">
+          <article
+            v-for="row in filteredProgress"
+            :key="`mobile-${rowKey(row)}`"
+            class="progress-card"
+            :class="{ 'progress-card--expanded': isExpanded(row) }"
+          >
+            <button
+              class="progress-card__summary"
+              type="button"
+              :aria-expanded="isExpanded(row)"
+              @click="toggleRow(row)"
+            >
+              <span class="progress-card__title">
+                <strong>{{ row.productName }}</strong>
+                <small>{{ row.sku || `สินค้า #${row.productId}` }}</small>
+              </span>
+              <span class="progress-card__summary-side">
+                <span :class="['status-pill', `status-pill--${row.minimumStatus}`]">
+                  {{ statusLabel(row.minimumStatus) }}
+                </span>
+                <span class="progress-card__chevron" aria-hidden="true">⌄</span>
+              </span>
+            </button>
+
+            <div v-if="isExpanded(row)" class="progress-card__details">
+              <div class="progress-card__detail-row">
+                <span>รอบพรีออเดอร์</span>
+                <strong>{{ row.roundName || '-' }}</strong>
+              </div>
+              <div class="progress-card__detail-row">
+                <span>สถานะรอบ</span>
+                <strong>{{ roundStatusLabel(row.roundStatus) }}</strong>
+              </div>
+              <div class="progress-card__detail-row">
+                <span>ปิดรอบวันที่</span>
+                <strong>{{ formatDate(row.endDate) }}</strong>
+              </div>
+              <div class="progress-card__detail-row">
+                <span>ขั้นต่ำ</span>
+                <strong>{{ row.minimumOrderQty > 0 ? `${row.minimumOrderQty} ชิ้น` : 'ไม่กำหนด' }}</strong>
+              </div>
+              <div class="progress-card__detail-row">
+                <span>ยอดจอง/ยอดสั่ง</span>
+                <strong class="qty-cell">{{ row.committedQty }} ชิ้น</strong>
+              </div>
+              <div class="progress-card__detail-row">
+                <span>ขาดอีก</span>
+                <strong>{{ row.shortfall > 0 ? `${row.shortfall} ชิ้น` : 'ครบขั้นต่ำแล้ว' }}</strong>
+              </div>
+            </div>
+          </article>
+        </div>
       </div>
     </section>
   </div>
@@ -228,8 +306,103 @@ td small { display: block; margin-top: .2rem; color: #9a8aaa; font-size: .75rem;
 .status-pill--not-reached { background: #fff0d0; color: #966114; }
 .status-pill--no-minimum { background: #edf0f5; color: #687385; }
 .empty-state { padding: 3rem 1rem; text-align: center; color: #806d98; }
+.progress-cards { display: none; }
 @media (max-width: 800px) {
   .summary-grid { grid-template-columns: repeat(2, 1fr); }
   .filter-panel { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .table-wrap { display: none; }
+  .progress-cards {
+    display: grid;
+    gap: .75rem;
+    padding: .7rem;
+    background: #faf7ff;
+  }
+  .progress-card {
+    overflow: hidden;
+    border: 1px solid #e6d9f3;
+    border-radius: 15px;
+    background: #fff;
+    box-shadow: 0 5px 14px rgba(75, 45, 106, .06);
+  }
+  .progress-card--expanded {
+    border-color: #cdb1eb;
+    box-shadow: 0 7px 18px rgba(121, 78, 163, .12);
+  }
+  .progress-card__summary {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: .7rem;
+    padding: .9rem;
+    border-radius: 0;
+    background: #fff;
+    color: #493765;
+    text-align: left;
+  }
+  .progress-card__summary:hover,
+  .progress-card__summary:focus-visible {
+    background: #fcf9ff;
+    outline: none;
+  }
+  .progress-card__title {
+    display: grid;
+    min-width: 0;
+    gap: .2rem;
+  }
+  .progress-card__title strong {
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+  }
+  .progress-card__title small {
+    color: #9a8aaa;
+    font-size: .8rem;
+    font-weight: 600;
+  }
+  .progress-card__summary-side {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: .45rem;
+  }
+  .progress-card__chevron {
+    display: inline-grid;
+    width: 1.65rem;
+    height: 1.65rem;
+    place-items: center;
+    border-radius: 999px;
+    background: #f2eaff;
+    color: #8054aa;
+    font-size: 1.2rem;
+    line-height: 1;
+    transition: transform .2s ease;
+  }
+  .progress-card--expanded .progress-card__chevron { transform: rotate(180deg); }
+  .progress-card__details {
+    display: grid;
+    gap: .1rem;
+    padding: .2rem .9rem .85rem;
+    border-top: 1px solid #f0e9f7;
+  }
+  .progress-card__detail-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+    gap: .7rem;
+    align-items: start;
+    padding: .55rem 0;
+    border-bottom: 1px solid #f5eff9;
+  }
+  .progress-card__detail-row:last-child { border-bottom: 0; }
+  .progress-card__detail-row span { color: #806d98; font-size: .82rem; }
+  .progress-card__detail-row strong {
+    color: #493765;
+    font-size: .86rem;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+  .progress-card__detail-row .qty-cell { color: #4e3672; }
 }
 </style>

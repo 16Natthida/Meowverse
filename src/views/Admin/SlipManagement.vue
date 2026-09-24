@@ -1192,12 +1192,12 @@ onMounted(() => {
   .slip-table td:nth-child(2)::before { content: 'ออเดอร์'; }
   .slip-table td:nth-child(3)::before { content: 'รหัสสมาชิก'; }
   .slip-table td:nth-child(4)::before { content: 'ประเภท'; }
-  .slip-table td:nth-child(5)::before { content: 'ยอดเงิน'; }
-  .slip-table td:nth-child(6)::before { content: 'วิธีชำระ'; }
-  .slip-table td:nth-child(7)::before { content: 'วันที่'; }
-  .slip-table td:nth-child(8)::before { content: 'สถานะ'; }
-  .slip-table td:nth-child(9)::before { content: 'หลักฐาน'; }
-  .slip-table td:nth-child(10)::before { content: 'จัดการ'; }
+  .slip-table td:nth-child(5)::before { content: 'ประเภทสลิป'; }
+  .slip-table td:nth-child(6)::before { content: 'ยอดเงิน'; }
+  .slip-table td:nth-child(7)::before { content: 'วิธีชำระ'; }
+  .slip-table td:nth-child(8)::before { content: 'วันที่'; }
+  .slip-table td:nth-child(9)::before { content: 'สถานะ'; }
+  .slip-table td:nth-child(10)::before { content: 'หลักฐาน'; }
 
   .slip-table td:last-child {
     display: block;
@@ -1220,6 +1220,8 @@ onMounted(() => {
 }
 @media (max-width: 760px) {
   .slip-table { min-width: 0; table-layout: fixed; }
+  /* Override the desktop nth-child widths when the table becomes card rows. */
+  .slip-table td:nth-child(n) { width: 100%; }
   .slip-table td { min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
   .slip-table td::before { max-width: 40%; }
   .slip-table td > * { min-width: 0; max-width: 58%; overflow-wrap: anywhere; }

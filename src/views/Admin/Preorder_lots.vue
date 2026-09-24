@@ -682,7 +682,9 @@ const visibleRounds = computed(() => {
   })
 })
 const currentRound = computed(() => normalizeRound(preorderStore.currentRound))
-const isLoading = computed(() => preorderStore.isLoading)
+// Loading a round detail happens in the background while its modal is open.
+// Keep the page content mounted so polling/detail refreshes cannot remount the modal.
+const isLoading = computed(() => preorderStore.isLoadingRounds)
 const allProducts = computed(() => (adminProductStore.products || []).map(normalizeProduct))
 
 const filteredAvailableProducts = computed(() => {
