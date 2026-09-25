@@ -1,9 +1,12 @@
 <script setup>
 import AdminPageHeader from '../../components/AdminPageHeader.vue'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+const router = useRouter()
 const latestProducts = ref([])
+const productImageMap = ref(new Map())
 const dashboardData = ref(null)
 const isLoading = ref(false)
 const error = ref('')
@@ -125,6 +128,33 @@ async function fetchDashboardOverview() {
   const data = await response.json()
   dashboardData.value = data
   latestProducts.value = Array.isArray(data.latestProducts) ? data.latestProducts : []
+  await hydrateLatestProductImages()
+}
+
+async function hydrateLatestProductImages() {
+  try {
+    const response = await fetch(`${API_BASE_URL}/products`)
+    if (!response.ok) return
+
+    const products = await response.json()
+    const imageMap = new Map()
+    for (const product of Array.isArray(products) ? products : []) {
+      const images = Array.isArray(product.imageUrls)
+        ? product.imageUrls
+        : Array.isArray(product.images)
+          ? product.images.map((image) => (typeof image === 'string' ? image : image?.url))
+          : []
+      const firstImage = images.find(Boolean)
+      if (firstImage) imageMap.set(product.id ?? product.prod_id, firstImage)
+    }
+    productImageMap.value = imageMap
+    latestProducts.value = latestProducts.value.map((product) => ({
+      ...product,
+      imageUrl: product.imageUrl || imageMap.get(product.id) || '',
+    }))
+  } catch (error) {
+    console.warn('โหลดรูปสินค้าล่าสุดไม่สำเร็จ:', error)
+  }
 }
 
 async function loadDashboardData() {
@@ -212,6 +242,41 @@ function formatDate(d) {
   })
 }
 
+function resolveProductImage(product) {
+  const value = product?.imageUrl || productImageMap.value.get(product?.id) || ''
+  const url = String(value || '').trim()
+  if (!url) return ''
+  if (/^(https?:)?\/\//i.test(url) || url.startsWith('/') || url.startsWith('data:')) {
+    return url
+  }
+  return `/${url}`
+}
+
+function paymentTypeLabel(payment) {
+  if (payment?.type === 'Import_Fee') return 'Import pay'
+  if (payment?.type === 'Order_fee') return 'Ready pay'
+  return payment?.type || payment?.Order_type || '-'
+}
+
+function paymentMethodLabel(payment) {
+  return (
+    {
+      bank_transfer: 'โอนธนาคาร',
+      promptpay: 'Thai QR Payment',
+    }[payment?.payment_method] ||
+    payment?.payment_method ||
+    '-'
+  )
+}
+
+function openLatestProduct(product) {
+  if (product?.id) {
+    router.push({ path: '/admin/products', query: { product: String(product.id) } })
+    return
+  }
+  router.push('/admin/products')
+}
+
 onMounted(() => {
   loadDashboardData()
   fetchPayments()
@@ -233,24 +298,50 @@ onBeforeUnmount(() => {
 
     <section class="kpi-grid">
       <article class="kpi-card kpi-card--highlight">
+        <span class="mobile-kpi-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="M3 5h2l2.2 10.2a2 2 0 0 0 2 1.6h7.9a2 2 0 0 0 1.9-1.4L21 9H7" />
+            <circle cx="10" cy="20" r="1.2" />
+            <circle cx="18" cy="20" r="1.2" />
+          </svg>
+        </span>
         <p class="kpi-label">คำสั่งซื้อทั้งหมด</p>
         <p class="kpi-value">{{ formatNumber(kpi.orderCount) }} รายการ</p>
         <p class="kpi-footnote">นับจากตารางคำสั่งซื้อจริงถ้ามีในฐานข้อมูล</p>
       </article>
 
       <article class="kpi-card">
+        <span class="mobile-kpi-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <ellipse cx="12" cy="5" rx="7" ry="2.8" />
+            <path d="M5 5v6c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8V5M5 11v6c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8v-6" />
+          </svg>
+        </span>
         <p class="kpi-label">มูลค่าสต็อกทั้งหมด</p>
         <p class="kpi-value">{{ formatCurrency(kpi.inventoryValue) }}</p>
         <p class="kpi-footnote">คำนวณจาก stock x base price</p>
       </article>
 
       <article class="kpi-card">
+        <span class="mobile-kpi-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="m4 8 8-4 8 4-8 4-8-4Z" />
+            <path d="m4 8v8l8 4 8-4V8M12 12v8" />
+          </svg>
+        </span>
         <p class="kpi-label">สินค้าในระบบ</p>
         <p class="kpi-value">{{ formatNumber(kpi.totalProducts) }} รายการ</p>
         <p class="kpi-footnote">พร้อมใช้งานในฐานข้อมูล</p>
       </article>
 
       <article class="kpi-card">
+        <span class="mobile-kpi-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="m4 7 7.5-3 8.5 3-7.5 3L4 7Z" />
+            <path d="M4 7v7l8.5 3 7.5-3V7M12.5 10v7" />
+          </svg>
+          <span class="mobile-kpi-tag-cut"></span>
+        </span>
         <p class="kpi-label">หมวดหมู่สินค้า</p>
         <p class="kpi-value">{{ formatNumber(kpi.totalCategories) }} หมวด</p>
         <p class="kpi-footnote">จำนวนหมวดหมู่ทั้งหมด</p>
@@ -329,7 +420,7 @@ onBeforeUnmount(() => {
       </article>
     </section>
 
-    <section class="panel table-panel">
+    <section class="panel table-panel latest-products-panel">
       <header class="panel-head panel-head--stack">
         <h3>สินค้าเพิ่มล่าสุด</h3>
         <p>อ้างอิงรายการสินค้าล่าสุดจากฐานข้อมูล</p>
@@ -361,6 +452,35 @@ onBeforeUnmount(() => {
           </tbody>
         </table>
       </div>
+
+      <div v-if="latestProducts.length" class="mobile-latest-products">
+        <button
+          v-for="product in latestProducts"
+          :key="`mobile-product-${product.id}`"
+          type="button"
+          class="mobile-latest-product-row"
+          @click="openLatestProduct(product)"
+        >
+          <span class="mobile-latest-product-thumb">
+            <img
+              v-if="resolveProductImage(product)"
+              :src="resolveProductImage(product)"
+              :alt="product.name || 'สินค้า'"
+            />
+            <span v-else aria-hidden="true">📦</span>
+          </span>
+          <span class="mobile-latest-product-copy">
+            <strong>#{{ product.id }}</strong>
+            <span class="mobile-latest-product-name">{{ product.name || '-' }}</span>
+            <small>หมวดหมู่: {{ product.categoryName || '-' }}</small>
+          </span>
+          <span class="mobile-latest-product-side">
+            <span :class="resolveStockStatusClass(product)">{{ resolveStockStatusText(product) }}</span>
+            <strong>{{ formatCurrency(product.basePrice) }}</strong>
+          </span>
+        </button>
+      </div>
+      <p v-else-if="!isLoading" class="mobile-dashboard-empty">ยังไม่มีสินค้าใหม่</p>
     </section>
 
     <!-- ───── SLIP MANAGEMENT ───── -->
@@ -434,6 +554,46 @@ onBeforeUnmount(() => {
           </tbody>
         </table>
       </div>
+
+      <div v-if="payments.length" class="mobile-payment-list">
+        <article v-for="pay in payments" :key="`mobile-payment-${pay.pay_id}`" class="mobile-payment-row">
+          <button type="button" class="mobile-payment-main" @click="openSlip(pay)">
+            <span class="mobile-payment-identifiers">
+              <strong>#{{ pay.pay_id }}</strong>
+              <span>ออเดอร์ #{{ String(pay.order_id).padStart(3, '0') }}</span>
+            </span>
+            <span class="mobile-payment-details">
+              <span>{{ paymentTypeLabel(pay) }}</span>
+              <strong>฿{{ Number(pay.amount).toLocaleString('th-TH', { minimumFractionDigits: 2 }) }}</strong>
+              <span>{{ paymentMethodLabel(pay) }}</span>
+              <small>{{ formatDate(pay.Slip_date) }}</small>
+            </span>
+            <span class="mobile-payment-status-side">
+              <span
+                class="status-pill"
+                :style="{
+                  color: (statusLabel[pay.status] || {}).color || '#888',
+                  background: (statusLabel[pay.status] || {}).bg || '#f5f5f5',
+                }"
+              >
+                {{ (statusLabel[pay.status] || {}).text || pay.status }}
+              </span>
+              <span class="mobile-payment-slip-button">
+                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                  <rect x="3.5" y="4" width="17" height="16" rx="2" />
+                  <circle cx="9" cy="9" r="1.5" />
+                  <path d="m5.5 17 4.5-4.5 3 3 2-2 3.5 3.5" />
+                </svg>
+                ดูสลิป
+              </span>
+            </span>
+            <svg class="mobile-payment-chevron" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <path d="m9 6 6 6-6 6" />
+            </svg>
+          </button>
+        </article>
+      </div>
+      <p v-else-if="!slipLoading" class="mobile-dashboard-empty">ยังไม่มีรายการสลิปที่ต้องตรวจสอบ</p>
     </section>
 
     <!-- SLIP MODAL -->
@@ -1248,5 +1408,419 @@ td {
   .table-scroll > table td::before { max-width: 40%; }
   .table-scroll > table td > * { min-width: 0; max-width: 58%; overflow-wrap: anywhere; }
   .latest-products-table td > *, .slip-table td > * { max-width: 100%; }
+}
+.mobile-kpi-icon,
+.mobile-latest-products,
+.mobile-payment-list {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .home-page {
+    gap: 0.7rem;
+    min-width: 0;
+  }
+
+  .home-page > .admin-page-heading {
+    margin-bottom: 0;
+    padding: 1rem;
+    border-radius: 17px;
+    background: #fff;
+    box-shadow: 0 5px 16px rgba(87, 63, 122, 0.06);
+  }
+
+  .home-page > .admin-page-heading h1 {
+    color: #2f2355;
+    font-size: 1.45rem;
+    line-height: 1.3;
+  }
+
+  .home-page > .admin-page-heading p {
+    margin-top: 0.35rem;
+    color: #76658e;
+    font-size: 0.82rem;
+    line-height: 1.5;
+  }
+
+  .kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
+
+  .kpi-card {
+    display: grid;
+    grid-template-columns: 2.45rem minmax(0, 1fr);
+    column-gap: 0.55rem;
+    align-items: start;
+    min-width: 0;
+    min-height: 8.1rem;
+    padding: 0.75rem;
+    border-radius: 16px;
+    background: #fff;
+    box-shadow: 0 5px 15px rgba(87, 63, 122, 0.07);
+  }
+
+  .mobile-kpi-icon {
+    display: grid;
+    grid-row: 1 / span 3;
+    width: 2.35rem;
+    height: 2.35rem;
+    place-items: center;
+    border-radius: 12px;
+    background: #f1e8ff;
+    color: #8a4de0;
+  }
+
+  .mobile-kpi-icon svg {
+    width: 1.35rem;
+    height: 1.35rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+  }
+
+  .kpi-label {
+    min-width: 0;
+    color: #755b91;
+    font-size: 0.7rem;
+    line-height: 1.25;
+  }
+
+  .kpi-value {
+    min-width: 0;
+    margin-top: 0.15rem;
+    color: #302252;
+    font-size: clamp(0.95rem, 4.7vw, 1.25rem);
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+
+  .kpi-footnote {
+    min-width: 0;
+    margin-top: 0.2rem;
+    color: #9282a9;
+    font-size: 0.65rem;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+    gap: 0.7rem;
+  }
+
+  .panel {
+    min-width: 0;
+    padding: 0.85rem;
+    border-radius: 17px;
+    background: #fff;
+    box-shadow: 0 5px 16px rgba(87, 63, 122, 0.06);
+  }
+
+  .panel-head {
+    align-items: flex-start;
+    gap: 0.45rem;
+    margin-bottom: 0.65rem;
+  }
+
+  .panel-head h3 {
+    color: #302252;
+    font-size: 1rem;
+    line-height: 1.25;
+  }
+
+  .panel-head p {
+    margin-top: 0.25rem;
+    color: #86769d;
+    font-size: 0.72rem;
+    line-height: 1.35;
+  }
+
+  .panel-chip {
+    padding: 0.3rem 0.55rem;
+    font-size: 0.68rem;
+  }
+
+  .donut-layout {
+    grid-template-columns: minmax(135px, 0.9fr) minmax(0, 1.1fr);
+    gap: 0.55rem;
+    min-height: 0;
+  }
+
+  .donut-chart {
+    width: min(154px, 42vw);
+  }
+
+  .donut-chart__center strong {
+    font-size: clamp(0.92rem, 4vw, 1.2rem);
+  }
+
+  .donut-chart__center span {
+    font-size: 0.65rem;
+  }
+
+  .donut-legend {
+    gap: 0.3rem;
+  }
+
+  .donut-legend__row {
+    grid-template-columns: 0.45rem minmax(0, 1fr) auto;
+    gap: 0.3rem;
+    padding: 0.3rem 0.25rem;
+  }
+
+  .donut-legend__label {
+    font-size: 0.68rem;
+    line-height: 1.25;
+    white-space: normal;
+  }
+
+  .donut-legend__row strong {
+    font-size: 0.66rem;
+  }
+
+  .latest-products-panel .table-scroll,
+  .slip-section .table-scroll {
+    display: none;
+  }
+
+  .latest-products-panel,
+  .slip-section {
+    overflow: visible;
+  }
+
+  .mobile-latest-products,
+  .mobile-payment-list {
+    display: grid;
+    gap: 0.45rem;
+  }
+
+  .mobile-latest-product-row {
+    display: grid;
+    grid-template-columns: 3.25rem minmax(0, 1fr) auto;
+    gap: 0.55rem;
+    align-items: center;
+    width: 100%;
+    min-width: 0;
+    padding: 0.45rem;
+    border: 1px solid #e7d9f4;
+    border-radius: 13px;
+    background: #fff;
+    color: #4d3968;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .mobile-latest-product-row:focus-visible,
+  .mobile-payment-main:focus-visible {
+    outline: 3px solid rgba(183, 136, 234, 0.3);
+    outline-offset: 2px;
+  }
+
+  .mobile-latest-product-thumb {
+    display: grid;
+    width: 3.25rem;
+    height: 3.25rem;
+    place-items: center;
+    overflow: hidden;
+    border-radius: 11px;
+    background: #f2edf8;
+    color: #9a82b6;
+    font-size: 1.35rem;
+  }
+
+  .mobile-latest-product-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .mobile-latest-product-copy,
+  .mobile-latest-product-side {
+    display: grid;
+    min-width: 0;
+  }
+
+  .mobile-latest-product-copy {
+    gap: 0.08rem;
+  }
+
+  .mobile-latest-product-copy > strong {
+    color: #786798;
+    font-size: 0.7rem;
+  }
+
+  .mobile-latest-product-name {
+    display: -webkit-box;
+    overflow: hidden;
+    color: #3c2c5a;
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1.25;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .mobile-latest-product-copy small {
+    overflow: hidden;
+    color: #89799e;
+    font-size: 0.66rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-latest-product-side {
+    justify-items: end;
+    gap: 0.28rem;
+  }
+
+  .mobile-latest-product-side .status {
+    padding: 0.28rem 0.45rem;
+    font-size: 0.62rem;
+    white-space: nowrap;
+  }
+
+  .mobile-latest-product-side > strong {
+    color: #36245b;
+    font-size: 0.78rem;
+    white-space: nowrap;
+  }
+
+  .mobile-payment-row {
+    min-width: 0;
+    border: 1px solid #e7d9f4;
+    border-radius: 13px;
+    background: #fff;
+  }
+
+  .mobile-payment-main {
+    display: grid;
+    grid-template-columns: 3.6rem minmax(0, 1fr) auto 0.8rem;
+    gap: 0.45rem;
+    align-items: center;
+    width: 100%;
+    min-width: 0;
+    padding: 0.65rem 0.55rem;
+    border: 0;
+    border-radius: 13px;
+    background: transparent;
+    color: #4d3968;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .mobile-payment-identifiers,
+  .mobile-payment-details,
+  .mobile-payment-status-side {
+    display: grid;
+    min-width: 0;
+  }
+
+  .mobile-payment-identifiers {
+    gap: 0.25rem;
+  }
+
+  .mobile-payment-identifiers strong {
+    color: #302252;
+    font-size: 0.95rem;
+  }
+
+  .mobile-payment-identifiers span,
+  .mobile-payment-details span,
+  .mobile-payment-details small {
+    overflow: hidden;
+    color: #81719a;
+    font-size: 0.64rem;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-payment-details {
+    gap: 0.08rem;
+  }
+
+  .mobile-payment-details strong {
+    color: #3b285d;
+    font-size: 0.78rem;
+    line-height: 1.25;
+  }
+
+  .mobile-payment-status-side {
+    justify-items: end;
+    gap: 0.32rem;
+  }
+
+  .mobile-payment-status-side .status-pill {
+    padding: 0.3rem 0.45rem;
+    font-size: 0.62rem;
+    white-space: nowrap;
+  }
+
+  .mobile-payment-slip-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.18rem;
+    padding: 0.25rem 0.45rem;
+    border: 1px solid #d9c3f1;
+    border-radius: 999px;
+    background: #f5ecff;
+    color: #70469b;
+    font-size: 0.63rem;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+
+  .mobile-payment-slip-button svg {
+    width: 0.8rem;
+    height: 0.8rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+  }
+
+  .mobile-payment-chevron {
+    width: 0.85rem;
+    height: 0.85rem;
+    fill: none;
+    stroke: #7f6c9e;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+  }
+
+  .mobile-dashboard-empty {
+    margin: 0;
+    padding: 0.8rem;
+    color: #8775a4;
+    font-size: 0.78rem;
+    text-align: center;
+  }
+}
+
+@media (max-width: 360px) {
+  .donut-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .donut-chart {
+    width: min(160px, 58vw);
+  }
+
+  .mobile-payment-main {
+    grid-template-columns: 3.25rem minmax(0, 1fr) auto 0.65rem;
+    gap: 0.3rem;
+    padding-inline: 0.4rem;
+  }
+
+  .mobile-payment-status-side .status-pill {
+    max-width: 4.7rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 </style>

@@ -17,6 +17,7 @@ const productPanelOpen = ref(false)
 const categoryPanelOpen = ref(false)
 const showAddStockModal = ref(false)
 const previewImage = ref(null)
+const expandedMobileProductIds = ref(new Set())
 
 function openImagePreview(url, title, subtitle) {
   if (!url) return
@@ -115,10 +116,12 @@ const filteredProducts = computed(() => {
 
   return store.products.filter((product) => {
     const categoryName = getCategoryName(product.categoryId).toLowerCase()
+    const productName = String(product.name || '').toLowerCase()
+    const productSku = String(product.sku || '').toLowerCase()
 
     return (
-      product.name.toLowerCase().includes(keyword) ||
-      product.sku.toLowerCase().includes(keyword) ||
+      productName.includes(keyword) ||
+      productSku.includes(keyword) ||
       categoryName.includes(keyword)
     )
   })
@@ -687,6 +690,39 @@ function getImageCount(product) {
   return Array.isArray(product.imageUrls) ? product.imageUrls.length : 0
 }
 
+function formatProductPrice(value) {
+  return new Intl.NumberFormat('th-TH', {
+    style: 'currency',
+    currency: 'THB',
+    maximumFractionDigits: 0,
+  }).format(Number(value) || 0)
+}
+
+function getDescriptionPreview(description) {
+  const text = String(description || '').trim()
+  if (!text) return '-'
+  if (text.length <= 110) return text
+  return `${text.slice(0, 110).trimEnd()}…`
+}
+
+function hasLongDescription(product) {
+  return String(product.description || '').trim().length > 110
+}
+
+function isMobileDescriptionExpanded(productId) {
+  return expandedMobileProductIds.value.has(productId)
+}
+
+function toggleMobileDescription(productId) {
+  const nextExpandedIds = new Set(expandedMobileProductIds.value)
+  if (nextExpandedIds.has(productId)) {
+    nextExpandedIds.delete(productId)
+  } else {
+    nextExpandedIds.add(productId)
+  }
+  expandedMobileProductIds.value = nextExpandedIds
+}
+
 function getPrimaryImage(product) {
   if (Array.isArray(product.imageUrls) && product.imageUrls.length > 0) {
     const firstImg = product.imageUrls[0]
@@ -820,6 +856,70 @@ onUnmounted(() => {
         </button>
       </div>
     </header>
+
+    <section class="mobile-inventory-overview" aria-label="ภาพรวมสต็อกสินค้า">
+      <div class="mobile-summary-grid">
+        <div class="mobile-summary-card mobile-summary-card--products">
+          <span class="mobile-summary-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <path d="m4 8 8-4 8 4-8 4-8-4Z" />
+              <path d="m4 8v8l8 4 8-4V8M12 12v8" />
+            </svg>
+          </span>
+          <span>สินค้าทั้งหมด</span>
+          <strong>{{ productCount }}</strong>
+        </div>
+        <div class="mobile-summary-card mobile-summary-card--categories">
+          <span class="mobile-summary-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <path d="M3.5 7.5h6l1.7 2h9.3v9.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-9.5a2 2 0 0 1 2-2Z" />
+              <path d="M3.5 7.5V5a2 2 0 0 1 2-2h4l1.7 2h5.3" />
+            </svg>
+          </span>
+          <span>หมวดหมู่ทั้งหมด</span>
+          <strong>{{ categoryCount }}</strong>
+        </div>
+        <div class="mobile-summary-card mobile-summary-card--low-stock">
+          <span class="mobile-summary-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <path d="M12 3.5 21 20H3l9-16.5Z" />
+              <path d="M12 9v4.5M12 17h.01" />
+            </svg>
+          </span>
+          <span>สินค้าใกล้หมด</span>
+          <strong>{{ lowStockCount }}</strong>
+        </div>
+      </div>
+
+      <div class="mobile-search-box">
+        <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+          <circle cx="11" cy="11" r="6.5" />
+          <path d="m16 16 4.5 4.5" />
+        </svg>
+        <input
+          v-model="searchKeyword"
+          placeholder="ค้นหาชื่อสินค้า, SKU หรือหมวดหมู่"
+          type="search"
+          aria-label="ค้นหาสินค้า"
+        />
+      </div>
+
+      <div class="mobile-inventory-actions">
+        <button class="mobile-category-action" type="button" @click="openCategoryForm">
+          <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+            <path d="M3.5 7.5h6l1.7 2h9.3v9.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-9.5a2 2 0 0 1 2-2Z" />
+            <path d="M3.5 7.5V5a2 2 0 0 1 2-2h4l1.7 2h5.3" />
+          </svg>
+          <span>เพิ่มหมวดหมู่</span>
+        </button>
+        <button class="mobile-product-action" type="button" @click="openCreateForm">
+          <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          <span>{{ productPanelOpen ? 'กำลังแก้ไขสินค้า' : 'เพิ่มสินค้า' }}</span>
+        </button>
+      </div>
+    </section>
 
     <p v-if="isLoading" class="loading">กำลังโหลด...</p>
     <p v-if="notice.message" :class="['notice', notice.type]">{{ notice.message }}</p>
@@ -1285,6 +1385,99 @@ onUnmounted(() => {
       </button>
     </section>
 
+    <section v-if="filteredProducts.length > 0" class="mobile-product-grid">
+      <article v-for="product in filteredProducts" :key="`mobile-${product.id}`" class="mobile-product-card">
+        <div class="mobile-product-media-row">
+          <button
+            v-if="getPrimaryImage(product)"
+            type="button"
+            class="mobile-product-image-button"
+            @click="openImagePreview(getPrimaryImage(product), product.name, getCategoryName(product.categoryId))"
+            :aria-label="`ดูรูป ${product.name}`"
+          >
+            <img :src="getPrimaryImage(product)" :alt="product.name || 'รูปสินค้า'" />
+          </button>
+          <div v-else class="mobile-product-image-placeholder">ไม่มีรูปภาพ</div>
+
+          <div class="mobile-product-heading">
+            <div class="mobile-product-title-row">
+              <h3>{{ product.name || '-' }}</h3>
+              <button
+                type="button"
+                :class="['mobile-favorite-button', { 'is-active': product.isRecommended }]"
+                :disabled="togglingRecommendationId === product.id"
+                :aria-label="product.isRecommended ? 'นำออกจากสินค้าแนะนำ' : 'ตั้งเป็นสินค้าแนะนำ'"
+                @click="toggleRecommendation(product)"
+              >
+                {{ product.isRecommended ? '★' : '☆' }}
+              </button>
+            </div>
+            <span :class="['mobile-stock-status', getStockLevelClass(product.stock)]">
+              {{ getStockLevelText(product.stock) }}
+            </span>
+            <p>{{ getCategoryName(product.categoryId) }}</p>
+          </div>
+        </div>
+
+        <div class="mobile-product-info-grid">
+          <div>
+            <span>SKU</span>
+            <strong>{{ product.sku || '-' }}</strong>
+          </div>
+          <div>
+            <span>คงเหลือ</span>
+            <strong>{{ Number(product.stock) || 0 }} ชิ้น</strong>
+          </div>
+          <div>
+            <span>พรีออเดอร์</span>
+            <strong>{{ formatProductPrice(product.preorderPrice ?? product.basePrice) }}</strong>
+          </div>
+          <div>
+            <span>รูปภาพ</span>
+            <strong>{{ getImageCount(product) }} รูป</strong>
+          </div>
+        </div>
+
+        <div class="mobile-product-description">
+          <span>รายละเอียด</span>
+          <p v-if="isMobileDescriptionExpanded(product.id)">{{ product.description || '-' }}</p>
+          <p v-else>{{ getDescriptionPreview(product.description) }}</p>
+          <button
+            v-if="hasLongDescription(product)"
+            type="button"
+            @click="toggleMobileDescription(product.id)"
+          >
+            {{ isMobileDescriptionExpanded(product.id) ? 'ซ่อนรายละเอียด' : 'ดูรายละเอียดสินค้า' }}
+            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <path :d="isMobileDescriptionExpanded(product.id) ? 'm17 15-5-5-5 5' : 'm7 9 5 5 5-5'" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="mobile-product-actions">
+          <button type="button" class="mobile-edit-action" @click="editProduct(product)">
+            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <path d="m4 16.5-.8 4.3 4.3-.8L19 8.5 15.5 5 4 16.5Z" />
+              <path d="m13.8 6.7 3.5 3.5M4 20.8l3.5-3.5" />
+            </svg>
+            แก้ไข
+          </button>
+          <button type="button" class="mobile-stock-action" @click="openAddStockModal(product)">
+            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            เพิ่มสต็อก
+          </button>
+          <button type="button" class="mobile-delete-action" @click="deleteProduct(product.id)">
+            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <path d="M5 7h14M10 4h4l1 3H9l1-3ZM7 7l.8 13h8.4L17 7M10 11v5M14 11v5" />
+            </svg>
+            ลบ
+          </button>
+        </div>
+      </article>
+    </section>
+
     <div
       v-if="showAddStockModal && selectedProductForStock"
       class="modal-overlay"
@@ -1361,6 +1554,11 @@ onUnmounted(() => {
 .admin-page {
   display: grid;
   gap: 1rem;
+}
+
+.mobile-inventory-overview,
+.mobile-product-grid {
+  display: none;
 }
 
 .page-intro {
@@ -2757,5 +2955,432 @@ input.input-error:focus {
   color: #45315f;
   font-weight: 600;
   font-size: 0.9rem;
+}
+
+@media (max-width: 767px) {
+  .admin-page {
+    gap: 0.75rem;
+  }
+
+  .admin-page > .admin-page-heading {
+    margin-bottom: 0;
+    padding: 1rem;
+    border-radius: 16px;
+    gap: 0.55rem;
+  }
+
+  .admin-page-heading h1 {
+    font-size: 1.35rem;
+    line-height: 1.3;
+  }
+
+  .admin-page-heading p {
+    display: none;
+  }
+
+  .admin-page-heading__actions {
+    gap: 0.45rem;
+  }
+
+  .intro-bubble {
+    padding: 0.35rem 0.7rem;
+    font-size: 0.75rem;
+  }
+
+  .toolbar {
+    display: none;
+  }
+
+  .mobile-inventory-overview {
+    display: grid;
+    gap: 0.7rem;
+  }
+
+  .mobile-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.45rem;
+  }
+
+  .mobile-summary-card {
+    display: grid;
+    min-width: 0;
+    min-height: 6.6rem;
+    align-content: center;
+    justify-items: center;
+    gap: 0.22rem;
+    padding: 0.55rem 0.25rem;
+    border: 1px solid #eadff5;
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 5px 14px rgba(89, 61, 125, 0.07);
+    color: #75658f;
+    text-align: center;
+  }
+
+  .mobile-summary-card--products {
+    border-color: #dac8f1;
+    background: linear-gradient(155deg, #fff 0%, #f5edff 100%);
+  }
+
+  .mobile-summary-card--categories {
+    border-color: #cfe5f4;
+    background: linear-gradient(155deg, #fff 0%, #eef8ff 100%);
+  }
+
+  .mobile-summary-card--low-stock {
+    border-color: #f5dcc5;
+    background: linear-gradient(155deg, #fff 0%, #fff5ed 100%);
+  }
+
+  .mobile-summary-icon {
+    display: grid;
+    width: 2rem;
+    height: 2rem;
+    place-items: center;
+    border-radius: 10px;
+    background: #f0e7fb;
+    color: #8055ad;
+  }
+
+  .mobile-summary-card--categories .mobile-summary-icon {
+    background: #e7f3ff;
+    color: #4d88b3;
+  }
+
+  .mobile-summary-card--low-stock .mobile-summary-icon {
+    background: #fff0df;
+    color: #b9782c;
+  }
+
+  .mobile-summary-icon svg,
+  .mobile-inventory-actions svg,
+  .mobile-product-actions svg,
+  .mobile-product-description button svg {
+    width: 1.05rem;
+    height: 1.05rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.7;
+  }
+
+  .mobile-summary-card > span:not(.mobile-summary-icon) {
+    overflow-wrap: anywhere;
+    color: #75658f;
+    font-size: 0.65rem;
+    font-weight: 700;
+    line-height: 1.15;
+  }
+
+  .mobile-summary-card strong {
+    color: #3f2f5d;
+    font-size: 1.2rem;
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  .mobile-search-box {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .mobile-search-box > svg {
+    position: absolute;
+    left: 0.85rem;
+    z-index: 1;
+    width: 1.05rem;
+    height: 1.05rem;
+    fill: none;
+    stroke: #8c68b6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+    pointer-events: none;
+  }
+
+  .mobile-search-box input {
+    min-width: 0;
+    padding: 0.78rem 0.8rem 0.78rem 2.35rem;
+    border-radius: 11px;
+    font-size: 0.82rem;
+  }
+
+  .mobile-inventory-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.55rem;
+  }
+
+  .mobile-inventory-actions button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    min-width: 0;
+    min-height: 2.45rem;
+    padding: 0.55rem 0.35rem;
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 0.78rem;
+    white-space: nowrap;
+  }
+
+  .mobile-category-action {
+    border-color: #d6b9f1;
+    background: #f7efff;
+    color: #6a4f89;
+  }
+
+  .mobile-product-action {
+    border-color: #b788ea;
+    background: linear-gradient(180deg, #cda2fb 0%, #b97be8 100%);
+    color: #fff;
+  }
+
+  .mobile-product-grid {
+    display: grid;
+    gap: 0.7rem;
+  }
+
+  .product-grid {
+    display: none;
+  }
+
+  .mobile-product-card {
+    min-width: 0;
+    overflow: hidden;
+    padding: 0.75rem;
+    border: 1px solid #eadff5;
+    border-radius: 16px;
+    background: #fff;
+    box-shadow: 0 6px 18px rgba(79, 62, 108, 0.09);
+  }
+
+  .mobile-product-media-row {
+    display: grid;
+    grid-template-columns: 5rem minmax(0, 1fr);
+    gap: 0.7rem;
+    align-items: start;
+  }
+
+  .mobile-product-image-button,
+  .mobile-product-image-placeholder {
+    display: grid;
+    width: 5rem;
+    height: 5rem;
+    place-items: center;
+    overflow: hidden;
+    border: 0;
+    border-radius: 12px;
+    background: #f5effc;
+  }
+
+  .mobile-product-image-button {
+    padding: 0;
+    cursor: zoom-in;
+  }
+
+  .mobile-product-image-button:focus-visible,
+  .mobile-favorite-button:focus-visible,
+  .mobile-product-description button:focus-visible,
+  .mobile-product-actions button:focus-visible {
+    outline: 3px solid rgba(183, 136, 234, 0.32);
+    outline-offset: 2px;
+  }
+
+  .mobile-product-image-button img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .mobile-product-image-placeholder {
+    color: #8d7ba8;
+    font-size: 0.68rem;
+    text-align: center;
+  }
+
+  .mobile-product-heading {
+    min-width: 0;
+  }
+
+  .mobile-product-title-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.35rem;
+  }
+
+  .mobile-product-title-row h3 {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+    color: #45315f;
+    font-size: 0.94rem;
+    font-weight: 800;
+    line-height: 1.25;
+  }
+
+  .mobile-favorite-button {
+    flex: 0 0 auto;
+    width: 1.8rem;
+    height: 1.8rem;
+    padding: 0;
+    border: 1px solid #e3d2f2;
+    border-radius: 50%;
+    background: #fff;
+    color: #b79bcf;
+    font-size: 1.1rem;
+    line-height: 1;
+  }
+
+  .mobile-favorite-button.is-active {
+    border-color: #f0d09f;
+    background: #fff8e9;
+    color: #d38a1c;
+  }
+
+  .mobile-stock-status {
+    display: inline-flex;
+    margin-top: 0.35rem;
+  }
+
+  .mobile-stock-status.stock-pill {
+    padding: 0.18rem 0.5rem;
+    font-size: 0.66rem;
+  }
+
+  .mobile-product-heading p {
+    margin: 0.3rem 0 0;
+    overflow: hidden;
+    color: #8b7ba3;
+    font-size: 0.74rem;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-product-info-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    padding: 0.65rem;
+    border-radius: 12px;
+    background: #faf6ff;
+  }
+
+  .mobile-product-info-grid div {
+    min-width: 0;
+  }
+
+  .mobile-product-info-grid span,
+  .mobile-product-description > span {
+    display: block;
+    margin-bottom: 0.12rem;
+    color: #9a7dbf;
+    font-size: 0.65rem;
+    font-weight: 700;
+  }
+
+  .mobile-product-info-grid strong {
+    display: block;
+    overflow-wrap: anywhere;
+    color: #594373;
+    font-size: 0.76rem;
+    font-weight: 700;
+  }
+
+  .mobile-product-description {
+    margin-top: 0.7rem;
+  }
+
+  .mobile-product-description p {
+    margin: 0;
+    color: #675980;
+    font-size: 0.76rem;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-product-description button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.22rem;
+    margin-top: 0.25rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #7a4eaa;
+    font-family: inherit;
+    font-size: 0.72rem;
+    font-weight: 800;
+  }
+
+  .mobile-product-description button svg {
+    width: 0.85rem;
+    height: 0.85rem;
+  }
+
+  .mobile-product-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.4rem;
+    margin-top: 0.75rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid #f0e8f8;
+  }
+
+  .mobile-product-actions button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.22rem;
+    min-width: 0;
+    min-height: 2.2rem;
+    padding: 0.42rem 0.2rem;
+    border-radius: 9px;
+    font-family: inherit;
+    font-size: 0.69rem;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+
+  .mobile-edit-action {
+    border-color: #d6b9f1;
+    background: #f7efff;
+    color: #6a4f89;
+  }
+
+  .mobile-stock-action {
+    border-color: #bcebd8;
+    background: #eaf9f1;
+    color: #267456;
+  }
+
+  .mobile-delete-action {
+    border-color: #efbcc2;
+    background: #ffe8eb;
+    color: #a74553;
+  }
+
+  .mobile-product-actions svg {
+    flex: 0 0 auto;
+    width: 0.9rem;
+    height: 0.9rem;
+  }
+
+  .empty-box {
+    padding: 1rem;
+  }
+
+  .category-manager,
+  .form-panel {
+    padding: 0.8rem;
+    border-radius: 16px;
+  }
 }
 </style>

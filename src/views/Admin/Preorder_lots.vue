@@ -24,7 +24,7 @@
 
       <div v-else-if="!visibleRounds.length" class="empty-state"><p>ไม่พบรอบที่ตรงกับการค้นหา</p><button class="btn-action" @click="roundSearch = ''; roundStatusFilter = 'all'">ล้างตัวกรอง</button></div>
       <template v-else>
-        <!-- Desktop / tablet: table -->
+        <!-- Desktop / tablet: preserve the original table layout -->
         <div class="table-scroll-wrap">
           <table class="preorder-table">
             <thead>
@@ -69,8 +69,7 @@
           </table>
         </div>
 
-        <!-- Mobile: cards -->
-        <div class="round-cards" aria-label="รายการรอบพรีออเดอร์สำหรับมือถือ">
+        <div class="round-cards" aria-label="รายการรอบพรีออเดอร์">
           <article
             v-for="round in visibleRounds"
             :key="`card-${round.id}`"
@@ -81,44 +80,134 @@
                 <strong>{{ round.name }}</strong>
                 <small>รอบ #{{ round.id }}</small>
               </div>
-              <span :class="['status-badge', getStatusClass(round.status)]">
-                {{ getStatusLabel(round.status) }}
-              </span>
+              <div class="round-card__head-actions">
+                <span :class="['status-badge', getStatusClass(round.status)]">
+                  <span class="status-badge__dot" aria-hidden="true"></span>
+                  {{ getStatusLabel(round.status) }}
+                </span>
+                <div class="round-card__menu">
+                  <button
+                    :id="`round-menu-button-${round.id}`"
+                    class="round-menu-trigger"
+                    type="button"
+                    aria-label="เมนูการจัดการรอบ"
+                    aria-haspopup="menu"
+                    :aria-expanded="openRoundMenuId === round.id"
+                    @click.stop="toggleRoundMenu(round.id)"
+                    @keydown.esc.stop="closeRoundMenu"
+                  >
+                    <svg class="round-menu-trigger__icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <circle cx="5" cy="12" r="1.7" />
+                      <circle cx="12" cy="12" r="1.7" />
+                      <circle cx="19" cy="12" r="1.7" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
             </header>
+
+            <Teleport to="body">
+              <div
+                v-if="openRoundMenuId === round.id"
+                :id="`round-menu-${round.id}`"
+                class="round-menu-panel"
+                role="menu"
+                :aria-labelledby="`round-menu-button-${round.id}`"
+                :style="{
+                  top: `${roundMenuPosition.top}px`,
+                  left: `${roundMenuPosition.left}px`,
+                  visibility: roundMenuPosition.ready ? 'visible' : 'hidden',
+                }"
+                @click.stop
+              >
+                  <button type="button" role="menuitem" @click="runRoundMenuAction(() => openEditRoundModal(round))">
+                    <svg class="round-menu-item__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="m4 16.5-.75 3.25L6.5 19 18 7.5 14.5 4zM13.5 5l3.5 3.5" />
+                    </svg>
+                    แก้ไข
+                  </button>
+                  <button type="button" role="menuitem" @click="runRoundMenuAction(() => setRoundScheduled(round))">
+                    <svg class="round-menu-item__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <circle cx="12" cy="12" r="8.5" />
+                      <path d="M12 7v5l3 2" />
+                    </svg>
+                    ตามเวลา
+                  </button>
+                  <button type="button" role="menuitem" class="round-menu-item--divider" @click="runRoundMenuAction(() => openDuplicateRoundModal(round))">
+                    <svg class="round-menu-item__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <rect x="7" y="7" width="11" height="13" rx="1.5" />
+                      <path d="M16 7V5a1.5 1.5 0 0 0-1.5-1.5h-8A1.5 1.5 0 0 0 5 5v10a1.5 1.5 0 0 0 1.5 1.5H7" />
+                    </svg>
+                    คัดลอก
+                  </button>
+                  <button type="button" role="menuitem" class="round-menu-item--danger" @click="runRoundMenuAction(() => deleteRound(round.id))">
+                    <svg class="round-menu-item__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M4.5 7h15M9 7V4.5h6V7M7 7l.75 13h8.5L17 7M10 10.5v6M14 10.5v6" />
+                    </svg>
+                    ลบ
+                  </button>
+              </div>
+            </Teleport>
 
             <p v-if="round.description" class="round-card__desc">{{ round.description }}</p>
 
             <div class="round-card__dates">
-              <div>
-                <span>วันเริ่ม</span>
-                <strong>{{ formatDate(round.startDate) }}</strong>
+              <div class="round-card__date">
+                <span class="round-card__calendar-icon-wrap">
+                  <svg class="round-card__calendar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="3.5" y="4.5" width="17" height="16" rx="2" />
+                    <path d="M8 2.75v4M16 2.75v4M3.5 9h17" />
+                  </svg>
+                </span>
+                <div class="round-card__date-copy">
+                  <span>วันเริ่ม</span>
+                  <strong>
+                    <span>{{ formatDateParts(round.startDate).date }}</span>
+                    <small>{{ formatDateParts(round.startDate).time }}</small>
+                  </strong>
+                </div>
               </div>
-              <div>
-                <span>วันสิ้นสุด</span>
-                <strong>{{ formatDate(round.endDate) }}</strong>
+              <div class="round-card__date">
+                <span class="round-card__calendar-icon-wrap">
+                  <svg class="round-card__calendar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="3.5" y="4.5" width="17" height="16" rx="2" />
+                    <path d="M8 2.75v4M16 2.75v4M3.5 9h17" />
+                  </svg>
+                </span>
+                <div class="round-card__date-copy">
+                  <span>วันสิ้นสุด</span>
+                  <strong>
+                    <span>{{ formatDateParts(round.endDate).date }}</span>
+                    <small>{{ formatDateParts(round.endDate).time }}</small>
+                  </strong>
+                </div>
               </div>
             </div>
 
             <div class="round-card__actions">
               <button class="rc-btn rc-btn--primary" type="button" @click="openRoundDetailModal(round)">
+                <svg class="round-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M6 3.5h9l3 3V20.5H6z" />
+                  <path d="M14 3.5v4h4M9 12h6M9 15.5h6" />
+                </svg>
                 รายละเอียด
               </button>
-              <button class="rc-btn" type="button" @click="openEditRoundModal(round)">แก้ไข</button>
-
               <button
                 class="rc-btn"
                 :class="isRoundOpen(round) ? 'rc-btn--close' : 'rc-btn--open'"
                 type="button"
                 @click="toggleRoundStatus(round)"
               >
+                <svg v-if="isRoundOpen(round)" class="round-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="8.5" />
+                  <path d="m8.5 8.5 7 7M15.5 8.5l-7 7" />
+                </svg>
+                <svg v-else class="round-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="8.5" />
+                  <path d="m10 8.5 5 3.5-5 3.5z" />
+                </svg>
                 {{ isRoundOpen(round) ? 'ปิดรอบ' : 'เปิดรอบ' }}
               </button>
-              <button class="rc-btn" type="button" @click="setRoundScheduled(round)">ตามเวลา</button>
-
-              <button class="rc-btn rc-btn--ghost" type="button" @click="openDuplicateRoundModal(round)">
-                คัดลอก
-              </button>
-              <button class="rc-btn rc-btn--danger" type="button" @click="deleteRound(round.id)">ลบ</button>
             </div>
           </article>
         </div>
@@ -617,7 +706,7 @@
 
 <script setup>
 import AdminPageHeader from '../../components/AdminPageHeader.vue'
-import { ref, computed, onMounted, onUnmounted, reactive } from 'vue'
+import { ref, computed, onMounted, onUnmounted, reactive, nextTick } from 'vue'
 import { usePreorderStore } from '@/stores/preorderStore'
 import { useAdminProductStore } from '@/stores/adminProductStore'
 
@@ -661,6 +750,8 @@ const roundForm = ref({
   endDate: '',
   status: 'active',
 })
+const openRoundMenuId = ref(null)
+const roundMenuPosition = ref({ top: 0, left: 0, ready: false })
 
 // Normalize round object: รองรับทั้ง camelCase (จาก store) และ snake_case (จาก API โดยตรง)
 function normalizeRound(round) {
@@ -761,6 +852,15 @@ function formatDate(dateString) {
   })
 }
 
+function formatDateParts(dateString) {
+  const formatted = formatDate(dateString)
+  const [date, ...timeParts] = formatted.split(' ')
+  return {
+    date,
+    time: timeParts.join(' '),
+  }
+}
+
 function formatDateForInput(dateString) {
   const date = new Date(dateString)
   const year = date.getFullYear()
@@ -788,6 +888,70 @@ function getStatusLabel(status) {
 
 function isRoundOpen(round) {
   return ['active', 'open'].includes(String(round?.status || '').toLowerCase())
+}
+
+async function toggleRoundMenu(roundId) {
+  if (openRoundMenuId.value === roundId) {
+    closeRoundMenu()
+    return
+  }
+
+  openRoundMenuId.value = roundId
+  roundMenuPosition.value = { top: 0, left: 0, ready: false }
+  await nextTick()
+  positionRoundMenu()
+}
+
+function closeRoundMenu() {
+  openRoundMenuId.value = null
+  roundMenuPosition.value = { top: 0, left: 0, ready: false }
+}
+
+function positionRoundMenu() {
+  if (openRoundMenuId.value == null) return
+
+  const trigger = document.getElementById(`round-menu-button-${openRoundMenuId.value}`)
+  const panel = document.getElementById(`round-menu-${openRoundMenuId.value}`)
+  if (!trigger || !panel) return
+
+  const triggerRect = trigger.getBoundingClientRect()
+  const panelWidth = panel.offsetWidth
+  const panelHeight = panel.offsetHeight
+  const viewportPadding = 12
+  const gap = 8
+  const fitsBelow = triggerRect.bottom + gap + panelHeight <= window.innerHeight - viewportPadding
+  const top = fitsBelow
+    ? triggerRect.bottom + gap
+    : Math.max(viewportPadding, triggerRect.top - panelHeight - gap)
+  const maxLeft = Math.max(viewportPadding, window.innerWidth - panelWidth - viewportPadding)
+  const left = Math.min(
+    Math.max(viewportPadding, triggerRect.right - panelWidth),
+    maxLeft,
+  )
+
+  roundMenuPosition.value = {
+    top,
+    left,
+    ready: true,
+  }
+}
+
+function handleRoundMenuViewportChange() {
+  if (openRoundMenuId.value != null) positionRoundMenu()
+}
+
+function runRoundMenuAction(action) {
+  closeRoundMenu()
+  return action()
+}
+
+function handleRoundMenuOutsideClick(event) {
+  if (!(event.target instanceof Element) || event.target.closest('.round-card__menu')) return
+  closeRoundMenu()
+}
+
+function handleRoundMenuKeydown(event) {
+  if (event.key === 'Escape') closeRoundMenu()
 }
 
 function getStatusClass(status) {
@@ -1240,6 +1404,10 @@ async function setRoundScheduled(round) {
 }
 
 onMounted(async () => {
+  document.addEventListener('click', handleRoundMenuOutsideClick)
+  document.addEventListener('keydown', handleRoundMenuKeydown)
+  window.addEventListener('resize', handleRoundMenuViewportChange)
+  window.addEventListener('scroll', handleRoundMenuViewportChange, true)
   await preorderStore.fetchRounds()
   if (typeof adminProductStore.fetchProducts === 'function') {
     await adminProductStore.fetchProducts()
@@ -1247,6 +1415,11 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  document.removeEventListener('click', handleRoundMenuOutsideClick)
+  document.removeEventListener('keydown', handleRoundMenuKeydown)
+  window.removeEventListener('resize', handleRoundMenuViewportChange)
+  window.removeEventListener('scroll', handleRoundMenuViewportChange, true)
+  closeRoundMenu()
   stopRoundProgressPolling()
 })
 </script>
@@ -2144,7 +2317,7 @@ onUnmounted(() => {
   .rounds-filters input, .rounds-filters select { width: 100%; }
   .preorder-content { padding: 16px; }
 }
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .preorder-container {
     padding: 10px;
   }
@@ -2217,7 +2390,7 @@ onUnmounted(() => {
 .rc-btn--danger { background: #fff; border-color: #f3c4c4; color: #d32f2f; }
 .rc-btn--danger:hover { background: #fff1f1; }
 
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .table-scroll-wrap { display: none; }
 
   .round-cards {
@@ -2300,6 +2473,426 @@ onUnmounted(() => {
   .rounds-filters { width: 100%; }
   .rounds-filters input,
   .rounds-filters select { width: 100%; }
+}
+
+/* ── Round management cards ── */
+@media (max-width: 767px) {
+.round-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 18px;
+}
+
+.round-card {
+  position: relative;
+  min-width: 0;
+  overflow: visible;
+  padding: 22px 22px 20px 26px;
+  border: 1px solid #eadcf6;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(84, 54, 113, 0.08);
+}
+
+.round-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 5px;
+  border-radius: 20px 0 0 20px;
+  background: #cbb8e2;
+}
+
+.round-card--open::before { background: #4ade80; }
+.round-card--closed::before { background: #f87171; }
+.round-card--scheduled::before { background: #fbbf24; }
+.round-card--archived::before { background: #9ca3af; }
+
+.round-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.round-card__title {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.round-card__title strong {
+  color: #45315f;
+  font-size: 1.08rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.round-card__title small {
+  color: #9a8aaa;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.round-card__head-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.round-card__menu {
+  position: relative;
+}
+
+.round-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid #e6d9f0;
+  border-radius: 12px;
+  background: #fff;
+  color: #715989;
+  font: inherit;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.round-menu-trigger__icon {
+  width: 20px;
+  height: 20px;
+}
+
+.round-menu-trigger:hover,
+.round-menu-trigger[aria-expanded='true'] {
+  border-color: #c9ace4;
+  background: #f7f1fc;
+  color: #684092;
+}
+
+.round-menu-trigger:focus-visible,
+.round-menu-panel button:focus-visible {
+  outline: 3px solid #c3a4e3;
+  outline-offset: 2px;
+}
+
+.round-menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  width: 180px;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid #e6d9f0;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 14px 34px rgba(72, 46, 99, 0.18);
+}
+
+.round-menu-panel button {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #594268;
+  font: inherit;
+  font-size: 0.86rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.round-menu-item__icon {
+  flex: 0 0 17px;
+  width: 17px;
+  height: 17px;
+}
+
+.round-menu-panel button:hover { background: #f7f1fc; }
+.round-menu-panel .round-menu-item--danger { color: #b42318; }
+.round-menu-panel .round-menu-item--danger:hover { background: #fff1f1; }
+.round-menu-panel .round-menu-item--divider {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid #f0e8f8;
+}
+
+.round-card__desc {
+  margin: 16px 0 0;
+  color: #685775;
+  font-size: 0.86rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.round-card__dates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.round-card__dates > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  padding: 11px 12px;
+  border-radius: 13px;
+  background: #faf7ff;
+}
+
+.round-card__dates span {
+  color: #8a789f;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.round-card__dates strong {
+  color: #51415f;
+  font-size: 0.82rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.round-card__dates {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 12px 10px;
+  border: 1px solid #eee3f7;
+  border-radius: 14px;
+  background: #faf7ff;
+  gap: 0;
+  overflow: hidden;
+}
+
+.round-card__date {
+  display: flex !important;
+  align-items: flex-start;
+  min-width: 0;
+  gap: 7px;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+.round-card__date + .round-card__date {
+  padding-left: 10px !important;
+  border-left: 1px solid #dfd1ed;
+}
+
+.round-card__calendar-icon {
+  width: 15px;
+  height: 15px;
+  color: #8a5bb1;
+}
+
+.round-card__calendar-icon-wrap {
+  display: inline-grid;
+  flex: 0 0 27px;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  margin-top: 1px;
+  border-radius: 8px;
+  background: #f1e9fb;
+  color: #8a5bb1;
+}
+
+.round-card__date-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.round-card__date-copy > span {
+  color: #8a789f;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.round-card__date-copy strong {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+  color: #51415f;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.round-card__date-copy strong > span,
+.round-card__date-copy strong small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.round-card__date-copy strong > span { color: #51415f; }
+.round-card__date-copy strong small {
+  color: #765d88;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.round-card__actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px dashed #eadcf6;
+}
+
+.round-card .rc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 44px;
+  border-radius: 12px;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.round-action-icon {
+  flex: 0 0 17px;
+  width: 17px;
+  height: 17px;
+}
+
+.round-card .status-badge::before {
+  display: none;
+}
+
+.status-badge__dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: middle;
+}
+
+@media (max-width: 640px) {
+  .round-cards { grid-template-columns: 1fr; }
+
+  .round-card {
+    padding: 18px 16px 16px 21px;
+  }
+
+  .round-card__head-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    max-width: 100%;
+  }
+
+  .round-card__menu {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    width: min(220px, calc(100vw - 2.5rem));
+  }
+
+  .round-menu-panel {
+    position: static;
+    flex-basis: 100%;
+    width: auto;
+    margin-top: 8px;
+    box-shadow: 0 8px 20px rgba(72, 46, 99, 0.1);
+  }
+
+  .round-card__dates { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+}
+
+@media (max-width: 767px) {
+  .round-card__head {
+    align-items: flex-start;
+  }
+
+  .round-card__title {
+    flex: 1 1 auto;
+    max-width: 100%;
+  }
+
+  .round-card__title strong {
+    overflow-wrap: break-word;
+    word-break: normal;
+  }
+
+  .round-card__head-actions {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .round-card__menu {
+    position: static;
+    display: block;
+    width: auto;
+  }
+
+  .round-menu-trigger {
+    flex: 0 0 40px;
+  }
+
+  .round-menu-panel {
+    position: fixed;
+    top: auto;
+    right: auto;
+    bottom: auto;
+    left: auto;
+    z-index: 1200;
+    box-sizing: border-box;
+    grid-template-columns: 1fr;
+    width: min(194px, calc(100vw - 24px));
+    max-height: min(50vh, 340px);
+    max-height: min(50dvh, 340px);
+    overflow-y: auto;
+    padding: 6px;
+    border-radius: 14px;
+    box-shadow: 0 12px 30px rgba(72, 46, 99, 0.2);
+    overscroll-behavior: contain;
+  }
+
+  .round-menu-panel button {
+    min-height: 44px;
+    padding: 10px 11px;
+    font-size: 0.82rem;
+  }
+}
+
+@media (min-width: 768px) {
+  .round-menu-panel {
+    display: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .round-card {
+    padding-left: 16px;
+  }
+
+  .round-card::before,
+  .round-card--open::before,
+  .round-card--closed::before,
+  .round-card--scheduled::before,
+  .round-card--archived::before {
+    display: none;
+  }
 }
 
 /* ── Image preview modal ── */

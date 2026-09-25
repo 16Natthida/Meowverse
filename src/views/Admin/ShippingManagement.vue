@@ -15,6 +15,8 @@ const drafts = ref({})
 const savingOrderId = ref(null)
 const detailOrder = ref(null)
 const previewImage = ref(null)
+const expandedMobileOrders = ref(new Set())
+const mobileShippingEdits = ref(new Set())
 
 // ── ยอดรวมของออเดอร์ ให้ตรงกับหน้า "จัดการยอดขาย" โดยแยกตามประเภทออเดอร์ ──
 // พรีออเดอร์: total_amount (รวมค่าส่งจีนแล้ว) + ค่าจัดส่ง + ค่านำเข้า
@@ -52,6 +54,37 @@ function openImagePreview(url, title, subtitle) {
 
 function closeImagePreview() {
   previewImage.value = null
+}
+
+function isMobileProductsExpanded(orderId) {
+  return expandedMobileOrders.value.has(orderId)
+}
+
+function toggleMobileProducts(orderId) {
+  const next = new Set(expandedMobileOrders.value)
+  if (next.has(orderId)) next.delete(orderId)
+  else next.add(orderId)
+  expandedMobileOrders.value = next
+}
+
+function visibleMobileProducts(order) {
+  const details = order?.details || []
+  return isMobileProductsExpanded(order.order_id) ? details : details.slice(0, 2)
+}
+
+function remainingMobileProductCount(order) {
+  return Math.max((order?.details?.length || 0) - 2, 0)
+}
+
+function isMobileShippingEditing(orderId) {
+  return mobileShippingEdits.value.has(orderId)
+}
+
+function setMobileShippingEditing(orderId, isEditing) {
+  const next = new Set(mobileShippingEdits.value)
+  if (isEditing) next.add(orderId)
+  else next.delete(orderId)
+  mobileShippingEdits.value = next
 }
 
 function handleShippingKeydown(e) {
@@ -138,6 +171,10 @@ function isDelivered(order) {
   return order?.status === 'Delivered'
 }
 
+function isShipped(order) {
+  return order?.status === 'Shipped'
+}
+
 function getDraft(order) {
   if (!drafts.value[order.order_id]) {
     drafts.value[order.order_id] = {
@@ -175,6 +212,7 @@ async function saveShipment(order) {
 
     alert('บันทึกข้อมูลการจัดส่งเรียบร้อยแล้ว')
     await fetchShippingOrders()
+    setMobileShippingEditing(order.order_id, false)
   } catch (err) {
     alert(err.message)
   } finally {
@@ -194,6 +232,19 @@ function statusLabel(status) {
     Delivered: 'นำจ่ายแล้ว',
   }
   return labels[status] || status
+}
+
+function statusClass(status) {
+  if (status === 'Ready_to_Ship') return 'status--ready'
+  if (status === 'Shipped') return 'status--shipped'
+  if (status === 'Delivered') return 'status--delivered'
+  return 'status--paid'
+}
+
+function orderTypeLabel(type) {
+  if (type === 'Preorder') return 'พรีออเดอร์'
+  if (type === 'Ready') return 'พร้อมส่ง'
+  return type || '-'
 }
 
 // ฟังก์ชันจัดรูปแบบที่อยู่จาก SQL (แปลง \n เป็น <br>)
@@ -380,6 +431,197 @@ onUnmounted(() => {
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <div v-if="!loading && filteredOrders.length > 0" class="shipping-mobile-list" aria-label="รายการจัดส่งสำหรับมือถือ">
+        <article
+          v-for="order in filteredOrders"
+          :key="`mobile-${order.order_id}`"
+          class="shipping-order-card"
+        >
+          <header class="shipping-order-card__head">
+            <div class="shipping-order-card__identity">
+              <strong>#{{ String(order.order_id).padStart(3, '0') }}</strong>
+              <time>{{ formatDate(order.Order_date) }}</time>
+            </div>
+            <div class="shipping-order-card__badges">
+              <span :class="['status', order.Order_type === 'Preorder' ? 'status--pending' : 'status--paid']">
+                {{ orderTypeLabel(order.Order_type) }}
+              </span>
+              <span :class="['status', statusClass(order.status)]">
+                {{ statusLabel(order.status) }}
+              </span>
+            </div>
+          </header>
+
+          <section class="shipping-mobile-section">
+            <h4>
+              <span class="shipping-section-icon-wrap">
+                <svg class="shipping-section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="8" r="3.25" />
+                  <path d="M5.5 20c.75-3.3 3-5 6.5-5s5.75 1.7 6.5 5" />
+                </svg>
+              </span>
+              ผู้รับและเบอร์โทร
+            </h4>
+            <div class="shipping-recipient">
+              <strong>{{ order.name || '-' }}</strong>
+              <span>{{ order.phone || '-' }}</span>
+            </div>
+          </section>
+
+          <section class="shipping-mobile-section">
+            <h4>
+              <span class="shipping-section-icon-wrap">
+                <svg class="shipping-section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4 7.5 12 4l8 3.5v9L12 20l-8-3.5z" />
+                  <path d="M4 7.5 12 11l8-3.5M12 11v9" />
+                </svg>
+              </span>
+              สินค้า <span class="shipping-section-count">{{ (order.details || []).length }} รายการ</span>
+            </h4>
+            <div class="shipping-mobile-products">
+              <div v-for="item in visibleMobileProducts(order)" :key="item.detail_id" class="shipping-mobile-product">
+                <div class="shipping-mobile-product__name">
+                  <strong>{{ item.prod_name || '-' }}</strong>
+                  <small v-if="item.flavor">{{ item.flavor }}</small>
+                </div>
+                <strong class="shipping-mobile-product__qty">x{{ item.qty }}</strong>
+              </div>
+            </div>
+            <button
+              v-if="remainingMobileProductCount(order) > 0"
+              type="button"
+              class="shipping-products-toggle"
+              @click="toggleMobileProducts(order.order_id)"
+            >
+              {{ isMobileProductsExpanded(order.order_id) ? 'ซ่อนรายการสินค้า' : `ดูสินค้าอีก ${remainingMobileProductCount(order)} รายการ` }}
+            </button>
+          </section>
+
+          <section class="shipping-mobile-section">
+            <h4>
+              <span class="shipping-section-icon-wrap">
+                <svg class="shipping-section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 21s6-5.35 6-11a6 6 0 1 0-12 0c0 5.65 6 11 6 11Z" />
+                  <circle cx="12" cy="10" r="2" />
+                </svg>
+              </span>
+              ที่อยู่จัดส่ง
+            </h4>
+            <div class="shipping-address-text" v-html="formatAddress(order.address)"></div>
+            <div v-if="order.notes" class="shipping-order-notes">
+              <strong>หมายเหตุ:</strong> {{ order.notes }}
+            </div>
+          </section>
+
+          <section class="shipping-mobile-section shipping-mobile-section--shipment">
+            <h4>
+              <span class="shipping-section-icon-wrap">
+                <svg class="shipping-section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 7h11v10H3zM14 10h3l4 4v3h-7z" />
+                  <circle cx="7" cy="19" r="1.5" />
+                  <circle cx="18" cy="19" r="1.5" />
+                </svg>
+              </span>
+              บริษัทขนส่งและเลขพัสดุ
+            </h4>
+
+            <div v-if="isShipped(order) || isDelivered(order)" class="shipping-saved-details">
+              <div>
+                <span>บริษัทขนส่ง</span>
+                <strong>{{ order.Shipping_Carrier || order.provider_name || '-' }}</strong>
+              </div>
+              <div>
+                <span class="shipping-detail-label">
+                  <svg class="shipping-detail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M4 7.5 12 4l8 3.5v9L12 20l-8-3.5z" />
+                    <path d="M4 7.5 12 11l8-3.5M12 11v9" />
+                  </svg>
+                  เลขพัสดุ
+                </span>
+                <strong>{{ order.tracking_number || '-' }}</strong>
+              </div>
+            </div>
+
+            <button
+              v-if="isShipped(order) && !isMobileShippingEditing(order)"
+              type="button"
+              class="shipping-edit-toggle"
+              @click="setMobileShippingEditing(order.order_id, true)"
+            >
+              แก้ไขข้อมูลจัดส่ง
+            </button>
+
+            <template v-if="(!isShipped(order) && !isDelivered(order)) || isMobileShippingEditing(order)">
+              <div class="shipment-editor shipping-mobile-editor">
+                <select v-model="getDraft(order).provider_id" :disabled="isDelivered(order)">
+                  <option value="">-- เลือกบริษัทขนส่ง --</option>
+                  <option
+                    v-for="provider in activeProviders"
+                    :key="provider.provider_id"
+                    :value="provider.provider_id"
+                  >
+                    {{ provider.provider_name }}
+                  </option>
+                </select>
+                <input
+                  v-model="getDraft(order).tracking_number"
+                  placeholder="เลขพัสดุ"
+                  :disabled="isDelivered(order)"
+                />
+              </div>
+              <button
+                v-if="isMobileShippingEditing(order)"
+                type="button"
+                class="shipping-edit-cancel"
+                @click="setMobileShippingEditing(order.order_id, false)"
+              >
+                ยกเลิก
+              </button>
+            </template>
+          </section>
+
+          <div class="shipping-mobile-actions">
+            <button
+              v-if="!isShipped(order) && !isDelivered(order)"
+              class="btn-action btn-action--ready mobile-action-with-icon"
+              :disabled="savingOrderId === order.order_id"
+              @click="saveShipment(order)"
+            >
+              <svg class="mobile-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M3 11.5 21 4l-7.5 17-3.25-7.25z" />
+                <path d="m10.25 13.75 5.5-5.5" />
+              </svg>
+              {{ savingOrderId === order.order_id ? 'กำลังบันทึก...' : 'บันทึกและจัดส่ง' }}
+            </button>
+            <button
+              v-if="isShipped(order) && isMobileShippingEditing(order)"
+              class="btn-action btn-action--ready mobile-action-with-icon"
+              :disabled="savingOrderId === order.order_id"
+              @click="saveShipment(order)"
+            >
+              <svg class="mobile-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M3 11.5 21 4l-7.5 17-3.25-7.25z" />
+                <path d="m10.25 13.75 5.5-5.5" />
+              </svg>
+              {{ savingOrderId === order.order_id ? 'กำลังบันทึก...' : 'บันทึกข้อมูลจัดส่ง' }}
+            </button>
+            <button type="button" class="btn-print-order mobile-action-with-icon" @click="printShippingOrder(order)">
+              <svg class="mobile-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M6 9V3h12v6M6 17H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2" />
+                <path d="M6 14h12v7H6zM18 12h.01" />
+              </svg>
+              พิมพ์ใบออเดอร์
+            </button>
+            <button type="button" class="btn-detail-order mobile-action-with-icon" @click="openOrderDetail(order)">
+              รายละเอียด
+              <svg class="mobile-action-icon mobile-action-icon--chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m9 5 7 7-7 7" />
+              </svg>
+            </button>
+          </div>
+        </article>
       </div>
     </section>
 
@@ -1074,5 +1316,353 @@ td { padding: 1rem; border-bottom: 1px solid #f3e8ff; font-size: 0.9rem; vertica
   .table-scroll > table td > * { min-width: 0; max-width: 58%; overflow-wrap: anywhere; }
   .table-scroll > table td:last-child > *,
   .shipment-editor, .recipient-info, .item-list, .address-cell, .address-text, .notes-block { max-width: 100%; }
+}
+
+/* ── Mobile shipping cards (<= 767px only) ── */
+.shipping-mobile-list {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .shipping-page {
+    min-width: 0;
+    gap: 0.75rem;
+  }
+
+  .shipping-page > .panel {
+    min-width: 0;
+    padding: 0.8rem;
+    border-radius: 18px;
+  }
+
+  .panel-head {
+    display: grid;
+    gap: 0.65rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .panel-head h3 {
+    margin: 0;
+    font-size: 1rem;
+  }
+
+  .panel-head__title p {
+    margin: 0.35rem 0 0;
+    font-size: 0.72rem;
+    line-height: 1.45;
+  }
+
+  .filter-panel {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    width: 100%;
+    gap: 0.5rem;
+    margin-top: 0.25rem;
+  }
+
+  .filter-panel label {
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+
+  .filter-select {
+    width: 100%;
+    min-width: 0;
+    padding: 0.55rem 0.7rem;
+    border-radius: 11px;
+    font-size: 0.8rem;
+  }
+
+  .table-scroll {
+    display: none;
+  }
+
+  .shipping-mobile-list {
+    display: grid;
+    min-width: 0;
+    gap: 0.85rem;
+  }
+
+  .shipping-order-card {
+    min-width: 0;
+    overflow: hidden;
+    padding: 1rem;
+    border: 1px solid #eadcf6;
+    border-radius: 18px;
+    background: #fff;
+    box-shadow: 0 6px 18px rgba(84, 54, 113, 0.07);
+  }
+
+  .shipping-order-card__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.7rem;
+    min-width: 0;
+  }
+
+  .shipping-order-card__identity {
+    display: grid;
+    min-width: 0;
+    gap: 0.2rem;
+  }
+
+  .shipping-order-card__identity strong {
+    color: #432f61;
+    font-size: 1.05rem;
+    line-height: 1.2;
+  }
+
+  .shipping-order-card__identity time {
+    color: #8a789f;
+    font-size: 0.72rem;
+    line-height: 1.35;
+  }
+
+  .shipping-order-card__badges {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.3rem;
+    min-width: 0;
+  }
+
+  .shipping-order-card__badges .status {
+    padding: 0.25rem 0.55rem;
+    font-size: 0.68rem;
+  }
+
+  .shipping-mobile-section {
+    min-width: 0;
+    margin-top: 0.85rem;
+    padding-top: 0.85rem;
+    border-top: 1px solid #f0e8fb;
+  }
+
+  .shipping-mobile-section h4 {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0 0 0.55rem;
+    color: #5b3a79;
+    font-size: 0.8rem;
+    font-weight: 800;
+  }
+
+  .shipping-section-icon {
+    width: 16px;
+    height: 16px;
+    color: #8a5bb1;
+  }
+
+  .shipping-section-icon-wrap {
+    display: inline-grid;
+    flex: 0 0 30px;
+    width: 30px;
+    height: 30px;
+    place-items: center;
+    border-radius: 50%;
+    background: #f1e9fb;
+    color: #8a5bb1;
+  }
+
+  .shipping-section-count {
+    color: #9a8aaa;
+    font-size: 0.7rem;
+    font-weight: 700;
+  }
+
+  .shipping-recipient {
+    display: grid;
+    gap: 0.18rem;
+    padding-left: 1.55rem;
+    color: #4b3a5c;
+    font-size: 0.82rem;
+  }
+
+  .shipping-recipient span {
+    color: #756584;
+    font-size: 0.76rem;
+  }
+
+  .shipping-mobile-products {
+    display: grid;
+    gap: 0.45rem;
+  }
+
+  .shipping-mobile-product {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.7rem;
+    min-width: 0;
+    padding: 0.55rem 0.65rem;
+    border-radius: 10px;
+    background: #fbf9ff;
+  }
+
+  .shipping-mobile-product__name {
+    display: grid;
+    min-width: 0;
+    gap: 0.12rem;
+  }
+
+  .shipping-mobile-product__name strong,
+  .shipping-mobile-product__name small {
+    overflow-wrap: anywhere;
+  }
+
+  .shipping-mobile-product__name strong {
+    color: #4b3a5c;
+    font-size: 0.78rem;
+    line-height: 1.35;
+  }
+
+  .shipping-mobile-product__name small {
+    color: #8b7aa3;
+    font-size: 0.68rem;
+  }
+
+  .shipping-mobile-product__qty {
+    flex: 0 0 auto;
+    color: #8a5bb1;
+    font-size: 0.78rem;
+  }
+
+  .shipping-products-toggle,
+  .shipping-edit-toggle,
+  .shipping-edit-cancel {
+    border: 0;
+    background: transparent;
+    color: #7c5cdb;
+    font: inherit;
+    font-size: 0.75rem;
+    font-weight: 800;
+    cursor: pointer;
+  }
+
+  .shipping-products-toggle {
+    padding: 0.45rem 0 0;
+    text-align: left;
+  }
+
+  .shipping-address-text,
+  .shipping-order-notes {
+    padding-left: 1.55rem;
+    color: #5e526f;
+    font-size: 0.76rem;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+  }
+
+  .shipping-order-notes {
+    margin-top: 0.5rem;
+    color: #7a6a96;
+  }
+
+  .shipping-saved-details {
+    display: grid;
+    gap: 0.45rem;
+    padding-left: 1.55rem;
+  }
+
+  .shipping-saved-details div {
+    display: grid;
+    gap: 0.12rem;
+    min-width: 0;
+  }
+
+  .shipping-saved-details span {
+    color: #8a789f;
+    font-size: 0.68rem;
+  }
+
+  .shipping-saved-details .shipping-detail-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    color: #8a789f;
+    font-size: 0.68rem;
+  }
+
+  .shipping-detail-icon {
+    width: 14px;
+    height: 14px;
+    color: #8a5bb1;
+  }
+
+  .shipping-saved-details strong {
+    color: #4b3a5c;
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+  }
+
+  .shipping-edit-toggle,
+  .shipping-edit-cancel {
+    margin: 0.55rem 0 0 1.55rem;
+    padding: 0;
+  }
+
+  .shipping-edit-cancel {
+    color: #a14c6e;
+  }
+
+  .shipping-mobile-editor {
+    width: 100%;
+    min-width: 0;
+    margin-left: 1.55rem;
+    max-width: calc(100% - 1.55rem);
+  }
+
+  .shipping-mobile-editor select,
+  .shipping-mobile-editor input {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    font-size: 0.78rem;
+  }
+
+  .shipping-mobile-actions {
+    display: grid;
+    gap: 0.5rem;
+    margin-top: 1rem;
+    padding-top: 0.85rem;
+    border-top: 1px dashed #eadcf6;
+  }
+
+  .shipping-mobile-actions button {
+    width: 100%;
+    margin: 0;
+  }
+
+  .shipping-mobile-actions .btn-action,
+  .shipping-mobile-actions .btn-print-order,
+  .shipping-mobile-actions .btn-detail-order {
+    min-height: 42px;
+  }
+
+  .shipping-mobile-actions .btn-detail-order {
+    margin-left: 0;
+  }
+
+  .mobile-action-with-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+  }
+
+  .mobile-action-icon {
+    flex: 0 0 17px;
+    width: 17px;
+    height: 17px;
+  }
+
+  .mobile-action-icon--chevron {
+    width: 15px;
+    height: 15px;
+    margin-left: 0.1rem;
+  }
 }
 </style>

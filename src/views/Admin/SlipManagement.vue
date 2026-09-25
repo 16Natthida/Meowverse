@@ -107,6 +107,23 @@ function formatAmount(value) {
   return Number(value).toLocaleString('th-TH', { minimumFractionDigits: 2 })
 }
 
+function paymentMethodText(payment) {
+  return (
+    {
+      bank_transfer: 'โอนธนาคาร',
+      promptpay: 'พร้อมเพย์',
+    }[payment.payment_method] ||
+    payment.payment_method ||
+    '-'
+  )
+}
+
+function mobileCompletedStatusText(payment) {
+  if (payment.status === 'Approved') return 'ดำเนินการแล้ว'
+  if (payment.status === 'Rejected') return 'ปฏิเสธแล้ว'
+  return (statusConfig[payment.status] || {}).text || payment.status || '-'
+}
+
 function formatOrderNo(value) {
   return String(value).padStart(3, '0')
 }
@@ -131,6 +148,9 @@ async function fetchPayments() {
     const data = await response.json()
     // FIX: Show all payment records, no deduplication
     payments.value = Array.isArray(data) ? data : []
+    if (window.matchMedia?.('(max-width: 767px)').matches) {
+      expandedCards.value = new Set(payments.value.map((payment) => payment.pay_id))
+    }
   } catch (error) {
     slipError.value = translateError(error)
   } finally {
@@ -292,6 +312,13 @@ onMounted(() => {
     </section>
 
     <section class="filter-panel">
+      <div class="mobile-filter-heading">
+        <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+          <path d="M4 5h16M7 12h10M10 19h4" />
+          <path d="m16 5 2 2-2 2M8 12l-2 2 2 2" />
+        </svg>
+        <strong>ตัวกรอง</strong>
+      </div>
       <input v-model="search" type="search" placeholder="ค้นหาเลขออเดอร์ รหัสชำระ หรือรหัสสมาชิก" />
       <select id="type-filter" v-model="typeFilter" aria-label="ประเภทสลิป">
         <option value="all">ทุกประเภท ({{ typeCount.all }})</option>
@@ -305,7 +332,15 @@ onMounted(() => {
         <option value="Approved">อนุมัติแล้ว</option>
         <option value="Rejected">ปฏิเสธแล้ว</option>
       </select>
-      <button class="btn-secondary" type="button" @click="resetFilters">ล้างตัวกรอง</button>
+      <button class="btn-secondary" type="button" @click="resetFilters">
+        <span class="desktop-filter-reset-label">ล้างตัวกรอง</span>
+        <span class="mobile-filter-button-label">
+          <svg class="mobile-filter-button-icon" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+            <path d="M4 5h16M7 12h10M10 19h4" />
+          </svg>
+          ตัวกรอง <strong>{{ filteredPayments.length }}</strong>
+        </span>
+      </button>
     </section>
 
     <section class="table-card">
@@ -508,6 +543,157 @@ onMounted(() => {
                 </button>
               </template>
               <span v-else class="done-text">ดำเนินการแล้ว</span>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <div
+        v-if="filteredPayments.length"
+        class="mobile-slip-cards"
+        aria-label="รายการสลิปชำระเงินบนมือถือ"
+      >
+        <article v-for="payment in filteredPayments" :key="`mobile-card-${payment.pay_id}`" class="mobile-slip-card">
+          <button
+            class="mobile-slip-card__head"
+            type="button"
+            :aria-expanded="isCardExpanded(payment.pay_id)"
+            @click="toggleCard(payment.pay_id)"
+          >
+            <span class="mobile-slip-card__identity">
+              <strong>#{{ payment.pay_id }}</strong>
+              <small>รหัสชำระเงิน</small>
+            </span>
+            <span class="mobile-slip-card__status-side">
+              <span
+                class="mobile-status-pill"
+                :style="{
+                  color: (statusConfig[payment.status] || {}).color,
+                  background: (statusConfig[payment.status] || {}).bg,
+                }"
+              >
+                <svg v-if="payment.status === 'Approved'" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="m8 12 2.5 2.5L16 9" />
+                </svg>
+                <svg v-else-if="payment.status === 'Rejected'" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="m9 9 6 6M15 9l-6 6" />
+                </svg>
+                <svg v-else viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M12 7v5l3 2" />
+                </svg>
+                {{ (statusConfig[payment.status] || {}).text || payment.status || '-' }}
+              </span>
+              <svg class="mobile-slip-card__chevron" :class="{ 'is-open': isCardExpanded(payment.pay_id) }" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                <path d="m7 9 5 5 5-5" />
+              </svg>
+            </span>
+          </button>
+
+          <div v-if="isCardExpanded(payment.pay_id)" class="mobile-slip-card__body">
+            <div class="mobile-slip-divider"></div>
+
+            <div class="mobile-slip-order-member">
+              <div class="mobile-slip-order">
+                <span>Order</span>
+                <strong>#{{ formatOrderNo(payment.order_id) }}</strong>
+              </div>
+              <div class="mobile-slip-member">
+                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                  <circle cx="12" cy="8" r="3.2" />
+                  <path d="M5.5 19c.7-3.1 2.9-4.8 6.5-4.8s5.8 1.7 6.5 4.8" />
+                </svg>
+                <span>
+                  <strong>{{ payment.username || '-' }}</strong>
+                  <small>รหัสสมาชิก {{ payment.user_id || '-' }}</small>
+                </span>
+              </div>
+            </div>
+
+            <div class="mobile-slip-badges">
+              <span v-if="payment.Order_type === 'Preorder'" class="mobile-order-badge mobile-order-badge--preorder">
+                Preorder
+              </span>
+              <span v-if="payment.type === 'Import_Fee'" class="mobile-order-badge mobile-order-badge--import">
+                <span aria-hidden="true">💰</span> จ่ายค่านำเข้า
+              </span>
+              <span v-if="payment.type !== 'Import_Fee'" class="mobile-order-badge mobile-order-badge--order-fee">
+                ค่าสินค้า
+              </span>
+            </div>
+
+            <div class="mobile-slip-divider"></div>
+
+            <div class="mobile-slip-two-column-row">
+              <div class="mobile-slip-data-block">
+                <span>ยอดเงิน</span>
+                <strong class="mobile-slip-amount">฿{{ formatAmount(payment.amount) }}</strong>
+              </div>
+              <div class="mobile-slip-data-block mobile-slip-payment-method">
+                <span>วิธีชำระ</span>
+                <strong>
+                  <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                    <path d="M3 10h18M5 10v8M9 10v8M15 10v8M19 10v8M3 18h18M2 21h20" />
+                    <path d="m4 10 8-6 8 6" />
+                  </svg>
+                  {{ paymentMethodText(payment) }}
+                </strong>
+              </div>
+            </div>
+
+            <div class="mobile-slip-divider"></div>
+
+            <div class="mobile-slip-two-column-row mobile-slip-proof-row">
+              <div class="mobile-slip-data-block">
+                <span>วันที่</span>
+                <strong>
+                  <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                    <rect x="4" y="5.5" width="16" height="15" rx="2" />
+                    <path d="M8 3.5v4M16 3.5v4M4 10h16" />
+                  </svg>
+                  {{ formatDate(payment.Slip_date) }}
+                </strong>
+              </div>
+              <div class="mobile-slip-data-block mobile-slip-proof-block">
+                <span>หลักฐาน</span>
+                <button v-if="payment.slip_img" class="mobile-slip-view-btn" type="button" @click="openSlip(payment)">
+                  <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                    <rect x="3.5" y="4" width="17" height="16" rx="2" />
+                    <circle cx="9" cy="9" r="1.5" />
+                    <path d="m5.5 17 4.5-4.5 3 3 2-2 3.5 3.5" />
+                  </svg>
+                  ดูสลิป
+                </button>
+                <span v-else class="no-slip">ไม่มีไฟล์</span>
+              </div>
+            </div>
+
+            <div class="mobile-slip-card__actions">
+              <template v-if="payment.status === 'Pending'">
+                <button
+                  class="btn-approve"
+                  type="button"
+                  @click="updatePaymentStatus(payment.pay_id, 'Approved', payment.order_id)"
+                >
+                  ✓ อนุมัติ
+                </button>
+                <button
+                  class="btn-reject"
+                  type="button"
+                  @click="updatePaymentStatus(payment.pay_id, 'Rejected', payment.order_id)"
+                >
+                  ✕ ปฏิเสธ
+                </button>
+              </template>
+              <div v-else class="mobile-completed-strip">
+                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="m8 12 2.5 2.5L16 9" />
+                </svg>
+                {{ mobileCompletedStatusText(payment) }}
+              </div>
             </div>
           </div>
         </article>
@@ -847,6 +1033,12 @@ button {
   display: none;
 }
 
+.mobile-slip-cards,
+.mobile-filter-heading,
+.mobile-filter-button-label {
+  display: none;
+}
+
 /* ---------- modal ---------- */
 .slip-modal-overlay {
   position: fixed;
@@ -1131,6 +1323,477 @@ button {
     width: 100%;
     justify-content: center;
     min-height: 2.6rem;
+  }
+}
+
+@media (max-width: 767px) {
+  .admin-support-page {
+    min-height: 100vh;
+    padding: 0.75rem;
+    gap: 0.7rem;
+    background: linear-gradient(180deg, #faf7ff 0%, #f2ecff 100%);
+  }
+
+  .admin-support-page > .admin-page-heading {
+    margin-bottom: 0;
+    padding: 1rem;
+    border-radius: 18px;
+    gap: 0.7rem;
+  }
+
+  .admin-page-heading h1 {
+    color: #2f2355;
+    font-size: 1.45rem;
+    line-height: 1.3;
+  }
+
+  .admin-page-heading p {
+    margin-top: 0.35rem;
+    color: #76658e;
+    font-size: 0.82rem;
+    line-height: 1.5;
+  }
+
+  .admin-page-heading__actions,
+  .admin-page-heading__actions .btn-primary {
+    width: 100%;
+  }
+
+  .admin-page-heading__actions .btn-primary {
+    min-height: 2.3rem;
+    padding: 0.5rem 0.8rem;
+    font-size: 0.76rem;
+  }
+
+  .error-box {
+    margin: 0;
+    font-size: 0.78rem;
+  }
+
+  .summary-grid {
+    display: none;
+  }
+
+  .filter-panel {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem;
+    padding: 0.85rem;
+    border: 0;
+    border-radius: 18px;
+    background: #f5f0ff;
+    box-shadow: inset 0 0 0 1px rgba(225, 211, 244, 0.55);
+  }
+
+  .mobile-filter-heading {
+    display: flex;
+    grid-column: 1 / -1;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.05rem 0.1rem 0.1rem;
+    color: #4d3471;
+    font-size: 1rem;
+  }
+
+  .mobile-filter-heading svg {
+    width: 1.4rem;
+    height: 1.4rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+  }
+
+  .filter-panel input,
+  .filter-panel select {
+    min-height: 3rem;
+    padding: 0.55rem 0.7rem;
+    border-color: #d9cbea;
+    border-radius: 13px;
+    font-size: 0.78rem;
+  }
+
+  .filter-panel input {
+    grid-column: 1 / -1;
+  }
+
+  .filter-panel .btn-secondary {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 2.7rem;
+    border: 1px solid #d9c2f2;
+    border-radius: 999px;
+    background: #f0e4ff;
+    color: #694590;
+    font-size: 0.86rem;
+  }
+
+  .desktop-filter-reset-label {
+    display: none;
+  }
+
+  .mobile-filter-button-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+
+  .mobile-filter-button-label strong {
+    font-weight: 900;
+  }
+
+  .mobile-filter-button-icon {
+    width: 1.1rem;
+    height: 1.1rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+  }
+
+  .table-card {
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .table-scroll,
+  .slip-cards {
+    display: none;
+  }
+
+  .mobile-slip-cards {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .mobile-slip-card {
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid #e4d8f0;
+    border-radius: 17px;
+    background: #fff;
+    box-shadow: 0 7px 18px rgba(92, 65, 128, 0.1);
+  }
+
+  .mobile-slip-card__head {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.65rem;
+    padding: 0.85rem 0.85rem 0.75rem;
+    border: 0;
+    border-radius: 0;
+    background: #fff;
+    color: #2f2355;
+    text-align: left;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+  }
+
+  .mobile-slip-card__head:focus-visible {
+    outline: 3px solid rgba(183, 136, 234, 0.3);
+    outline-offset: -3px;
+  }
+
+  .mobile-slip-card__identity {
+    display: grid;
+    min-width: 0;
+    gap: 0.12rem;
+  }
+
+  .mobile-slip-card__identity strong {
+    color: #2d2251;
+    font-size: 1.25rem;
+    font-weight: 900;
+    line-height: 1.15;
+  }
+
+  .mobile-slip-card__identity small {
+    color: #75658c;
+    font-size: 0.73rem;
+    font-weight: 600;
+  }
+
+  .mobile-slip-card__status-side {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .mobile-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    max-width: 10.5rem;
+    padding: 0.38rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 800;
+    line-height: 1.1;
+    white-space: nowrap;
+  }
+
+  .mobile-status-pill svg,
+  .mobile-slip-member svg,
+  .mobile-slip-payment-method svg,
+  .mobile-slip-data-block > strong > svg,
+  .mobile-slip-view-btn svg,
+  .mobile-completed-strip svg {
+    flex: 0 0 auto;
+    width: 1.05rem;
+    height: 1.05rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+  }
+
+  .mobile-slip-card__chevron {
+    width: 1.1rem;
+    height: 1.1rem;
+    fill: none;
+    stroke: #7a6b90;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+    transition: transform 0.2s ease;
+  }
+
+  .mobile-slip-card__chevron.is-open {
+    transform: rotate(180deg);
+  }
+
+  .mobile-slip-card__body {
+    padding: 0 0.85rem 0.85rem;
+  }
+
+  .mobile-slip-divider {
+    height: 1px;
+    margin: 0 0 0.7rem;
+    background: #eee8f4;
+  }
+
+  .mobile-slip-order-member {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0.75rem;
+    align-items: center;
+  }
+
+  .mobile-slip-order,
+  .mobile-slip-member {
+    min-width: 0;
+  }
+
+  .mobile-slip-order {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.28rem;
+    color: #8c7b9d;
+    font-size: 0.92rem;
+  }
+
+  .mobile-slip-order strong {
+    color: #2d2251;
+    font-size: 1.02rem;
+    font-weight: 900;
+  }
+
+  .mobile-slip-member {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+
+  .mobile-slip-member svg {
+    width: 1.45rem;
+    height: 1.45rem;
+    color: #756494;
+  }
+
+  .mobile-slip-member span {
+    display: grid;
+    min-width: 0;
+    gap: 0.12rem;
+  }
+
+  .mobile-slip-member strong,
+  .mobile-slip-member small {
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-slip-member strong {
+    color: #45315f;
+    font-size: 0.82rem;
+    line-height: 1.2;
+  }
+
+  .mobile-slip-member small {
+    color: #8c7b9d;
+    font-size: 0.68rem;
+  }
+
+  .mobile-slip-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin: 0.7rem 0 0.85rem;
+  }
+
+  .mobile-order-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.35rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 800;
+    line-height: 1.1;
+  }
+
+  .mobile-order-badge--preorder {
+    background: #ffe9d5;
+    color: #aa6230;
+  }
+
+  .mobile-order-badge--import {
+    background: #f0e4ff;
+    color: #6d429d;
+  }
+
+  .mobile-order-badge--order-fee {
+    background: #eef9f1;
+    color: #39805a;
+  }
+
+  .mobile-slip-two-column-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0.75rem;
+  }
+
+  .mobile-slip-data-block {
+    min-width: 0;
+    padding-right: 0.6rem;
+    border-right: 1px solid #eee8f4;
+  }
+
+  .mobile-slip-data-block:last-child {
+    padding-right: 0;
+    border-right: 0;
+  }
+
+  .mobile-slip-data-block > span {
+    display: block;
+    margin-bottom: 0.28rem;
+    color: #89799a;
+    font-size: 0.73rem;
+    font-weight: 600;
+  }
+
+  .mobile-slip-data-block > strong {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.32rem;
+    color: #4c3a66;
+    font-size: 0.78rem;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-slip-data-block > strong svg {
+    color: #72638b;
+  }
+
+  .mobile-slip-data-block .mobile-slip-amount {
+    color: #302252;
+    font-size: 1.15rem;
+    font-weight: 900;
+  }
+
+  .mobile-slip-payment-method strong {
+    color: #57466e;
+  }
+
+  .mobile-slip-proof-row {
+    align-items: start;
+  }
+
+  .mobile-slip-proof-block {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .mobile-slip-view-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    min-height: 2rem;
+    padding: 0.35rem 0.65rem;
+    border: 1px solid #d8c1f3;
+    border-radius: 999px;
+    background: #f3e8ff;
+    color: #71469e;
+    font-size: 0.74rem;
+    font-weight: 800;
+  }
+
+  .mobile-slip-view-btn svg {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  .mobile-slip-card__actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+    margin-top: 0.85rem;
+  }
+
+  .mobile-slip-card__actions .btn-approve,
+  .mobile-slip-card__actions .btn-reject {
+    min-height: 2.4rem;
+    padding: 0.45rem 0.5rem;
+    font-size: 0.76rem;
+  }
+
+  .mobile-completed-strip {
+    display: flex;
+    grid-column: 1 / -1;
+    align-items: center;
+    gap: 0.45rem;
+    min-height: 2.35rem;
+    padding: 0.45rem 0.75rem;
+    border-radius: 999px;
+    background: #f2eaff;
+    color: #70469b;
+    font-size: 0.78rem;
+    font-weight: 800;
+  }
+
+  .mobile-completed-strip svg {
+    width: 1.1rem;
+    height: 1.1rem;
+  }
+
+  .empty-state {
+    border-radius: 16px;
+    background: #fff;
+    font-size: 0.82rem;
   }
 }
 </style>

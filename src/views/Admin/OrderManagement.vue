@@ -116,14 +116,14 @@ function getOrderRowTotal(order) {
 
 // ── ผูก path กับตัวกรองประเภทออเดอร์ ──
 // /admin/sales -> ทั้งหมด, /admin/sales/ready-to-ship -> พร้อมส่ง, /admin/sales/preorder -> พรีออเดอร์
+let previousSalesRoute = ''
+
 function syncFilterFromRoute() {
   const orderType = route.meta?.orderType
-  if (orderType) {
-    salesView.value = 'orders'
-    typeFilter.value = orderType
-  } else {
-    typeFilter.value = 'all'
-  }
+  const routeChanged = route.fullPath !== previousSalesRoute
+  if (routeChanged) salesView.value = orderType ? 'orders' : 'summary'
+  typeFilter.value = orderType || 'all'
+  previousSalesRoute = route.fullPath
 }
 
 watch(() => route.fullPath, syncFilterFromRoute, { immediate: true })
@@ -184,6 +184,16 @@ function getOrderProductTotal(order) {
   const items = Array.isArray(order?.items) ? order.items : []
   return items.reduce(
     (sum, item) => sum + Number(item.unit_price || 0) * Number(item.qty || 0),
+    0,
+  )
+}
+
+function getOrderProductSubtotal(order) {
+  const itemTotal = getOrderProductTotal(order)
+  if (itemTotal > 0) return itemTotal
+
+  return Math.max(
+    (Number(order?.total_amount) || 0) - (Number(order?.shipping_fee) || 0),
     0,
   )
 }
@@ -580,6 +590,29 @@ function closeOrder() {
   selectedOrderError.value = ''
 }
 
+let mobileOrderModalBodyOverflow = ''
+let mobileOrderModalScrollLocked = false
+
+function syncMobileOrderModalScrollLock(order) {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return
+
+  const shouldLock = Boolean(order) && window.matchMedia('(max-width: 767px)').matches
+  if (shouldLock && !mobileOrderModalScrollLocked) {
+    mobileOrderModalBodyOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    mobileOrderModalScrollLocked = true
+    return
+  }
+
+  if (!shouldLock && mobileOrderModalScrollLocked) {
+    document.body.style.overflow = mobileOrderModalBodyOverflow
+    mobileOrderModalBodyOverflow = ''
+    mobileOrderModalScrollLocked = false
+  }
+}
+
+watch(selectedOrder, syncMobileOrderModalScrollLock, { immediate: true })
+
 function printSelectedOrder() {
   if (!selectedOrder.value || selectedOrderLoading.value) return
 
@@ -598,7 +631,18 @@ function viewSlipList() {
 }
 
 function handleKeydown(e) {
-  if (e.key === 'Escape') closeImagePreview()
+  if (e.key !== 'Escape') return
+  if (previewImage.value) {
+    closeImagePreview()
+    return
+  }
+  if (
+    selectedOrder.value &&
+    typeof window !== 'undefined' &&
+    window.matchMedia('(max-width: 767px)').matches
+  ) {
+    closeOrder()
+  }
 }
 
 onMounted(() => {
@@ -608,6 +652,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
+  syncMobileOrderModalScrollLock(null)
 })
 </script>
 
@@ -851,6 +896,28 @@ onUnmounted(() => {
           </tbody>
         </table>
       </div>
+
+      <div class="mobile-summary-product-list" aria-label="สรุปยอดขายรายสินค้า">
+        <article v-for="item in filteredProductSales" :key="`mobile-product-${item.prod_id}-${item.item_type}`" class="mobile-summary-product-card">
+          <div class="mobile-summary-product-card__head">
+            <div>
+              <strong>{{ item.name || '-' }}</strong>
+              <span v-if="item.category_name">{{ item.category_name }}</span>
+            </div>
+            <span :class="['type-chip', item.item_type === 'preorder' ? 'type-chip--pre' : 'type-chip--ready']">
+              {{ item.item_type === 'preorder' ? 'พรีออเดอร์' : 'พร้อมส่ง' }}
+            </span>
+          </div>
+          <div class="mobile-summary-product-card__metrics">
+            <div><span>ขายได้</span><strong>{{ Number(item.sold_qty || 0).toLocaleString('th-TH') }} ชิ้น</strong></div>
+            <div><span>รวมมูลค่า</span><strong>{{ formatMoney(item.total_amount) }}</strong></div>
+          </div>
+          <button class="mobile-summary-product-card__detail" type="button" @click="openProductDetails(item)">
+            ดูรายละเอียด
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg>
+          </button>
+        </article>
+      </div>
     </section>
 
     <section v-else class="panel">
@@ -976,11 +1043,63 @@ onUnmounted(() => {
           </tbody>
         </table>
       </div>
+
+      <div
+        v-if="!loading && !error && filteredOrders.length"
+        class="mobile-order-list"
+        aria-label="รายการออเดอร์"
+      >
+        <article v-for="order in filteredOrders" :key="`mobile-${order.order_id}`" class="mobile-order-card">
+          <header class="mobile-order-card__head">
+            <div class="mobile-order-card__identity">
+              <strong class="mobile-order-card__number">#{{ String(order.order_id).padStart(3, '0') }}</strong>
+              <p>ลูกค้า: {{ order.full_name || order.username || '-' }}</p>
+              <small>{{ order.username || '-' }}</small>
+            </div>
+            <div class="mobile-order-card__badges">
+              <span :class="['type-chip', order.Order_type === 'Preorder' ? 'type-chip--pre' : 'type-chip--ready']">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5zM4 7.5l8 4.5 8-4.5M12 12v9" /></svg>
+                {{ getOrderTypeLabel(order.Order_type) }}
+              </span>
+              <span class="status-pill mobile-order-status" :style="{ color: getStatus(order.status).color, background: getStatus(order.status).bg }">
+                <span class="mobile-order-status__dot" :style="{ background: getStatus(order.status).color }"></span>
+                {{ getStatus(order.status).label }}
+              </span>
+            </div>
+          </header>
+
+          <div class="mobile-order-divider"></div>
+
+          <div class="mobile-order-card__meta">
+            <div class="mobile-order-meta-item">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 7 8-4 8 4v10l-8 4-8-4zM4 7l8 4 8-4M12 11v10" /></svg>
+              <span>จำนวนสินค้า</span>
+              <strong>{{ order.item_count || order.total_qty || 0 }} ชิ้น</strong>
+            </div>
+            <div class="mobile-order-meta-item">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2" /><path d="M8 3v4M16 3v4M4 9h16" /></svg>
+              <span>วันที่สั่งซื้อ</span>
+              <strong>{{ formatDate(order.Order_date) }}</strong>
+            </div>
+            <div class="mobile-order-meta-item mobile-order-meta-item--total">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M3 10h18M7 14h3" /></svg>
+              <span>ยอดรวม (ไม่รวมค่าส่ง)</span>
+              <strong>{{ formatMoney(getOrderProductSubtotal(order)) }}</strong>
+            </div>
+          </div>
+
+          <button class="mobile-order-detail-btn" type="button" @click="openOrder(order)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l3 3v15H6zM14 3v4h4M9 12h6M9 16h6" /></svg>
+            <span>ดูรายละเอียด</span>
+            <svg class="mobile-order-detail-btn__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg>
+          </button>
+        </article>
+      </div>
     </section>
 
     <transition name="fade">
       <div v-if="selectedOrder" class="modal-overlay" @click.self="closeOrder">
-        <div class="modal-card">
+        <div class="modal-card modal-card--order-detail">
           <div class="modal-head">
             <div>
               <h3>ออเดอร์ #{{ String(selectedOrder.order_id).padStart(3, '0') }}</h3>
@@ -992,6 +1111,10 @@ onUnmounted(() => {
                 </template>
               </p>
             </div>
+            <p class="mobile-order-subtitle">
+              {{ selectedOrder.username || selectedOrder.user_id || '-' }} ·
+              {{ getOrderTypeLabel(selectedOrder.Order_type) }}
+            </p>
             <div class="modal-head__actions">
               <button
                 v-if="!selectedOrderLoading && !selectedOrderError"
@@ -1088,6 +1211,67 @@ onUnmounted(() => {
               </div>
             </div>
           </template>
+
+          <div class="mobile-order-detail">
+            <section class="mobile-order-total-panel">
+              <div>
+                <span>ยอดรวม</span>
+                <strong>{{ formatMoney(getOrderDetailTotal(selectedOrder)) }}</strong>
+              </div>
+              <span class="mobile-order-detail-status" :style="{ color: getStatus(selectedOrder.status).color, background: getStatus(selectedOrder.status).bg }">
+                <span class="mobile-order-status__dot" :style="{ background: getStatus(selectedOrder.status).color }"></span>
+                {{ getStatus(selectedOrder.status).label }}
+              </span>
+            </section>
+
+            <section class="mobile-order-detail-summary">
+              <div class="mobile-order-detail-field">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16l-2 7H6zM7 7l2-4h6l2 4M8 18h8" /></svg>
+                <span>ค่าสินค้า</span>
+                <strong>{{ formatMoney(getOrderProductTotal(selectedOrder)) }}</strong>
+              </div>
+              <div class="mobile-order-detail-field">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h12v10H3zM15 10h4l2 3v4h-6zM7 20a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM18 20a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" /></svg>
+                <span>ค่าจัดส่ง</span>
+                <strong>{{ formatMoney(selectedOrder.shipping_fee || 0) }}</strong>
+              </div>
+              <div class="mobile-order-detail-field">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 7 8-4 8 4v10l-8 4-8-4zM4 7l8 4 8-4M12 11v10" /></svg>
+                <span>จำนวนสินค้า</span>
+                <strong>{{ selectedOrder.total_qty || 0 }} ชิ้น</strong>
+              </div>
+              <div class="mobile-order-detail-field">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2" /><path d="M8 3v4M16 3v4M4 9h16" /></svg>
+                <span>วันที่</span>
+                <strong>{{ formatDate(selectedOrder.Order_date) }}</strong>
+              </div>
+            </section>
+
+            <div class="mobile-order-detail-divider"></div>
+            <div class="mobile-order-items-heading">
+              <h4><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l3 3v15H6zM14 3v4h4M9 12h6M9 16h6" /></svg>รายการสินค้า</h4>
+              <strong>{{ selectedOrder.total_qty || 0 }} ชิ้น</strong>
+            </div>
+
+            <div class="mobile-order-items">
+              <article v-for="item in summarizedOrderItems" :key="`mobile-detail-${item.detail_ids?.join('-') || item.detail_id}`" class="mobile-order-item">
+                <strong class="mobile-order-item__name">{{ item.name || '-' }}</strong>
+                <span v-if="item.flavor" class="mobile-order-item__variant">รสชาติ: {{ item.flavor }}</span>
+                <span v-if="item.category_name" class="mobile-order-item__category">{{ item.category_name }}</span>
+                <div class="mobile-order-item__metrics">
+                  <div><span>ราคาต่อชิ้น</span><strong>{{ formatMoney(item.unit_price) }}</strong></div>
+                  <div><span>จำนวน</span><strong>x{{ item.qty }}</strong></div>
+                  <div><span>ราคารวม</span><strong>{{ formatMoney(Number(item.unit_price || 0) * Number(item.qty || 0)) }}</strong></div>
+                </div>
+              </article>
+            </div>
+
+            <section class="mobile-order-breakdown">
+              <div><span>ค่าสินค้า</span><strong>{{ formatMoney(getOrderProductTotal(selectedOrder)) }}</strong></div>
+              <div><span>ค่าจัดส่ง</span><strong>{{ formatMoney(selectedOrder.shipping_fee || 0) }}</strong></div>
+              <div class="mobile-order-breakdown__total"><span>ยอดรวม</span><strong>{{ formatMoney(getOrderDetailTotal(selectedOrder)) }}</strong></div>
+            </section>
+          </div>
         </div>
       </div>
     </transition>
@@ -2227,5 +2411,937 @@ onUnmounted(() => {
   .orders-table td::before, .summary-table td::before { max-width: 40%; }
   .orders-table td > *, .summary-table td > * { min-width: 0; max-width: 58%; overflow-wrap: anywhere; }
   .orders-table td:last-child > *, .summary-table td:last-child > * { max-width: 100%; }
+}
+
+.mobile-summary-product-list,
+.mobile-order-list,
+.mobile-order-detail,
+.mobile-order-subtitle {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .admin-order-page {
+    width: 100%;
+    min-width: 0;
+    padding: 1rem;
+    gap: 0.75rem;
+    overflow-x: hidden;
+  }
+
+  .admin-order-page :deep(.admin-page-heading) {
+    margin: 0;
+    padding: 1rem;
+    gap: 0.75rem;
+    border-radius: 18px;
+  }
+
+  .admin-order-page :deep(.admin-page-heading h1) {
+    font-size: clamp(1.35rem, 6vw, 1.7rem);
+    line-height: 1.3;
+  }
+
+  .admin-order-page :deep(.admin-page-heading p) {
+    margin-top: 0.45rem;
+    font-size: 0.88rem;
+    line-height: 1.55;
+  }
+
+  .admin-order-page :deep(.admin-page-heading__actions),
+  .admin-order-page :deep(.hero-actions) {
+    width: 100%;
+  }
+
+  .admin-order-page :deep(.hero-actions) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .admin-order-page :deep(.hero-actions) .ghost-btn,
+  .admin-order-page :deep(.hero-actions) .primary-btn {
+    min-width: 0;
+    padding: 0.65rem 0.5rem;
+    font-size: 0.8rem;
+    white-space: nowrap;
+  }
+
+  .sales-type-switch {
+    width: 100%;
+    margin: 0;
+    gap: 0.2rem;
+    padding: 0.25rem;
+    overflow: visible;
+  }
+
+  .sales-type-pill {
+    min-width: 0;
+    flex: 1 1 0;
+    justify-content: center;
+    gap: 0.25rem;
+    padding: 0.58rem 0.2rem;
+    font-size: clamp(0.72rem, 3.1vw, 0.84rem);
+  }
+
+  .sales-type-pill__dot {
+    width: 7px;
+    height: 7px;
+  }
+
+  .sales-type-pill__count {
+    padding: 0.05rem 0.34rem;
+    font-size: 0.7rem;
+  }
+
+  .kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .kpi-card {
+    min-width: 0;
+    min-height: 6.4rem;
+    padding: 0.85rem 0.75rem;
+    border-radius: 17px;
+  }
+
+  .kpi-label,
+  .kpi-value {
+    overflow-wrap: break-word;
+  }
+
+  .kpi-label {
+    font-size: 0.78rem;
+    line-height: 1.35;
+  }
+
+  .kpi-value {
+    font-size: clamp(1.3rem, 6vw, 1.85rem);
+    line-height: 1.1;
+  }
+
+  .view-filter-row {
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    padding: 0.85rem;
+    display: grid;
+    grid-template-columns: minmax(5.2rem, 0.7fr) minmax(0, 1.3fr);
+    align-items: center;
+    gap: 0.55rem;
+    border-style: solid;
+    border-radius: 17px;
+  }
+
+  .view-filter-label {
+    white-space: normal;
+    font-size: 0.82rem;
+    line-height: 1.3;
+  }
+
+  .view-filter-select {
+    width: 100%;
+    min-width: 0;
+    padding: 0.7rem 0.65rem;
+    font-size: 0.83rem;
+  }
+
+  .panel {
+    min-width: 0;
+    padding: 1rem;
+    border-radius: 19px;
+  }
+
+  .panel-head {
+    min-width: 0;
+    align-items: flex-start;
+    gap: 0.65rem;
+    margin-bottom: 0.85rem;
+  }
+
+  .panel-head h2 {
+    margin: 0;
+    font-size: clamp(1.3rem, 6vw, 1.7rem);
+    line-height: 1.25;
+  }
+
+  .panel-head p {
+    margin: 0.35rem 0 0;
+    color: #7b6992;
+    font-size: 0.84rem;
+    line-height: 1.45;
+  }
+
+  .panel-head > .ghost-btn {
+    flex: 0 0 auto;
+    padding: 0.6rem 0.7rem;
+    font-size: 0.78rem;
+  }
+
+  .summary-panel .summary-table-wrap {
+    display: none;
+  }
+
+  .mobile-summary-product-list {
+    display: grid;
+    gap: 0.7rem;
+    min-width: 0;
+  }
+
+  .mobile-summary-product-card {
+    min-width: 0;
+    padding: 0.9rem;
+    border: 1px solid #eadcf6;
+    border-radius: 17px;
+    background: #fff;
+    box-shadow: 0 8px 18px rgba(84, 54, 113, 0.06);
+  }
+
+  .mobile-summary-product-card__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.6rem;
+    min-width: 0;
+  }
+
+  .mobile-summary-product-card__head > div {
+    min-width: 0;
+  }
+
+  .mobile-summary-product-card__head strong,
+  .mobile-summary-product-card__head span:not(.type-chip) {
+    display: block;
+    min-width: 0;
+    overflow-wrap: break-word;
+  }
+
+  .mobile-summary-product-card__head strong {
+    color: #2d2050;
+    font-size: 0.92rem;
+    line-height: 1.4;
+  }
+
+  .mobile-summary-product-card__head span:not(.type-chip) {
+    margin-top: 0.2rem;
+    color: #8a789f;
+    font-size: 0.76rem;
+  }
+
+  .mobile-summary-product-card__head .type-chip {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    font-size: 0.7rem;
+  }
+
+  .mobile-summary-product-card__metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem;
+    margin-top: 0.75rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid #eee7f7;
+  }
+
+  .mobile-summary-product-card__metrics span,
+  .mobile-summary-product-card__metrics strong {
+    display: block;
+    overflow-wrap: break-word;
+  }
+
+  .mobile-summary-product-card__metrics span {
+    color: #927fa9;
+    font-size: 0.72rem;
+  }
+
+  .mobile-summary-product-card__metrics strong {
+    margin-top: 0.2rem;
+    color: #2d2050;
+    font-size: 0.9rem;
+  }
+
+  .mobile-summary-product-card__metrics > div:last-child {
+    text-align: right;
+  }
+
+  .mobile-summary-product-card__detail {
+    width: 100%;
+    min-width: 0;
+    margin-top: 0.7rem;
+    padding: 0.55rem 0.7rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    border: 1px solid #d7c5f5;
+    border-radius: 11px;
+    background: #fbf8ff;
+    color: #7041cc;
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 800;
+    cursor: pointer;
+  }
+
+  .mobile-summary-product-card__detail svg {
+    width: 0.95rem;
+    height: 0.95rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .toolbar.order-filter-toolbar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+    align-items: stretch;
+    min-width: 0;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .order-filter-search {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+    flex: none;
+    padding: 0.75rem 0.9rem;
+    font-size: 0.84rem;
+  }
+
+  .order-filter-section {
+    min-width: 0;
+    width: 100%;
+    margin: 0 !important;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.3rem;
+    border: 0;
+    background: transparent;
+  }
+
+  .order-filter-title {
+    margin: 0;
+    font-size: 0.78rem;
+  }
+
+  .order-filter-select {
+    width: 100%;
+    min-width: 0;
+    padding: 0.7rem 0.55rem;
+    font-size: 0.8rem;
+  }
+
+  .order-filter-search-btn {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+    flex: none;
+    padding: 0.75rem 1rem;
+  }
+
+  .table-scroll {
+    display: none;
+  }
+
+  .mobile-order-list {
+    display: grid;
+    gap: 0.75rem;
+    min-width: 0;
+  }
+
+  .mobile-order-card {
+    min-width: 0;
+    padding: 0.95rem;
+    border: 1px solid #eadcf6;
+    border-radius: 18px;
+    background: #fff;
+    box-shadow: 0 9px 20px rgba(84, 54, 113, 0.07);
+  }
+
+  .mobile-order-card__head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 44%);
+    gap: 0.65rem;
+    align-items: start;
+    min-width: 0;
+  }
+
+  .mobile-order-card__identity,
+  .mobile-order-card__badges {
+    min-width: 0;
+  }
+
+  .mobile-order-card__number {
+    display: block;
+    color: #211653;
+    font-size: 1.55rem;
+    line-height: 1.05;
+  }
+
+  .mobile-order-card__identity p,
+  .mobile-order-card__identity small {
+    display: block;
+    min-width: 0;
+    margin: 0.3rem 0 0;
+    color: #493c67;
+    font-size: 0.83rem;
+    line-height: 1.35;
+    overflow-wrap: break-word;
+  }
+
+  .mobile-order-card__identity small {
+    margin-top: 0.12rem;
+    color: #8a789f;
+  }
+
+  .mobile-order-card__badges {
+    display: grid;
+    justify-items: stretch;
+    gap: 0.35rem;
+  }
+
+  .mobile-order-card__badges .type-chip,
+  .mobile-order-card__badges .status-pill {
+    min-width: 0;
+    justify-content: center;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.25;
+    overflow-wrap: break-word;
+  }
+
+  .mobile-order-card__badges svg {
+    width: 0.95rem;
+    height: 0.95rem;
+    flex: 0 0 auto;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .mobile-order-status__dot {
+    width: 0.45rem;
+    height: 0.45rem;
+    flex: 0 0 auto;
+    border-radius: 50%;
+  }
+
+  .mobile-order-divider {
+    height: 1px;
+    margin: 0.85rem 0;
+    background: #eee7f7;
+  }
+
+  .mobile-order-card__meta {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem 0.75rem;
+    min-width: 0;
+  }
+
+  .mobile-order-meta-item {
+    display: grid;
+    grid-template-columns: 1rem minmax(0, 1fr);
+    column-gap: 0.45rem;
+    align-items: start;
+    min-width: 0;
+    color: #6f6282;
+    font-size: 0.76rem;
+    line-height: 1.35;
+  }
+
+  .mobile-order-meta-item svg {
+    grid-row: span 2;
+    width: 1rem;
+    height: 1rem;
+    margin-top: 0.1rem;
+    fill: none;
+    stroke: #7652bd;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .mobile-order-meta-item strong {
+    min-width: 0;
+    color: #251955;
+    font-size: 0.8rem;
+    font-weight: 800;
+    overflow-wrap: break-word;
+  }
+
+  .mobile-order-meta-item--total {
+    grid-column: 1 / -1;
+  }
+
+  .mobile-order-meta-item--total strong {
+    color: #5f3ca0;
+    font-size: 1rem;
+  }
+
+  .mobile-order-detail-btn {
+    width: 100%;
+    min-width: 0;
+    margin-top: 0.9rem;
+    padding: 0.7rem 0.75rem;
+    display: grid;
+    grid-template-columns: 1.1rem minmax(0, 1fr) 1.1rem;
+    align-items: center;
+    gap: 0.45rem;
+    border: 1px solid #8052e6;
+    border-radius: 13px;
+    background: #fff;
+    color: #7041cc;
+    font: inherit;
+    font-size: 0.86rem;
+    font-weight: 800;
+    cursor: pointer;
+  }
+
+  .mobile-order-detail-btn svg {
+    width: 1.1rem;
+    height: 1.1rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .mobile-order-detail-btn__chevron {
+    justify-self: end;
+  }
+
+  .mobile-order-detail-btn:hover,
+  .mobile-order-detail-btn:focus-visible {
+    background: #f5efff;
+    outline: none;
+  }
+
+  .modal-overlay {
+    align-items: center;
+    padding: 0.5rem;
+    background: rgba(36, 27, 57, 0.62);
+  }
+
+  .modal-card--order-detail {
+    width: calc(100vw - 1rem);
+    max-width: none;
+    height: calc(100dvh - 1rem);
+    max-height: calc(100dvh - 1rem);
+    min-width: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 1rem;
+    border-radius: 27px;
+    scrollbar-width: thin;
+    scrollbar-color: #b9a5d5 transparent;
+  }
+
+  .modal-card--order-detail .modal-head {
+    top: -1rem;
+    min-width: 0;
+    margin: -1rem -1rem 1rem;
+    padding: 1rem;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 0.7rem;
+    border-bottom: 1px solid #eee7f7;
+  }
+
+  .modal-card--order-detail .modal-head > div:first-child {
+    min-width: 0;
+  }
+
+  .modal-card--order-detail .modal-head h3 {
+    margin: 0;
+    color: #241756;
+    font-size: clamp(1.5rem, 7vw, 2rem);
+    line-height: 1.15;
+    overflow-wrap: break-word;
+  }
+
+  .modal-card--order-detail .modal-head > div:first-child > p {
+    display: none;
+  }
+
+  .modal-card--order-detail .modal-head .mobile-order-subtitle {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: block;
+    margin: -0.25rem 0 0.1rem;
+    color: #81719d;
+    font-size: 0.92rem;
+    line-height: 1.35;
+    overflow-wrap: break-word;
+  }
+
+  .modal-card--order-detail .modal-head__actions {
+    min-width: 0;
+    display: grid;
+    grid-column: 1 / -1;
+    grid-row: 3;
+    grid-template-columns: minmax(0, 1fr) 2.7rem;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .modal-card--order-detail .print-order-btn {
+    min-width: 0;
+    padding: 0.7rem 0.75rem;
+    font-size: 0.78rem;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+
+  .modal-card--order-detail .close-btn {
+    width: 2.7rem;
+    height: 2.7rem;
+    font-size: 1.2rem;
+  }
+
+  .modal-card--order-detail > .summary-strip,
+  .modal-card--order-detail > .items-list {
+    display: none;
+  }
+
+  .mobile-order-detail {
+    display: block;
+    min-width: 0;
+  }
+
+  .mobile-order-total-panel {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    min-width: 0;
+    padding: 1rem;
+    border: 1px solid #eee5fb;
+    border-radius: 19px;
+    background: linear-gradient(135deg, #faf6ff, #f4edff);
+  }
+
+  .mobile-order-total-panel > div {
+    min-width: 0;
+  }
+
+  .mobile-order-total-panel span:first-child {
+    display: block;
+    color: #8874a8;
+    font-size: 0.95rem;
+    font-weight: 700;
+  }
+
+  .mobile-order-total-panel strong {
+    display: block;
+    margin-top: 0.18rem;
+    color: #241756;
+    font-size: clamp(1.85rem, 10vw, 2.6rem);
+    line-height: 1.05;
+    overflow-wrap: break-word;
+  }
+
+  .mobile-order-detail-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    max-width: 48%;
+    padding: 0.65rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.76rem;
+    font-weight: 800;
+    line-height: 1.25;
+    text-align: center;
+    overflow-wrap: break-word;
+  }
+
+  .mobile-order-detail-summary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+    margin-top: 0.7rem;
+    min-width: 0;
+  }
+
+  .mobile-order-detail-field {
+    min-width: 0;
+    padding: 0.8rem;
+    display: grid;
+    grid-template-columns: 1.35rem minmax(0, 1fr);
+    column-gap: 0.55rem;
+    align-items: start;
+    border: 1px solid #eadffd;
+    border-radius: 16px;
+    background: #fff;
+  }
+
+  .mobile-order-detail-field svg {
+    grid-row: span 2;
+    width: 1.35rem;
+    height: 1.35rem;
+    margin-top: 0.1rem;
+    fill: none;
+    stroke: #7652bd;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .mobile-order-detail-field span {
+    min-width: 0;
+    color: #8874a8;
+    font-size: 0.78rem;
+    line-height: 1.3;
+  }
+
+  .mobile-order-detail-field strong {
+    min-width: 0;
+    margin-top: 0.2rem;
+    color: #251955;
+    font-size: 0.9rem;
+    line-height: 1.25;
+    overflow-wrap: break-word;
+  }
+
+  .mobile-order-detail-divider {
+    height: 1px;
+    margin: 1rem 0 0.85rem;
+    background: #e8def5;
+  }
+
+  .mobile-order-items-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    min-width: 0;
+    margin-bottom: 0.7rem;
+  }
+
+  .mobile-order-items-heading h4 {
+    min-width: 0;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    color: #32234b;
+    font-size: 1.25rem;
+    line-height: 1.25;
+  }
+
+  .mobile-order-items-heading h4 svg {
+    width: 1.35rem;
+    height: 1.35rem;
+    flex: 0 0 auto;
+    fill: none;
+    stroke: #7652bd;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .mobile-order-items-heading > strong {
+    flex: 0 0 auto;
+    color: #6f50a0;
+    font-size: 0.95rem;
+  }
+
+  .mobile-order-items {
+    display: grid;
+    gap: 0.65rem;
+    min-width: 0;
+  }
+
+  .mobile-order-item {
+    min-width: 0;
+    padding: 0.85rem;
+    border: 1px solid #eadffd;
+    border-radius: 16px;
+    background: linear-gradient(135deg, #fff, #fcf9ff);
+  }
+
+  .mobile-order-item__name,
+  .mobile-order-item__variant,
+  .mobile-order-item__category {
+    display: block;
+    min-width: 0;
+    overflow-wrap: break-word;
+  }
+
+  .mobile-order-item__name {
+    color: #2d2050;
+    font-size: 0.96rem;
+    line-height: 1.45;
+  }
+
+  .mobile-order-item__variant,
+  .mobile-order-item__category {
+    margin-top: 0.25rem;
+    color: #8a789f;
+    font-size: 0.8rem;
+    line-height: 1.35;
+  }
+
+  .mobile-order-item__metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.45rem;
+    margin-top: 0.75rem;
+    min-width: 0;
+  }
+
+  .mobile-order-item__metrics > div {
+    min-width: 0;
+  }
+
+  .mobile-order-item__metrics span,
+  .mobile-order-item__metrics strong {
+    display: block;
+    overflow-wrap: break-word;
+  }
+
+  .mobile-order-item__metrics span {
+    color: #927fa9;
+    font-size: 0.7rem;
+    line-height: 1.25;
+  }
+
+  .mobile-order-item__metrics strong {
+    margin-top: 0.2rem;
+    color: #2d2050;
+    font-size: 0.86rem;
+    line-height: 1.25;
+  }
+
+  .mobile-order-item__metrics > div:last-child {
+    text-align: right;
+  }
+
+  .mobile-order-breakdown {
+    display: grid;
+    gap: 0.5rem;
+    margin-top: 0.8rem;
+    padding: 0.9rem;
+    border-radius: 17px;
+    background: #f7f1ff;
+  }
+
+  .mobile-order-breakdown > div {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    min-width: 0;
+    color: #796a91;
+    font-size: 0.84rem;
+  }
+
+  .mobile-order-breakdown strong {
+    flex: 0 0 auto;
+    color: #3e2a65;
+    overflow-wrap: break-word;
+  }
+
+  .mobile-order-breakdown__total {
+    margin-top: 0.2rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid #e5d9f3;
+    color: #2d2050 !important;
+    font-size: 1.12rem !important;
+    font-weight: 900;
+  }
+
+  .mobile-order-breakdown__total strong {
+    color: #241756;
+    font-size: 1.25rem;
+  }
+}
+
+@media (max-width: 360px) {
+  .admin-order-page {
+    padding: 0.75rem;
+  }
+
+  .mobile-order-card {
+    padding: 0.8rem;
+  }
+
+  .mobile-order-card__head {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 47%);
+    gap: 0.45rem;
+  }
+
+  .mobile-order-card__number {
+    font-size: 1.4rem;
+  }
+
+  .mobile-order-meta-item {
+    column-gap: 0.3rem;
+    font-size: 0.7rem;
+  }
+
+  .mobile-order-meta-item strong {
+    font-size: 0.74rem;
+  }
+
+  .modal-card--order-detail .modal-head {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-card--order-detail .modal-head__actions {
+    width: 100%;
+    grid-template-columns: minmax(0, 1fr) 2.7rem;
+  }
+
+  .mobile-order-total-panel {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .mobile-order-detail-status {
+    max-width: 100%;
+  }
+
+  .mobile-order-detail-field {
+    padding: 0.7rem;
+    grid-template-columns: 1.1rem minmax(0, 1fr);
+    column-gap: 0.35rem;
+  }
+
+  .mobile-order-detail-field svg {
+    width: 1.1rem;
+    height: 1.1rem;
+  }
+
+  .mobile-order-detail-field span {
+    font-size: 0.7rem;
+  }
+
+  .mobile-order-detail-field strong {
+    font-size: 0.78rem;
+  }
+
+  .mobile-order-item__metrics {
+    gap: 0.25rem;
+  }
+
+  .mobile-order-item__metrics span {
+    font-size: 0.64rem;
+  }
+
+  .mobile-order-item__metrics strong {
+    font-size: 0.76rem;
+  }
 }
 </style>
