@@ -271,9 +271,11 @@ const breakdownTotal = computed(() => {
   if (isImportFeeDisplayStage.value) {
     return importFeeTotal.value + shippingFee.value
   }
-  const shippingPart = !['pending', 'slip submitted'].includes(normalizedOrderStatus.value)
-    ? rawShippingFee.value
-    : 0
+  // รอบพรีออเดอร์ยังไม่ปิด: ยังไม่แสดง/ไม่รวมค่าส่งภายในไทย
+  const shippingPart =
+    !isRoundOpen.value && !['pending', 'slip submitted'].includes(normalizedOrderStatus.value)
+      ? rawShippingFee.value
+      : 0
   return (
     itemsSubtotal.value +
     chinaShippingTotalThb.value +
@@ -2150,7 +2152,7 @@ onMounted(async () => {
                   <span>฿{{ chinaShippingTotalThb.toLocaleString() }}</span>
                 </div>
                 <div
-                  v-if="!isImportFeeDisplayStage && !['pending', 'slip submitted'].includes(normalizedOrderStatus) && rawShippingFee > 0"
+                  v-if="!isImportFeeDisplayStage && !isRoundOpen && !['pending', 'slip submitted'].includes(normalizedOrderStatus) && rawShippingFee > 0"
                   style="display: flex; justify-content: space-between"
                 >
                   <span>ค่าส่งภายในไทย</span>
