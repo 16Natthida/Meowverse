@@ -176,12 +176,12 @@ router.get('/', async (req, res) => {
           FROM preorder_rounds r
           WHERE r.round_id = c.preorder_round_id
           LIMIT 1) AS preorder_round_status,
-         COALESCE(c.round_price,
+         COALESCE(NULLIF(c.round_price, 0),
          CASE
            WHEN COALESCE(c.item_type, CASE WHEN p.ready_to_ship_enabled = 1 THEN 'ready-to-ship' WHEN p.preorder_enabled = 1 THEN 'preorder' ELSE NULL END) = 'preorder'
              THEN COALESCE(
                (
-                 SELECT prp.round_price
+                 SELECT NULLIF(prp.round_price, 0)
                  FROM preorder_round_products prp
                  JOIN preorder_rounds r ON prp.round_id = r.round_id
                  WHERE prp.prod_id = p.prod_id
@@ -190,7 +190,7 @@ router.get('/', async (req, res) => {
                    AND r.end_date >= NOW()
                  ORDER BY prp.link_id DESC
                  LIMIT 1
-               ), p.preorder_price, p.base_price
+               ), NULLIF(p.preorder_price, 0), p.base_price
              )
            ELSE p.base_price
          END) AS price,
@@ -362,7 +362,7 @@ router.post('/', async (req, res) => {
       const [existing] = await connection.query(existingQuery, existingParams)
 
       let effectiveRoundId = round_id || null
-      let effectiveRoundPrice = round_price != null ? Number(round_price) : null
+      let effectiveRoundPrice = round_price != null && Number(round_price) > 0 ? Number(round_price) : null
       if (requestedType === 'preorder' && !effectiveRoundPrice) {
         const [roundRows] = await connection.query(
           `SELECT prp.round_id AS round_id, prp.round_price AS round_price
@@ -376,7 +376,7 @@ router.post('/', async (req, res) => {
         )
         if (roundRows.length > 0) {
           effectiveRoundId = effectiveRoundId || roundRows[0].round_id
-          effectiveRoundPrice = effectiveRoundPrice || Number(roundRows[0].round_price)
+          effectiveRoundPrice = effectiveRoundPrice || Number(roundRows[0].round_price) || null
         }
       }
 
@@ -406,7 +406,7 @@ router.post('/', async (req, res) => {
             effectiveFlavor || null,
             round_id || existing[0].round_id || null,
             requestedType === 'preorder' ? round_id || existing[0].round_id || null : null,
-            round_price != null ? round_price : existing[0].round_price || null,
+            Number(round_price) > 0 ? round_price : Number(existing[0].round_price) > 0 ? existing[0].round_price : null,
             existing[0].cart_id,
           ],
         )
