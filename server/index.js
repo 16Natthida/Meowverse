@@ -677,6 +677,30 @@ async function autoCancelExpiredReadyOrders() {
   }
 }
 
+// ─────────────────────────────────────────────
+// ยกเลิกออเดอร์ "พรีออเดอร์" (Preorder) ที่ยังไม่ชำระเงินสำเร็จและเลยกำหนดเวลา (deadline)
+// เปลี่ยน orders.status เป็น 'Cancelled' (ไม่ลบออเดอร์ เพื่อให้ลูกค้าขอเลื่อนได้ภายหลัง)
+// ครอบคลุมทั้งรอบที่ 1 (Pending / Invalid slip) และรอบที่ 2 ค่านำเข้า
+// (Pending_import_fee / Invalid import slip) ส่วนออเดอร์ที่แนบสลิปรอตรวจสอบอยู่
+// (Slip_submitted / Import_slip_submitted) จะไม่ถูกยกเลิกอัตโนมัติ
+// ─────────────────────────────────────────────
+async function autoCancelExpiredPreorderOrders() {
+  try {
+    const [result] = await pool.query(
+      `UPDATE orders
+       SET status = 'Cancelled'
+       WHERE Order_type = 'Preorder'
+         AND status IN ('Pending', 'Invalid slip', 'Pending_import_fee', 'Invalid import slip')
+         AND deadline IS NOT NULL AND deadline < NOW()`,
+    )
+    if (result.affectedRows > 0) {
+      console.log(`[auto-cancel] cancelled ${result.affectedRows} expired preorder order(s)`)
+    }
+  } catch (error) {
+    console.error('[auto-cancel] failed to check expired preorder orders:', error.message)
+  }
+}
+
 function normalizeIntakeQuantity(value, fallback = 0) {
   // Ensure we return a non-negative integer.
   // Accept numbers or numeric strings (with commas or other chars) and clamp to >= 0.
@@ -6938,6 +6962,14 @@ async function startServer() {
     }, 15 * 1000)
 
     readyOrderAutoCancelTimer.unref?.()
+
+    autoCancelExpiredPreorderOrders()
+
+    const preorderAutoCancelTimer = setInterval(() => {
+      autoCancelExpiredPreorderOrders()
+    }, 15 * 1000)
+
+    preorderAutoCancelTimer.unref?.()
 
     app.listen(port, host, () => {
   console.log(`API server running at ${host}:${port}`)
