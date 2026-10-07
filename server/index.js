@@ -132,6 +132,29 @@ async function ensurePreorderQuantitySoldColumn() {
   return hasPreorderQuantitySoldColumn
 }
 
+// เงื่อนไข SQL: ออเดอร์นี้ (หรือออเดอร์แม่ กรณีเป็นออเดอร์ที่แยกจากการตกหล่น)
+// ต้องมีสลิปชำระเงินครั้งที่ 1 (Order_fee / Ready pay) ที่แอดมินกด "อนุมัติ" แล้วเท่านั้น
+// จึงจะนับเป็นของที่ต้องรับเข้า — สลิปที่รอตรวจ / ถูกปฏิเสธ จะไม่ถูกนับ
+function approvedFirstPaymentSql(orderAlias = 'o') {
+  return `(
+    EXISTS (
+      SELECT 1 FROM payment pay_ok
+      WHERE pay_ok.order_id = ${orderAlias}.order_id
+        AND pay_ok.type IN ('Order_fee', 'Ready pay')
+        AND pay_ok.status = 'Approved'
+    )
+    OR (
+      COALESCE(${orderAlias}.split_parent_order_id, 0) > 0
+      AND EXISTS (
+        SELECT 1 FROM payment pay_ok_parent
+        WHERE pay_ok_parent.order_id = ${orderAlias}.split_parent_order_id
+          AND pay_ok_parent.type IN ('Order_fee', 'Ready pay')
+          AND pay_ok_parent.status = 'Approved'
+      )
+    )
+  )`
+}
+
 function resolveIntakeStatus(orderedQty, receivedQty) {
   const ordered = Math.max(Number(orderedQty) || 0, 0)
   const received = Math.max(Number(receivedQty) || 0, 0)
@@ -4639,6 +4662,7 @@ app.get('/api/admin/inventory-intake/orders', authenticateToken, requireAdmin, a
       FROM orders o
       LEFT JOIN accounts a ON a.user_id = o.user_id
       WHERE LOWER(o.Order_type) = 'preorder'
+        AND ${approvedFirstPaymentSql('o')}
     `
     const orderParams = []
 
@@ -4853,6 +4877,7 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
       LEFT JOIN accounts a ON a.user_id = o.user_id
       LEFT JOIN products p ON p.prod_id = od.prod_id
       WHERE LOWER(o.Order_type) = 'preorder'
+        AND ${approvedFirstPaymentSql('o')}
         AND od.preorder_round_id IS NOT NULL
         AND TRIM(pr.round_name) NOT LIKE '%(ตกหล่น)'
         AND TRIM(pr.round_name) NOT LIKE '%(รอบตกหล่น)'
@@ -5088,6 +5113,7 @@ app.post(
          LEFT JOIN accounts a ON a.user_id = o.user_id
          WHERE od.preorder_round_id = ?
            AND LOWER(o.Order_type) = 'preorder'
+           AND ${approvedFirstPaymentSql('o')}
          ORDER BY o.Order_date ASC, o.order_id ASC, od.detail_id ASC`,
         [roundId],
       )
@@ -5357,6 +5383,7 @@ app.post(
          FROM order_details od
          JOIN orders o ON o.order_id = od.order_id
          WHERE od.preorder_round_id = ?
+           AND ${approvedFirstPaymentSql('o')}
          GROUP BY od.order_id`,
         [roundId],
       )
@@ -5487,9 +5514,10 @@ app.post(
       await connection.beginTransaction()
 
       const [orderRows] = await connection.query(
-        `SELECT order_id, user_id, total_amount, status, Order_type
-         FROM orders
-         WHERE order_id = ?
+        `SELECT o.order_id, o.user_id, o.total_amount, o.status, o.Order_type,
+                ${approvedFirstPaymentSql('o')} AS first_payment_approved
+         FROM orders o
+         WHERE o.order_id = ?
          LIMIT 1`,
         [orderId],
       )
@@ -5500,6 +5528,17 @@ app.post(
       }
 
       const order = orderRows[0]
+
+      // รับของเข้าได้เฉพาะออเดอร์ที่แอดมินอนุมัติสลิปชำระเงินครั้งที่ 1 แล้ว
+      if (
+        String(order.Order_type || '').toLowerCase() === 'preorder' &&
+        Number(order.first_payment_approved) !== 1
+      ) {
+        await connection.rollback()
+        return res.status(400).json({
+          error: 'ยังรับของเข้าไม่ได้ เนื่องจากแอดมินยังไม่ได้อนุมัติสลิปชำระเงินของออเดอร์นี้',
+        })
+      }
       const [detailRows] = await connection.query(
         `SELECT
            od.detail_id,
