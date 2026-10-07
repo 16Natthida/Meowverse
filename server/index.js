@@ -303,7 +303,7 @@ async function splitDelayedItemsFromOrder(
   return childOrderId
 }
 
-const PREORDER_PAYMENT_WINDOW_MS = 30 * 1000 // ทดสอบ: 30 วินาที (ค่าปกติ 48 * 60 * 60 * 1000)
+const PREORDER_PAYMENT_WINDOW_MS = 2 * 24 * 60 * 60 * 1000 // 2 วัน
 
 async function createPreorderOrdersForClosedRound(connection, roundId) {
   const [minimumRows] = await connection.query(
@@ -4212,7 +4212,7 @@ app.put(
       if (orderIds.size > 0) {
         const orderIdList = Array.from(orderIds)
         const placeholders = orderIdList.map(() => '?').join(',')
-        const deadline48h = new Date(Date.now() + 30 * 1000) // ทดสอบ: 30 วินาที (ค่าปกติ 48 * 60 * 60 * 1000)
+        const deadline48h = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000) // 2 วัน
 
         // เปลี่ยนสถานะและตั้ง deadline เฉพาะออเดอร์ที่แอดมินอนุมัติสลิปรอบแรกแล้ว (Wait_for_Import_Fee) เท่านั้น
         await connection.query(
@@ -4580,7 +4580,7 @@ app.patch('/api/payments/:pay_id/status', async (req, res) => {
 
               if (importFeeTotal > 0) {
                 // ถ้าแอดมินเคยใส่ค่านำเข้ารอไว้แล้วตอนสถานะ Pending ให้กระโดดไปรอบ 2 เลย
-                const deadline48h = new Date(Date.now() + 30 * 1000) // ทดสอบ: 30 วินาที (ค่าปกติ 48 * 60 * 60 * 1000)
+                const deadline48h = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000) // 2 วัน
                 await connection.query(
                   'UPDATE orders SET status = ?, deadline = ? WHERE order_id = ?',
                   ['Pending_import_fee', deadline48h, order_id],
