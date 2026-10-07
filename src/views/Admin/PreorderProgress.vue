@@ -13,6 +13,9 @@ const selectedRound = ref('')
 const selectedStatus = ref('all')
 const search = ref('')
 const expandedRows = ref(new Set())
+const breakdowns = ref(new Map())
+const breakdownLoading = ref(new Set())
+const breakdownErrors = ref(new Map())
 let refreshTimer = null
 
 function authHeaders() {
@@ -110,7 +113,7 @@ function isExpanded(row) {
   return expandedRows.value.has(rowKey(row))
 }
 
-function toggleRow(row) {
+async function toggleRow(row) {
   const next = new Set(expandedRows.value)
   const key = rowKey(row)
 
@@ -121,7 +124,37 @@ function toggleRow(row) {
   }
 
   expandedRows.value = next
+  if (next.has(key) && !breakdowns.value.has(key) && !breakdownLoading.value.has(key)) {
+    const pending = new Set(breakdownLoading.value)
+    pending.add(key)
+    breakdownLoading.value = pending
+    const errors = new Map(breakdownErrors.value)
+    errors.delete(key)
+    breakdownErrors.value = errors
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/admin/preorder-progress/${encodeURIComponent(row.roundId)}/${encodeURIComponent(row.productId)}/breakdown?sku=${encodeURIComponent(row.sku || '')}`,
+        { headers: authHeaders() },
+      )
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(body.message || body.error || `โหลดรายละเอียดไม่สำเร็จ (${response.status})`)
+      breakdowns.value = new Map(breakdowns.value).set(key, body)
+    } catch (err) {
+      breakdownErrors.value = new Map(breakdownErrors.value).set(
+        key,
+        err instanceof Error ? err.message : 'โหลดรายละเอียดไม่สำเร็จ',
+      )
+    } finally {
+      const done = new Set(breakdownLoading.value)
+      done.delete(key)
+      breakdownLoading.value = done
+    }
+  }
 }
+
+function isBreakdownLoading(row) { return breakdownLoading.value.has(rowKey(row)) }
+function breakdownFor(row) { return breakdowns.value.get(rowKey(row)) }
+function breakdownErrorFor(row) { return breakdownErrors.value.get(rowKey(row)) }
 
 function startRefresh() {
   stopRefresh()
@@ -154,6 +187,7 @@ onUnmounted(stopRefresh)
           จัดการรอบ
         </button>
         <button class="btn-primary" type="button" :disabled="loading" @click="loadProgress">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M5.6 9A7 7 0 0 1 17.5 6L20 8M4 16l2.5 2A7 7 0 0 0 18.4 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
           {{ loading ? 'กำลังโหลด...' : 'รีเฟรชข้อมูล' }}
         </button>
       </div>
@@ -190,6 +224,7 @@ onUnmounted(stopRefresh)
           <table>
           <thead>
             <tr>
+              <th aria-label="รายละเอียด"></th>
               <th>สินค้า</th>
               <th>รอบ</th>
               <th>สถานะรอบ</th>
@@ -200,7 +235,14 @@ onUnmounted(stopRefresh)
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in filteredProgress" :key="`${row.roundId}-${row.productId}`">
+            <template v-for="row in filteredProgress" :key="`${row.roundId}-${row.productId}`">
+            <tr>
+              <td class="expand-cell">
+                <button class="icon-button" type="button" :aria-label="`${isExpanded(row) ? 'ย่อ' : 'ดู'}รายละเอียด ${row.productName} รอบ ${row.roundName}`" :aria-expanded="isExpanded(row)" @click="toggleRow(row)">
+                  <svg v-if="!isExpanded(row)" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m9 18 6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <svg v-else width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+              </td>
               <td><strong>{{ row.productName }}</strong><small>{{ row.sku || `สินค้า #${row.productId}` }}</small></td>
               <td>{{ row.roundName }}<small>{{ formatDate(row.endDate) }}</small></td>
               <td><span class="round-status">{{ roundStatusLabel(row.roundStatus) }}</span></td>
@@ -213,6 +255,27 @@ onUnmounted(stopRefresh)
                 </span>
               </td>
             </tr>
+            <tr v-if="isExpanded(row)" class="breakdown-row">
+              <td colspan="8">
+                <div v-if="isBreakdownLoading(row)" class="breakdown-message">กำลังโหลดรายละเอียด...</div>
+                <div v-else-if="breakdownErrorFor(row)" class="breakdown-message breakdown-message--error">{{ breakdownErrorFor(row) }}</div>
+                <template v-else-if="breakdownFor(row)">
+                  <div class="breakdown-heading">
+                    <strong>ยอดสั่งแยกตามรสชาติ</strong>
+                    <span>{{ breakdownFor(row).flavorCount }} รสชาติ • รวม {{ breakdownFor(row).totalQty }} ชิ้น</span>
+                  </div>
+                  <div v-if="breakdownFor(row).flavors.length" class="flavor-grid">
+                    <article v-for="flavor in breakdownFor(row).flavors" :key="flavor.variantKey" class="flavor-card">
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m3 8 9 5 9-5M3 13l9 5 9-5M3 8v8l9 5 9-5V8" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+                      <strong>{{ flavor.name }}</strong>
+                      <span>{{ flavor.totalQty }} ชิ้น</span>
+                    </article>
+                  </div>
+                  <div v-else class="breakdown-message">ยังไม่มีรายการสั่งซื้อในสินค้ารอบนี้</div>
+                </template>
+              </td>
+            </tr>
+            </template>
             </tbody>
           </table>
         </div>
@@ -238,7 +301,8 @@ onUnmounted(stopRefresh)
                 <span :class="['status-pill', `status-pill--${row.minimumStatus}`]">
                   {{ statusLabel(row.minimumStatus) }}
                 </span>
-                <span class="progress-card__chevron" aria-hidden="true">⌄</span>
+                <svg v-if="!isExpanded(row)" class="progress-card__chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m9 18 6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <svg v-else class="progress-card__chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </span>
             </button>
 
@@ -267,6 +331,24 @@ onUnmounted(stopRefresh)
                 <span>ขาดอีก</span>
                 <strong>{{ row.shortfall > 0 ? `${row.shortfall} ชิ้น` : 'ครบขั้นต่ำแล้ว' }}</strong>
               </div>
+              <div class="mobile-breakdown">
+                <div v-if="isBreakdownLoading(row)" class="breakdown-message">กำลังโหลดรายละเอียด...</div>
+                <div v-else-if="breakdownErrorFor(row)" class="breakdown-message breakdown-message--error">{{ breakdownErrorFor(row) }}</div>
+                <template v-else-if="breakdownFor(row)">
+                  <div class="breakdown-heading">
+                    <strong>ยอดสั่งแยกตามรสชาติ</strong>
+                    <span>{{ breakdownFor(row).flavorCount }} รสชาติ • รวม {{ breakdownFor(row).totalQty }} ชิ้น</span>
+                  </div>
+                  <div v-if="breakdownFor(row).flavors.length" class="flavor-grid">
+                    <article v-for="flavor in breakdownFor(row).flavors" :key="flavor.variantKey" class="flavor-card">
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m3 8 9 5 9-5M3 13l9 5 9-5M3 8v8l9 5 9-5V8" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+                      <strong>{{ flavor.name }}</strong>
+                      <span>{{ flavor.totalQty }} ชิ้น</span>
+                    </article>
+                  </div>
+                  <div v-else class="breakdown-message">ยังไม่มีรายการสั่งซื้อในสินค้ารอบนี้</div>
+                </template>
+              </div>
             </div>
           </article>
         </div>
@@ -279,6 +361,7 @@ onUnmounted(stopRefresh)
 .preorder-progress-page { padding: 0 0 2rem; color: #493765; }
 .header-actions { display: flex; gap: .6rem; flex-wrap: wrap; }
 button { border: 0; border-radius: 10px; padding: .65rem 1rem; font: inherit; font-weight: 800; cursor: pointer; }
+.btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: .45rem; }
 button:disabled { opacity: .6; cursor: wait; }
 .btn-primary { background: #9b6ad4; color: #fff; }
 .btn-secondary { background: #f2eaff; color: #6f50a0; }
@@ -307,9 +390,28 @@ td small { display: block; margin-top: .2rem; color: #9a8aaa; font-size: .75rem;
 .status-pill--no-minimum { background: #edf0f5; color: #687385; }
 .empty-state { padding: 3rem 1rem; text-align: center; color: #806d98; }
 .progress-cards { display: none; }
+.expand-cell { width: 48px; text-align: center; }
+.icon-button { display: inline-grid; width: 34px; height: 34px; padding: 0; place-items: center; border: 1px solid #e6d9f3; border-radius: 10px; background: #faf7ff; color: #76529b; }
+.icon-button svg, .btn-primary svg { width: 20px; height: 20px; flex: 0 0 auto; }
+.breakdown-row > td { padding: 1rem 1.1rem 1.25rem; white-space: normal; background: #fcfaff; }
+.breakdown-heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin: 0 0 .8rem; color: #60447d; font-size: .9rem; }
+.breakdown-heading strong { color: #7853a0; white-space: nowrap; }
+.flavor-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .7rem; align-items: stretch; }
+.flavor-card { display: flex; min-width: 0; align-items: center; gap: .7rem; padding: .75rem .85rem; border: 1px solid #e6d9f3; border-radius: 13px; color: #684780; box-shadow: 0 4px 11px rgba(75, 45, 106, .045); }
+.flavor-card:nth-child(4n + 1) { background: #fffaf0; border-color: #f0e4c9; }
+.flavor-card:nth-child(4n + 2) { background: #f2fbf7; border-color: #d4eadf; }
+.flavor-card:nth-child(4n + 3) { background: #f8f4ff; border-color: #e4d9f2; }
+.flavor-card:nth-child(4n) { background: #fff5f6; border-color: #f0dce1; }
+.flavor-card svg { width: 24px; height: 24px; flex: 0 0 24px; color: #8c69aa; }
+.flavor-card strong { min-width: 0; flex: 1; color: #493765; line-height: 1.35; overflow-wrap: anywhere; }
+.flavor-card span { flex: 0 0 auto; color: #684780; font-size: .85rem; font-weight: 800; white-space: nowrap; }
+.breakdown-message { padding: 1rem; border-radius: 12px; background: #faf7ff; color: #806d98; text-align: center; }
+.breakdown-message--error { background: #fff0f2; color: #9f3346; }
+.mobile-breakdown { margin-top: .7rem; padding-top: .8rem; border-top: 1px solid #f0e9f7; }
 @media (max-width: 800px) {
   .summary-grid { grid-template-columns: repeat(2, 1fr); }
   .filter-panel { grid-template-columns: 1fr; }
+  .flavor-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 720px) {
   .table-wrap { display: none; }
@@ -369,15 +471,14 @@ td small { display: block; margin-top: .2rem; color: #9a8aaa; font-size: .75rem;
     gap: .45rem;
   }
   .progress-card__chevron {
-    display: inline-grid;
+    display: block;
     width: 1.65rem;
     height: 1.65rem;
-    place-items: center;
+    flex: 0 0 auto;
+    padding: .3rem;
     border-radius: 999px;
     background: #f2eaff;
     color: #8054aa;
-    font-size: 1.2rem;
-    line-height: 1;
     transition: transform .2s ease;
   }
   .progress-card--expanded .progress-card__chevron { transform: rotate(180deg); }
@@ -404,5 +505,7 @@ td small { display: block; margin-top: .2rem; color: #9a8aaa; font-size: .75rem;
     overflow-wrap: anywhere;
   }
   .progress-card__detail-row .qty-cell { color: #4e3672; }
+  .flavor-grid { grid-template-columns: minmax(0, 1fr); }
+
 }
 </style>

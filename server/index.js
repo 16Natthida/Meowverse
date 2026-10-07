@@ -39,6 +39,7 @@ import shippingRouter from './shipping.js'
 import { DEFAULT_PREORDER_TERMS, normalizePreorderTerms } from './preorderTerms.js'
 import { getShippingFeeSettings } from './shippingFees.js'
 import { calculateChinaShippingBreakdown } from './chinaShipping.js'
+import { aggregatePreorderFlavorBreakdown } from './preorderProgressBreakdown.js'
 import {
   getFlavorPrice,
   getLowestFlavorPrice,
@@ -3241,30 +3242,43 @@ app.get('/api/admin/preorder-progress', authenticateToken, requireAdmin, async (
         p.prod_name AS productName,
         p.sku AS sku,
         COALESCE(prp.minimum_order_qty, 0) AS minimumOrderQty,
-        COALESCE(SUM(c.qty), 0) AS quantityReserved,
-        COALESCE(prp.quantity_sold, 0) AS quantitySold,
-        GREATEST(
-          COALESCE(SUM(c.qty), 0),
-          COALESCE(prp.quantity_sold, 0)
-        ) AS committedQty
+        COALESCE(reserved.quantityReserved, 0) AS quantityReserved,
+        COALESCE(sold.quantitySold, 0) AS quantitySold,
+        COALESCE(reserved.quantityReserved, 0) + COALESCE(sold.quantitySold, 0) AS committedQty
       FROM preorder_rounds r
       JOIN preorder_round_products prp ON prp.round_id = r.round_id
       JOIN products p ON p.prod_id = prp.prod_id
-      LEFT JOIN cart c
-        ON c.preorder_round_id = r.round_id
-       AND c.prod_id = prp.prod_id
-       AND c.item_type = 'preorder'
-      GROUP BY
-        r.round_id,
-        r.round_name,
-        r.status,
-        r.start_date,
-        r.end_date,
-        prp.prod_id,
-        p.prod_name,
-        p.sku,
-        prp.minimum_order_qty,
-        prp.quantity_sold
+      LEFT JOIN (
+        SELECT
+          c.preorder_round_id AS roundId,
+          c.prod_id AS productId,
+          SUM(c.qty) AS quantityReserved
+        FROM cart c
+        JOIN preorder_rounds cart_round ON cart_round.round_id = c.preorder_round_id
+        JOIN preorder_round_products cart_product
+          ON cart_product.round_id = cart_round.round_id AND cart_product.prod_id = c.prod_id
+        WHERE c.preorder_round_id IS NOT NULL
+          AND LOWER(COALESCE(c.item_type, '')) IN ('preorder', '')
+        GROUP BY c.preorder_round_id, c.prod_id
+      ) reserved
+        ON reserved.roundId = r.round_id AND reserved.productId = prp.prod_id
+      LEFT JOIN (
+        SELECT
+          od.preorder_round_id AS roundId,
+          od.prod_id AS productId,
+          SUM(od.qty) AS quantitySold
+        FROM order_details od
+        JOIN orders o ON o.order_id = od.order_id
+        JOIN preorder_rounds order_round ON order_round.round_id = od.preorder_round_id
+        JOIN preorder_round_products order_product
+          ON order_product.round_id = order_round.round_id AND order_product.prod_id = od.prod_id
+        WHERE od.preorder_round_id IS NOT NULL
+          AND LOWER(COALESCE(od.item_type, '')) IN ('preorder', '')
+          AND od.qty > 0
+          AND LOWER(COALESCE(o.status, '')) <> 'cancelled'
+        GROUP BY od.preorder_round_id, od.prod_id
+      ) sold
+        ON sold.roundId = r.round_id AND sold.productId = prp.prod_id
       ORDER BY r.end_date ASC, r.round_id ASC, p.prod_name ASC
     `)
 
@@ -3301,6 +3315,71 @@ app.get('/api/admin/preorder-progress', authenticateToken, requireAdmin, async (
     sendServerError(res, error, 'message')
   }
 })
+
+// Admin API: flavor totals for one product in one real preorder round.
+app.get(
+  '/api/admin/preorder-progress/:roundId/:productId/breakdown',
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    const roundId = Number(req.params.roundId)
+    const productId = Number(req.params.productId)
+    const productCode = String(req.query.sku || '').trim()
+    if (!Number.isInteger(roundId) || roundId <= 0 || !Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({ message: 'Invalid preorder product or round' })
+    }
+
+    try {
+      const [productRows] = await pool.query(
+        `SELECT p.flavors AS productFlavors
+         FROM preorder_round_products prp
+         JOIN products p ON p.prod_id = prp.prod_id
+         JOIN preorder_rounds r ON r.round_id = prp.round_id
+         WHERE prp.round_id = ? AND prp.prod_id = ?
+           AND (? = '' OR p.sku = ?)
+         LIMIT 1`,
+        [roundId, productId, productCode, productCode],
+      )
+      if (productRows.length === 0) {
+        return res.status(404).json({ message: 'Preorder product not found in this round' })
+      }
+
+      const [cartRows] = await pool.query(
+        `SELECT c.flavor AS flavor, SUM(c.qty) AS qty
+         FROM cart c
+         JOIN preorder_rounds cart_round ON cart_round.round_id = c.preorder_round_id
+         JOIN preorder_round_products cart_product
+           ON cart_product.round_id = cart_round.round_id AND cart_product.prod_id = c.prod_id
+         WHERE c.preorder_round_id = ?
+           AND c.prod_id = ?
+           AND LOWER(COALESCE(c.item_type, '')) IN ('preorder', '')
+         GROUP BY BINARY c.flavor`,
+        [roundId, productId],
+      )
+      const [orderRows] = await pool.query(
+        `SELECT od.flavor AS flavor, SUM(od.qty) AS qty
+         FROM order_details od
+         JOIN orders o ON o.order_id = od.order_id
+         JOIN preorder_rounds order_round ON order_round.round_id = od.preorder_round_id
+         JOIN preorder_round_products order_product
+           ON order_product.round_id = order_round.round_id AND order_product.prod_id = od.prod_id
+         WHERE od.preorder_round_id = ?
+           AND od.prod_id = ?
+           AND LOWER(COALESCE(od.item_type, '')) IN ('preorder', '')
+           AND od.qty > 0
+           AND LOWER(COALESCE(o.status, '')) <> 'cancelled'
+         GROUP BY BINARY od.flavor`,
+        [roundId, productId],
+      )
+
+      const sourceRows = [...cartRows, ...orderRows]
+      const configuredVariants = parseFlavorList(productRows[0].productFlavors)
+      res.json(aggregatePreorderFlavorBreakdown(sourceRows, roundId, productId, configuredVariants))
+    } catch (error) {
+      sendServerError(res, error, 'message')
+    }
+  },
+)
 
 // Get single preorder round with products
 app.get('/api/preorder-rounds/:id', authenticateToken, requireAdmin, async (req, res) => {
