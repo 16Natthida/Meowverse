@@ -303,7 +303,7 @@ async function splitDelayedItemsFromOrder(
   return childOrderId
 }
 
-const PREORDER_PAYMENT_WINDOW_MS = 48 * 60 * 60 * 1000
+const PREORDER_PAYMENT_WINDOW_MS = 30 * 1000 // ทดสอบ: 30 วินาที (ค่าปกติ 48 * 60 * 60 * 1000)
 
 async function createPreorderOrdersForClosedRound(connection, roundId) {
   const [minimumRows] = await connection.query(
@@ -678,26 +678,49 @@ async function autoCancelExpiredReadyOrders() {
 }
 
 // ─────────────────────────────────────────────
-// ยกเลิกออเดอร์ "พรีออเดอร์" (Preorder) ที่ยังไม่ชำระเงินสำเร็จและเลยกำหนดเวลา (deadline)
-// เปลี่ยน orders.status เป็น 'Cancelled' (ไม่ลบออเดอร์ เพื่อให้ลูกค้าขอเลื่อนได้ภายหลัง)
-// ครอบคลุมทั้งรอบที่ 1 (Pending / Invalid slip) และรอบที่ 2 ค่านำเข้า
-// (Pending_import_fee / Invalid import slip) ส่วนออเดอร์ที่แนบสลิปรอตรวจสอบอยู่
-// (Slip_submitted / Import_slip_submitted) จะไม่ถูกยกเลิกอัตโนมัติ
+// ลบออเดอร์ "พรีออเดอร์" รอบแรกที่ยังไม่ชำระเงินและเลยกำหนดเวลา (deadline)
+// - ครอบคลุมเฉพาะ Pending / Invalid slip / Invalid_Slip (ยังไม่เคยจ่ายเงิน)
+// - ไม่แตะออเดอร์ที่ส่งสลิปรอตรวจแล้ว และรอบ 2 (Pending_import_fee) เพราะลูกค้าจ่ายรอบแรกไปแล้ว
+//   การลบจะทำให้ประวัติการชำระเงินหาย
+// - คืนจำนวน quantity_sold ของรอบพรีออเดอร์ก่อนลบ เพื่อไม่ให้ยอดขายในรอบค้าง
 // ─────────────────────────────────────────────
 async function autoCancelExpiredPreorderOrders() {
+  const connection = await pool.getConnection()
+
   try {
-    const [result] = await pool.query(
-      `UPDATE orders
-       SET status = 'Cancelled'
+    const [rows] = await connection.query(
+      `SELECT order_id FROM orders
        WHERE Order_type = 'Preorder'
-         AND status IN ('Pending', 'Invalid slip', 'Pending_import_fee', 'Invalid import slip')
+         AND split_parent_order_id IS NULL
+         AND status IN ('Pending', 'Invalid slip', 'Invalid_Slip')
          AND deadline IS NOT NULL AND deadline < NOW()`,
     )
-    if (result.affectedRows > 0) {
-      console.log(`[auto-cancel] cancelled ${result.affectedRows} expired preorder order(s)`)
+
+    for (const row of rows) {
+      await connection.beginTransaction()
+      try {
+        await connection.query(
+          `UPDATE preorder_round_products prp
+           JOIN (
+             SELECT preorder_round_id, prod_id, SUM(qty) AS qty
+             FROM order_details
+             WHERE order_id = ? AND item_type = 'preorder' AND preorder_round_id IS NOT NULL
+             GROUP BY preorder_round_id, prod_id
+           ) od ON od.preorder_round_id = prp.round_id AND od.prod_id = prp.prod_id
+           SET prp.quantity_sold = GREATEST(COALESCE(prp.quantity_sold, 0) - od.qty, 0)`,
+          [row.order_id],
+        )
+        await deleteOrder(connection, row.order_id)
+        await connection.commit()
+      } catch (error) {
+        await connection.rollback()
+        console.error(`[auto-cancel] failed to remove preorder order #${row.order_id}:`, error.message)
+      }
     }
   } catch (error) {
     console.error('[auto-cancel] failed to check expired preorder orders:', error.message)
+  } finally {
+    connection.release()
   }
 }
 
@@ -4189,7 +4212,7 @@ app.put(
       if (orderIds.size > 0) {
         const orderIdList = Array.from(orderIds)
         const placeholders = orderIdList.map(() => '?').join(',')
-        const deadline48h = new Date(Date.now() + 48 * 60 * 60 * 1000)
+        const deadline48h = new Date(Date.now() + 30 * 1000) // ทดสอบ: 30 วินาที (ค่าปกติ 48 * 60 * 60 * 1000)
 
         // เปลี่ยนสถานะและตั้ง deadline เฉพาะออเดอร์ที่แอดมินอนุมัติสลิปรอบแรกแล้ว (Wait_for_Import_Fee) เท่านั้น
         await connection.query(
@@ -4557,7 +4580,7 @@ app.patch('/api/payments/:pay_id/status', async (req, res) => {
 
               if (importFeeTotal > 0) {
                 // ถ้าแอดมินเคยใส่ค่านำเข้ารอไว้แล้วตอนสถานะ Pending ให้กระโดดไปรอบ 2 เลย
-                const deadline48h = new Date(Date.now() + 48 * 60 * 60 * 1000)
+                const deadline48h = new Date(Date.now() + 30 * 1000) // ทดสอบ: 30 วินาที (ค่าปกติ 48 * 60 * 60 * 1000)
                 await connection.query(
                   'UPDATE orders SET status = ?, deadline = ? WHERE order_id = ?',
                   ['Pending_import_fee', deadline48h, order_id],
