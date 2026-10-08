@@ -473,13 +473,19 @@ async function createPreorderOrdersForClosedRound(connection, roundId) {
       const totalAmount = subtotalAmount + chinaShippingTotalThb
 
       const deadline = new Date(Date.now() + PREORDER_PAYMENT_WINDOW_MS)
+      const [customerRows] = await connection.query(
+        'SELECT full_name FROM accounts WHERE user_id = ? LIMIT 1',
+        [userId],
+      )
+      const customerNameSnapshot = customerRows[0]?.full_name || null
       const [orderResult] = await connection.query(
         `INSERT INTO orders
-           (user_id, total_amount, shipping_fee, status, Order_type, deadline,
+           (user_id, customer_name_snapshot, total_amount, shipping_fee, status, Order_type, deadline,
             china_shipping_total_thb)
-         VALUES (?, ?, ?, 'Pending', 'Preorder', ?, ?)`,
+         VALUES (?, ?, ?, ?, 'Pending', 'Preorder', ?, ?)`,
         [
           userId,
+          customerNameSnapshot,
           totalAmount,
           shippingFee,
           deadline,
@@ -701,13 +707,8 @@ async function autoCancelExpiredReadyOrders() {
   }
 }
 
-// ─────────────────────────────────────────────
-// ลบออเดอร์ "พรีออเดอร์" รอบแรกที่ยังไม่ชำระเงินและเลยกำหนดเวลา (deadline)
-// - ครอบคลุมเฉพาะ Pending / Invalid slip / Invalid_Slip (ยังไม่เคยจ่ายเงิน)
-// - ไม่แตะออเดอร์ที่ส่งสลิปรอตรวจแล้ว และรอบ 2 (Pending_import_fee) เพราะลูกค้าจ่ายรอบแรกไปแล้ว
-//   การลบจะทำให้ประวัติการชำระเงินหาย
-// - คืนจำนวน quantity_sold ของรอบพรีออเดอร์ก่อนลบ เพื่อไม่ให้ยอดขายในรอบค้าง
-// ─────────────────────────────────────────────
+// ย้ายออเดอร์พรีออเดอร์รอบแรกที่หมดเวลาชำระไปเก็บเป็นประวัติ
+// ใช้ row lock ร่วมกับขั้นตอนส่งสลิป, บันทึก snapshot และคืนยอดจองใน transaction เดียว
 async function autoCancelExpiredPreorderOrders() {
   const connection = await pool.getConnection()
 
@@ -717,12 +718,120 @@ async function autoCancelExpiredPreorderOrders() {
        WHERE Order_type = 'Preorder'
          AND split_parent_order_id IS NULL
          AND status IN ('Pending', 'Invalid slip', 'Invalid_Slip')
-         AND deadline IS NOT NULL AND deadline < NOW()`,
+         AND deadline IS NOT NULL AND deadline < NOW()
+       ORDER BY deadline ASC, order_id ASC
+       LIMIT 100`,
     )
 
     for (const row of rows) {
       await connection.beginTransaction()
       try {
+        const [orderRows] = await connection.query(
+          `SELECT o.order_id, o.user_id, o.customer_name_snapshot,
+                  o.total_amount, o.status, o.Order_type,
+                  o.Order_date, o.deadline, a.full_name, a.username,
+                  pr.round_id, pr.round_name
+           FROM orders o
+           LEFT JOIN accounts a ON a.user_id = o.user_id
+           LEFT JOIN (
+             SELECT od.order_id, MIN(od.preorder_round_id) AS round_id
+             FROM order_details od
+             WHERE od.preorder_round_id IS NOT NULL
+             GROUP BY od.order_id
+           ) ord ON ord.order_id = o.order_id
+           LEFT JOIN preorder_rounds pr ON pr.round_id = ord.round_id
+           WHERE o.order_id = ?
+             AND o.Order_type = 'Preorder'
+             AND o.split_parent_order_id IS NULL
+             AND o.status IN ('Pending', 'Invalid slip', 'Invalid_Slip')
+             AND o.deadline IS NOT NULL AND o.deadline < NOW()
+           LIMIT 1
+           FOR UPDATE`,
+          [row.order_id],
+        )
+
+        // Recheck after locking. A missing row or changed status means payment won the race.
+        if (orderRows.length === 0) {
+          await connection.rollback()
+          continue
+        }
+        const order = orderRows[0]
+
+        const [paymentRows] = await connection.query(
+          `SELECT pay_id, type, amount, slip_img, Slip_date, status, payment_method
+           FROM payment
+           WHERE order_id = ? AND status IN ('Pending', 'Approved')
+           LIMIT 1`,
+          [order.order_id],
+        )
+        if (paymentRows.length > 0) {
+          await connection.rollback()
+          continue
+        }
+
+        const [detailRows] = await connection.query(
+          `SELECT od.prod_id, od.flavor, od.qty, od.Price AS unit_price,
+                  od.preorder_round_id, p.prod_name AS product_name
+           FROM order_details od
+           LEFT JOIN products p ON p.prod_id = od.prod_id
+           WHERE od.order_id = ? AND od.item_type = 'preorder'
+           ORDER BY od.detail_id ASC`,
+          [order.order_id],
+        )
+
+        if (detailRows.length === 0) {
+          throw new Error('expired preorder has no preorder items')
+        }
+
+        const [paymentHistory] = await connection.query(
+          `SELECT pay_id, type, amount, slip_img, Slip_date, status, payment_method
+           FROM payment
+           WHERE order_id = ?
+           ORDER BY pay_id ASC`,
+          [order.order_id],
+        )
+
+        const [historyResult] = await connection.query(
+          `INSERT INTO unpaid_preorder_orders
+             (original_order_id, user_id, customer_name, customer_username,
+              preorder_round_id, preorder_round_name, order_date, payment_deadline,
+              total_amount, status_before, payment_snapshot, archived_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+          [
+            order.order_id,
+            order.user_id,
+            order.customer_name_snapshot || order.full_name || order.username || `ลูกค้า #${order.user_id}`,
+            order.username || null,
+            order.round_id || null,
+            order.round_name || (order.round_id ? `รอบ #${order.round_id}` : null),
+            order.Order_date || null,
+            order.deadline,
+            order.total_amount,
+            order.status,
+            JSON.stringify(paymentHistory),
+          ],
+        )
+        const historyId = historyResult.insertId
+
+        for (const item of detailRows) {
+          await connection.query(
+            `INSERT INTO unpaid_preorder_order_items
+               (history_id, prod_id, product_name, flavor, quantity, unit_price, line_total,
+                preorder_round_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              historyId,
+              item.prod_id,
+              item.product_name || `สินค้า #${item.prod_id}`,
+              item.flavor || null,
+              item.qty,
+              item.unit_price,
+              (Number(item.qty) || 0) * (Number(item.unit_price) || 0),
+              item.preorder_round_id || null,
+            ],
+          )
+        }
+
         await connection.query(
           `UPDATE preorder_round_products prp
            JOIN (
@@ -738,7 +847,7 @@ async function autoCancelExpiredPreorderOrders() {
         await connection.commit()
       } catch (error) {
         await connection.rollback()
-        console.error(`[auto-cancel] failed to remove preorder order #${row.order_id}:`, error.message)
+        console.error(`[auto-cancel] failed to archive preorder order #${row.order_id}:`, error.message)
       }
     }
   } catch (error) {
@@ -773,6 +882,44 @@ function normalizeIntakeQuantity(value, fallback = 0) {
 // อัปโหลดรูป: ตรวจชนิดไฟล์จากเนื้อไฟล์จริง, ตั้งชื่อ/นามสกุลเอง, สลิปแยกไป uploads/slips/
 // ใช้งานเหมือนเดิม: upload.single('image') — ดู server/security.js
 const upload = createImageUpload({ uploadsDir })
+
+// Hold the order row lock while the slip file is being received. This closes the
+// gap where expiry cleanup could archive an order after upload starts but before
+// the payment transaction records its Pending payment row.
+async function lockOrderDuringSlipUpload(req, res, next) {
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [rows] = await connection.query(
+      'SELECT order_id FROM orders WHERE order_id = ? LIMIT 1 FOR UPDATE',
+      [req.params.order_id],
+    )
+    if (!rows.length) {
+      await connection.rollback()
+      connection.release()
+      return res.status(404).json({ error: 'ไม่พบข้อมูลออเดอร์' })
+    }
+    req.paymentUploadConnection = connection
+    return next()
+  } catch (error) {
+    await connection.rollback().catch(() => {})
+    connection.release()
+    return next(error)
+  }
+}
+
+function uploadSlipWhileOrderLocked(req, res, next) {
+  upload.single('slip')(req, res, async (error) => {
+    if (!error) return next()
+    const connection = req.paymentUploadConnection
+    req.paymentUploadConnection = null
+    if (connection) {
+      await connection.rollback().catch(() => {})
+      connection.release()
+    }
+    return next(error)
+  })
+}
 
 // CORS: อนุญาตเฉพาะ ALLOWED_ORIGINS (ดูด้านบน)
 app.use(
@@ -4347,7 +4494,11 @@ app.put(
 )
 
 // POST /api/orders/:order_id/payment
-app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res) => {
+app.post(
+  '/api/orders/:order_id/payment',
+  lockOrderDuringSlipUpload,
+  uploadSlipWhileOrderLocked,
+  async (req, res) => {
   const { order_id } = req.params
   const { payment_method, shipping_name, shipping_phone, shipping_address, notes } = req.body
   const { shipping_carrier } = req.body
@@ -4356,13 +4507,18 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
 
   // บังคับให้แนบสลิปการโอนเงินเสมอก่อนบันทึกการชำระเงิน (กันเคส bypass ฝั่ง frontend)
   if (!slip_url) {
+    const uploadConnection = req.paymentUploadConnection
+    req.paymentUploadConnection = null
+    if (uploadConnection) {
+      await uploadConnection.rollback().catch(() => {})
+      uploadConnection.release()
+    }
     return res.status(400).json({ error: 'กรุณาแนบหลักฐานการโอนเงิน (สลิป) ก่อนยืนยันการชำระเงิน' })
   }
 
-  const connection = await pool.getConnection()
+  const connection = req.paymentUploadConnection
+  req.paymentUploadConnection = null
   try {
-    await connection.beginTransaction()
-
     // 1. ตรวจสอบข้อมูล Order เดิมเพื่อยอดเงินและประเภท พร้อมสถานะ
     const [orderRows] = await connection.query(
       `SELECT total_amount, shipping_fee, import_fee_total, Order_type, status,
@@ -4374,8 +4530,10 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
                 WHERE od_round.order_id = orders.order_id
                   AND LOWER(pr.status) IN ('active', 'open')
               ) AS has_open_preorder_round
-       FROM orders
-       WHERE order_id = ?`,
+        FROM orders
+        WHERE order_id = ?
+        LIMIT 1
+        FOR UPDATE`,
       [order_id],
     )
 
@@ -4555,7 +4713,8 @@ app.post('/api/orders/:order_id/payment', upload.single('slip'), async (req, res
   } finally {
     connection.release()
   }
-})
+  },
+)
 
 // POST /api/orders/:order_id/shipping
 app.post('/api/orders/:order_id/shipping', async (req, res) => {
@@ -5850,8 +6009,7 @@ app.patch(
         `SELECT order_id, refund_status, refund_completed_at
          FROM orders
          WHERE order_id = ?
-         LIMIT 1
-         FOR UPDATE`,
+         LIMIT 1`,
         [orderId],
       )
 
@@ -6376,6 +6534,228 @@ app.get('/api/admin/user-stats', authenticateToken, requireAdmin, async (_req, r
     sendServerError(res, error)
   }
 })
+
+// ─────────────────────────────────────────────
+// GET /api/admin/unpaid-preorder-history
+// ประวัติออเดอร์พรีออเดอร์ที่หมดเวลาชำระ
+// ─────────────────────────────────────────────
+app.get(
+  '/api/admin/unpaid-preorder-history',
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const search = String(req.query.search || '').trim()
+      const roundId = Number(req.query.roundId)
+      const fromDate = String(req.query.fromDate || '').trim()
+      const toDate = String(req.query.toDate || '').trim()
+      const repeatOnly = String(req.query.repeatOnly || '').toLowerCase() === 'true'
+      const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1)
+      const pageSize = Math.min(100, Math.max(1, Number.parseInt(req.query.pageSize, 10) || 20))
+
+      const conditions = []
+      const params = []
+      if (search) {
+        const pattern = `%${search}%`
+        conditions.push(
+          '(h.customer_name LIKE ? OR h.customer_username LIKE ? OR CAST(h.user_id AS CHAR) LIKE ? OR CAST(h.original_order_id AS CHAR) LIKE ?)',
+        )
+        params.push(pattern, pattern, pattern, pattern)
+      }
+      if (Number.isInteger(roundId) && roundId > 0) {
+        conditions.push('h.preorder_round_id = ?')
+        params.push(roundId)
+      }
+      if (/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) {
+        conditions.push('h.payment_deadline >= ?')
+        params.push(`${fromDate} 00:00:00`)
+      }
+      if (/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+        conditions.push('h.payment_deadline < DATE_ADD(?, INTERVAL 1 DAY)')
+        params.push(`${toDate} 00:00:00`)
+      }
+      if (repeatOnly) {
+        conditions.push(
+          'h.user_id IN (SELECT repeated.user_id FROM unpaid_preorder_orders repeated WHERE repeated.user_id IS NOT NULL GROUP BY repeated.user_id HAVING COUNT(*) > 1)',
+        )
+      }
+      const whereSql = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+
+      const [[summaryRows], [countRows], [roundRows]] = await Promise.all([
+        pool.query(
+          `SELECT COUNT(*) AS order_count,
+                  COALESCE(SUM(total_amount), 0) AS unpaid_total,
+                  COUNT(DISTINCT user_id) AS customer_count
+           FROM unpaid_preorder_orders`,
+        ),
+        pool.query(
+          `SELECT COUNT(*) AS total
+           FROM unpaid_preorder_orders h ${whereSql}`,
+          params,
+        ),
+        pool.query(
+          `SELECT preorder_round_id AS round_id,
+                  COALESCE(preorder_round_name, CONCAT('รอบ #', preorder_round_id)) AS round_name
+           FROM unpaid_preorder_orders
+           WHERE preorder_round_id IS NOT NULL
+           GROUP BY preorder_round_id, preorder_round_name
+           ORDER BY preorder_round_id DESC`,
+        ),
+      ])
+      const total = Number(countRows[0]?.total) || 0
+      const offset = (page - 1) * pageSize
+      const [orders] = await pool.query(
+        `SELECT h.history_id, h.original_order_id, h.user_id, h.customer_name,
+                h.customer_username, h.preorder_round_id, h.preorder_round_name,
+                h.order_date, h.payment_deadline, h.archived_at, h.total_amount,
+                h.status_before,
+                (SELECT COUNT(*) FROM unpaid_preorder_orders repeat_order
+                 WHERE repeat_order.user_id = h.user_id) AS customer_unpaid_count
+         FROM unpaid_preorder_orders h ${whereSql}
+         ORDER BY h.archived_at DESC, h.history_id DESC
+         LIMIT ? OFFSET ?`,
+        [...params, pageSize, offset],
+      )
+
+      let itemsByHistory = {}
+      if (orders.length) {
+        const ids = orders.map((order) => Number(order.history_id))
+        const [items] = await pool.query(
+          `SELECT history_id, prod_id, product_name, flavor, quantity,
+                  unit_price, line_total, preorder_round_id
+           FROM unpaid_preorder_order_items
+           WHERE history_id IN (${ids.map(() => '?').join(',')})
+           ORDER BY history_item_id ASC`,
+          ids,
+        )
+        itemsByHistory = items.reduce((result, item) => {
+          const id = Number(item.history_id)
+          if (!result[id]) result[id] = []
+          result[id].push({
+            prod_id: item.prod_id == null ? null : Number(item.prod_id),
+            product_name: item.product_name,
+            flavor: item.flavor || '',
+            quantity: Number(item.quantity) || 0,
+            unit_price: Number(item.unit_price) || 0,
+            line_total: Number(item.line_total) || 0,
+            preorder_round_id: item.preorder_round_id == null ? null : Number(item.preorder_round_id),
+          })
+          return result
+        }, {})
+      }
+
+      res.json({
+        summary: {
+          order_count: Number(summaryRows[0]?.order_count) || 0,
+          unpaid_total: Number(summaryRows[0]?.unpaid_total) || 0,
+          customer_count: Number(summaryRows[0]?.customer_count) || 0,
+        },
+        rounds: roundRows.map((round) => ({
+          round_id: Number(round.round_id),
+          round_name: round.round_name,
+        })),
+        orders: orders.map((order) => ({
+          ...order,
+          history_id: Number(order.history_id),
+          original_order_id: Number(order.original_order_id),
+          user_id: order.user_id == null ? null : Number(order.user_id),
+          preorder_round_id: order.preorder_round_id == null ? null : Number(order.preorder_round_id),
+          total_amount: Number(order.total_amount) || 0,
+          customer_unpaid_count: Number(order.customer_unpaid_count) || 0,
+          items: itemsByHistory[Number(order.history_id)] || [],
+        })),
+        pagination: { page, pageSize, total, pageCount: Math.ceil(total / pageSize) },
+      })
+    } catch (error) {
+      sendServerError(res, error)
+    }
+  },
+)
+
+app.get(
+  '/api/admin/unpaid-preorder-history/:historyId',
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    const historyId = Number(req.params.historyId)
+    if (!Number.isInteger(historyId) || historyId <= 0) {
+      return res.status(400).json({ message: 'รหัสประวัติไม่ถูกต้อง' })
+    }
+    try {
+      const [rows] = await pool.query(
+        `SELECT h.*,
+                (SELECT COUNT(*) FROM unpaid_preorder_orders repeated
+                 WHERE repeated.user_id = h.user_id) AS customer_unpaid_count
+         FROM unpaid_preorder_orders h
+         WHERE h.history_id = ?
+         LIMIT 1`,
+        [historyId],
+      )
+      if (!rows.length) return res.status(404).json({ message: 'ไม่พบประวัติออเดอร์' })
+      const [items] = await pool.query(
+        `SELECT prod_id, product_name, flavor, quantity, unit_price,
+                line_total, preorder_round_id
+         FROM unpaid_preorder_order_items
+         WHERE history_id = ?
+         ORDER BY history_item_id ASC`,
+        [historyId],
+      )
+      res.json({
+        order: {
+          ...rows[0],
+          history_id: Number(rows[0].history_id),
+          original_order_id: Number(rows[0].original_order_id),
+          user_id: rows[0].user_id == null ? null : Number(rows[0].user_id),
+          preorder_round_id:
+            rows[0].preorder_round_id == null ? null : Number(rows[0].preorder_round_id),
+          total_amount: Number(rows[0].total_amount) || 0,
+          customer_unpaid_count: Number(rows[0].customer_unpaid_count) || 0,
+          items: items.map((item) => ({
+            ...item,
+            prod_id: item.prod_id == null ? null : Number(item.prod_id),
+            quantity: Number(item.quantity) || 0,
+            unit_price: Number(item.unit_price) || 0,
+            line_total: Number(item.line_total) || 0,
+          })),
+        },
+      })
+    } catch (error) {
+      sendServerError(res, error)
+    }
+  },
+)
+
+app.patch(
+  '/api/admin/unpaid-preorder-history/:historyId/note',
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    const historyId = Number(req.params.historyId)
+    const note = req.body?.admin_note == null ? '' : String(req.body.admin_note)
+    if (!Number.isInteger(historyId) || historyId <= 0) {
+      return res.status(400).json({ message: 'รหัสประวัติไม่ถูกต้อง' })
+    }
+    if (note.length > 5000) {
+      return res.status(400).json({ message: 'หมายเหตุต้องไม่เกิน 5,000 ตัวอักษร' })
+    }
+    try {
+      const [result] = await pool.query(
+        'UPDATE unpaid_preorder_orders SET admin_note = ? WHERE history_id = ?',
+        [note.trim() || null, historyId],
+      )
+      if (result.affectedRows === 0) {
+        const [rows] = await pool.query(
+          'SELECT history_id FROM unpaid_preorder_orders WHERE history_id = ? LIMIT 1',
+          [historyId],
+        )
+        if (!rows.length) return res.status(404).json({ message: 'ไม่พบประวัติออเดอร์' })
+      }
+      res.json({ success: true, admin_note: note.trim() || null })
+    } catch (error) {
+      sendServerError(res, error)
+    }
+  },
+)
 
 // ─────────────────────────────────────────────
 // GET /api/admin/orders
@@ -7104,10 +7484,14 @@ async function startServer() {
 
     readyOrderAutoCancelTimer.unref?.()
 
-    autoCancelExpiredPreorderOrders()
+    autoCancelExpiredPreorderOrders().catch((error) => {
+      console.error('[auto-cancel] initial preorder run failed:', error.message)
+    })
 
     const preorderAutoCancelTimer = setInterval(() => {
-      autoCancelExpiredPreorderOrders()
+      autoCancelExpiredPreorderOrders().catch((error) => {
+        console.error('[auto-cancel] scheduled preorder run failed:', error.message)
+      })
     }, 15 * 1000)
 
     preorderAutoCancelTimer.unref?.()

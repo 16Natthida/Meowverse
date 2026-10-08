@@ -348,6 +348,10 @@ onUnmounted(() => {
               <span class="menu-icon"><svg class="menu-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg></span>
               <span class="menu-label">สถิติพรีออเดอร์ย้อนหลัง</span>
             </RouterLink>
+            <RouterLink to="/admin/unpaid-preorder-history">
+              <span class="menu-icon"><svg class="menu-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/><path d="m15 16 2 2 4-4"/></svg></span>
+              <span class="menu-label">ประวัติออเดอร์ไม่ชำระเงิน</span>
+            </RouterLink>
             <RouterLink to="/admin/postpones">
               <span class="menu-icon"><svg class="menu-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12"/><path d="M6 21h12"/><path d="M7 3c0 4 3 6 5 8-2 2-5 4-5 8"/><path d="M17 3c0 4-3 6-5 8 2 2 5 4 5 8"/></svg></span>
               <span class="menu-label">คำขอเลื่อนการชำระเงิน</span>

@@ -237,6 +237,12 @@ const router = createRouter({
       meta: { requiresAuth: true, roles: ['admin'] },
     },
     {
+      path: '/admin/unpaid-preorder-history',
+      name: 'admin-unpaid-preorder-history',
+      component: () => import('../views/Admin/UnpaidPreorderHistory.vue'),
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
       path: '/admin/postpones',
       name: 'admin-postpones',
       component: () => import('../views/Admin/PostponeRequests.vue'),
