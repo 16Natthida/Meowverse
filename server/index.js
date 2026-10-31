@@ -46,6 +46,12 @@ import {
   parseFlavorPricesMap,
   serializeFlavorPrices,
 } from './productPricing.js'
+import {
+  allocateImportFeeCents,
+  buildImportFeeGroupKey,
+  normalizeImportFeePackSize,
+  resolvePackSize,
+} from './importFeeGrouping.js'
 
 dotenv.config()
 assertAuthConfig()
@@ -222,7 +228,7 @@ async function splitDelayedItemsFromOrder(
 
   const parent = orderRows[0]
   const [delayedRows] = await connection.query(
-    `SELECT od.detail_id, od.prod_id, od.flavor, od.Price AS unit_price,
+    `SELECT od.detail_id, od.prod_id, od.flavor, od.pack_size, od.Price AS unit_price,
             od.qty AS ordered_qty, COALESCE(od.received_qty, 0) AS received_qty,
             od.Import_fee AS import_fee, od.item_type, od.preorder_round_id
      FROM order_details od
@@ -308,7 +314,7 @@ async function splitDelayedItemsFromOrder(
       [detail.detail_id],
     )
 
-    await connection.query(
+    const [childDetailResult] = await connection.query(
       `INSERT INTO order_details
        (order_id, prod_id, flavor, Price, qty, received_qty, arrival_status, Import_fee, item_type, preorder_round_id)
        VALUES (?, ?, ?, ?, ?, 0, 'Delayed', 0, ?, ?)`,
@@ -322,6 +328,9 @@ async function splitDelayedItemsFromOrder(
         detail.preorder_round_id || null,
       ],
     )
+    if (detail.pack_size) {
+      await connection.query('UPDATE order_details SET pack_size = ? WHERE detail_id = ?', [detail.pack_size, childDetailResult.insertId])
+    }
   }
 
   return childOrderId
@@ -380,6 +389,7 @@ async function createPreorderOrdersForClosedRound(connection, roundId) {
        c.prod_id,
        c.qty,
        c.flavor,
+       c.pack_size,
        c.item_type,
        c.preorder_round_id,
        p.flavor_prices AS flavorPrices,
@@ -2053,6 +2063,11 @@ async function ensureAdminSchema() {
   `)
 
   await pool.query(`
+    ALTER TABLE cart
+    ADD COLUMN IF NOT EXISTS pack_size VARCHAR(50) DEFAULT NULL
+  `)
+
+  await pool.query(`
     ALTER TABLE order_details
     ADD COLUMN IF NOT EXISTS flavor VARCHAR(120) DEFAULT NULL
   `)
@@ -2065,6 +2080,14 @@ async function ensureAdminSchema() {
   await pool.query(`
     ALTER TABLE order_details
     ADD COLUMN IF NOT EXISTS preorder_round_id INT DEFAULT NULL
+  `)
+
+  // Pack size is intentionally nullable. Existing order lines do not carry
+  // this information, so legacy rows stay in an explicit "unspecified" group
+  // instead of being guessed from a product or flavor name.
+  await pool.query(`
+    ALTER TABLE order_details
+    ADD COLUMN IF NOT EXISTS pack_size VARCHAR(50) DEFAULT NULL
   `)
 
   // Track manual refund progress per item so refunding one missing item does not
@@ -4228,7 +4251,9 @@ app.get(
         pr.end_date,
         od.prod_id,
         p.prod_name AS product_name,
+        p.flavors AS product_flavors,
         od.flavor,
+        NULLIF(TRIM(od.pack_size), '') AS pack_size,
         CASE
           WHEN COALESCE(od.received_qty, 0) >= od.qty
             THEN 'Arrived'
@@ -4273,6 +4298,7 @@ app.get(
       JOIN orders o ON o.order_id = od.order_id
       LEFT JOIN products p ON p.prod_id = od.prod_id
       WHERE LOWER(o.Order_type) = 'preorder'
+        AND LOWER(COALESCE(o.status, '')) NOT IN ('cancelled', 'invalid slip', 'invalid_slip', 'invalid import slip')
         AND od.qty > 0
       GROUP BY
         pr.round_id,
@@ -4282,8 +4308,10 @@ app.get(
         pr.end_date,
         od.prod_id,
         p.prod_name,
+        p.flavors,
         p.image_url,
         od.flavor,
+        NULLIF(TRIM(od.pack_size), ''),
         CASE
           WHEN COALESCE(od.received_qty, 0) >= od.qty
             THEN 'Arrived'
@@ -4302,8 +4330,42 @@ app.get(
           WHEN COALESCE(o.split_parent_order_id, 0) > 0 THEN 'Missing'
           ELSE 'Main'
         END
-      ORDER BY pr.round_id DESC, od.prod_id ASC, od.flavor ASC
+      ORDER BY pr.round_id DESC, od.prod_id ASC, NULLIF(TRIM(od.pack_size), '') ASC, od.flavor ASC
     `)
+
+      // Count unique customers after resolving the same pack-size key used by
+      // the fee allocator. This keeps two flavors of one pack size together
+      // without double-counting a customer who ordered both flavors.
+      const [customerCountRows] = await pool.query(`
+        SELECT
+          od.preorder_round_id AS round_id,
+          od.prod_id,
+          od.flavor,
+          NULLIF(TRIM(od.pack_size), '') AS pack_size,
+          p.flavors AS product_flavors,
+          o.user_id,
+          od.qty,
+          od.received_qty,
+          od.arrival_status,
+          o.status AS order_status,
+          COALESCE(o.split_parent_order_id, 0) AS split_parent_order_id
+        FROM order_details od
+        JOIN orders o ON o.order_id = od.order_id
+        LEFT JOIN products p ON p.prod_id = od.prod_id
+        WHERE od.item_type = 'preorder'
+          AND od.qty > 0
+          AND COALESCE(od.received_qty, 0) >= od.qty
+          AND LOWER(COALESCE(o.status, '')) NOT IN ('cancelled', 'invalid slip', 'invalid_slip', 'invalid import slip')
+      `)
+      const customerIdsByPack = new Map()
+      for (const row of customerCountRows) {
+        const resolvedPackSize = resolvePackSize(row.pack_size, row.product_flavors, row.flavor)
+        const status = getImportFeeDisplayStatus(row)
+        const feeSegment = getImportFeeSegment(row)
+        const key = `${row.round_id}|${row.prod_id}|${normalizeImportFeePackSize(resolvedPackSize.value)}|${status}|${feeSegment}`.toLowerCase()
+        if (!customerIdsByPack.has(key)) customerIdsByPack.set(key, new Set())
+        customerIdsByPack.get(key).add(String(row.user_id ?? row.order_id))
+      }
 
       // Split one preorder round into the main and delayed/missing import-fee rounds.
       const roundMap = new Map()
@@ -4332,17 +4394,22 @@ app.get(
         }
         const round = roundMap.get(roundKey)
         if (Number(row.import_fee) > 0) round.has_saved_import_fee = true
+        const resolvedPackSize = resolvePackSize(row.pack_size, row.product_flavors, row.flavor)
+        const customerKey = `${row.round_id}|${row.prod_id}|${normalizeImportFeePackSize(resolvedPackSize.value)}|${arrivalStatus}|${feeSegment}`.toLowerCase()
         round.products.push({
-          key: `${row.prod_id}|${String(row.flavor || '').trim()}|${arrivalStatus.toLowerCase()}|${feeSegment.toLowerCase()}`,
+          key: `${row.prod_id}|${String(row.flavor || '').trim()}|${String(resolvedPackSize.value || '').trim()}|${arrivalStatus.toLowerCase()}|${feeSegment.toLowerCase()}`,
           prod_id: row.prod_id,
           product_name: row.product_name,
           flavor: row.flavor,
+          pack_size: resolvedPackSize.value || null,
+          pack_size_source: resolvedPackSize.source,
           arrival_status: row.arrival_status || 'Pending',
           order_status: row.order_status || '',
           total_sold_qty: Number(row.total_sold_qty) || 0,
           total_received_qty: Number(row.total_received_qty) || 0,
           unit_price: Number(row.unit_price) || 0,
           current_import_fee: Number(row.import_fee) || 0,
+          customer_count: customerIdsByPack.get(customerKey)?.size || 0,
           image_url: row.image_url || '',
           fee_segment: feeSegment,
         })
@@ -4390,42 +4457,42 @@ app.put(
       `)
       await connection.beginTransaction()
 
-      // Update import fee values per product/flavor/status segment.
+      // Update import fee values per product/pack-size/status segment. Flavor
+      // remains a display-only breakdown and is never an allocation boundary.
       const feeByKey = new Map()
       for (const item of fees) {
-        const key = String(item.key || `${item.prod_id}|${String(item.flavor || '').trim()}`)
-          .trim()
-          .toLowerCase()
+        const key = buildImportFeeGroupKey(
+          item.prod_id,
+          item.pack_size,
+          item.arrival_status || 'Arrived',
+          item.fee_segment || feeSegment,
+        )
         const feeValue = Math.max(Number(item.import_fee) || 0, 0)
         feeByKey.set(key, Number.isNaN(feeValue) ? 0 : feeValue)
       }
 
       // ดึง order_details ที่เป็น preorder ของรอบนี้
       const [detailRows] = await connection.query(
-        `SELECT od.detail_id, od.order_id, od.prod_id, od.flavor, od.qty,
+        `SELECT od.detail_id, od.order_id, od.prod_id, od.flavor, od.pack_size, od.qty,
           COALESCE(od.received_qty, 0) AS received_qty,
           COALESCE(od.arrival_status, 'Pending') AS arrival_status,
           COALESCE(od.Import_fee, 0) AS current_import_fee,
           o.status AS order_status,
-          COALESCE(o.split_parent_order_id, 0) AS split_parent_order_id
+          COALESCE(o.split_parent_order_id, 0) AS split_parent_order_id,
+          p.flavors AS product_flavors
          FROM order_details od
          JOIN orders o ON o.order_id = od.order_id
+         LEFT JOIN products p ON p.prod_id = od.prod_id
          WHERE od.preorder_round_id = ?
            AND od.item_type = 'preorder'
+           AND LOWER(COALESCE(o.status, '')) NOT IN ('cancelled', 'invalid slip', 'invalid_slip', 'invalid import slip')
            AND od.qty > 0`,
         [roundId],
       )
-
-      // Admin-entered import fees are totals for each product/flavor/status key.
-      const totalOrderedQtyByKey = {}
       for (const row of detailRows) {
-        const status = getImportFeeDisplayStatus(row)
-        if (getImportFeeSegment(row) !== feeSegment) continue
-        if (segment && status !== segment) continue
-        if ((Number(row.received_qty) || 0) < (Number(row.qty) || 0)) continue
-        const key = `${row.prod_id}|${String(row.flavor || '').trim()}|${status}|${feeSegment}`.toLowerCase()
-        const orderedQty = Math.max(Number(row.qty) || 0, 0)
-        totalOrderedQtyByKey[key] = (totalOrderedQtyByKey[key] || 0) + orderedQty
+        const resolvedPackSize = resolvePackSize(row.pack_size, row.product_flavors, row.flavor)
+        row.pack_size = resolvedPackSize.value || null
+        row.pack_size_source = resolvedPackSize.source
       }
 
       const eligibleSegmentRows = detailRows.filter((row) => {
@@ -4449,46 +4516,60 @@ app.put(
         if (getImportFeeSegment(row) !== feeSegment) continue
         if (segment && status !== segment) continue
         if ((Number(row.received_qty) || 0) < (Number(row.qty) || 0)) continue
-        const key = `${row.prod_id}|${String(row.flavor || '').trim()}|${status}|${feeSegment}`.toLowerCase()
+        const key = buildImportFeeGroupKey(row.prod_id, row.pack_size, status, feeSegment)
         if (!rowsByKey.has(key)) rowsByKey.set(key, [])
         rowsByKey.get(key).push(row)
       }
 
       for (const [key, rows] of rowsByKey.entries()) {
-        const totalOrderedQty = totalOrderedQtyByKey[key] || 0
         const importFeeTotalForKey = feeByKey.get(key) || 0
-        const eligibleRows = rows
-        let allocatedFee = 0
+        const allocations = allocateImportFeeCents(importFeeTotalForKey, rows)
 
         for (const row of rows) {
-          const orderedQty = Math.max(Number(row.qty) || 0, 0)
-          let detailImportFee = 0
-
           orderTotals[row.order_id] =
             (orderTotals[row.order_id] || 0) - Number(row.current_import_fee || 0)
 
-          if (totalOrderedQty > 0) {
-            detailImportFee = importFeeTotalForKey * (orderedQty / totalOrderedQty)
-            const isLastEligible = eligibleRows[eligibleRows.length - 1] === row
-            if (!isLastEligible) {
-              detailImportFee = Math.round(detailImportFee * 100) / 100
-              allocatedFee += detailImportFee
-            }
-          }
-
-          if (eligibleRows[eligibleRows.length - 1] === row) {
-            detailImportFee = Math.max(
-              Math.round((importFeeTotalForKey - allocatedFee) * 100) / 100,
-              0,
-            )
-          }
+          const detailImportFee = (allocations.get(row.detail_id) || 0) / 100
 
           await connection.query('UPDATE order_details SET Import_fee = ? WHERE detail_id = ?', [
-            Math.round(detailImportFee * 100) / 100,
+            detailImportFee,
             row.detail_id,
           ])
 
           orderTotals[row.order_id] = (orderTotals[row.order_id] || 0) + detailImportFee
+        }
+      }
+
+      // Never silently rewrite a customer-facing amount after the import-fee
+      // payment has already been approved. Re-saving the exact same amount is
+      // still idempotent and remains allowed.
+      const affectedOrderIdList = Object.keys(orderTotals).map(Number).filter(Boolean)
+      if (affectedOrderIdList.length > 0) {
+        const placeholders = affectedOrderIdList.map(() => '?').join(',')
+        const [protectedOrders] = await connection.query(
+          `SELECT o.order_id, COALESCE(o.import_fee_total, 0) AS import_fee_total,
+                  EXISTS (
+                    SELECT 1 FROM payment p
+                    WHERE p.order_id = o.order_id
+                      AND p.type IN ('Import_Fee', 'import_fee')
+                      AND p.status = 'Approved'
+                  ) AS has_approved_import_payment
+           FROM orders o
+           WHERE o.order_id IN (${placeholders})`,
+          affectedOrderIdList,
+        )
+        const changedPaidOrder = protectedOrders.find(
+          (row) =>
+            Number(row.has_approved_import_payment) === 1 &&
+            Math.round((Number(row.import_fee_total) || 0) * 100) !==
+              Math.round((Number(orderTotals[row.order_id]) || 0) * 100),
+        )
+        if (changedPaidOrder) {
+          await connection.rollback()
+          return res.status(409).json({
+            success: false,
+            message: `ออเดอร์ ${changedPaidOrder.order_id} ชำระค่านำเข้าแล้ว จึงไม่อนุญาตให้แก้ยอดย้อนหลัง`,
+          })
         }
       }
 

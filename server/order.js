@@ -362,6 +362,7 @@ router.post('/checkout-preview', async (req, res) => {
          c.qty,
          c.item_type,
          c.flavor,
+         c.pack_size,
          c.preorder_round_id,
          c.round_price,
          p.prod_name AS name,
@@ -431,6 +432,7 @@ router.post('/checkout-preview', async (req, res) => {
         it.flavor || '',
         String(it.price || ''),
         it.preorder_round_id || '',
+        it.pack_size || '',
         String(it.round_price || ''),
         String(it.item_type || ''),
       ].join('|')
@@ -537,6 +539,7 @@ router.post('/confirm-payment', async (req, res) => {
          c.qty,
          c.item_type,
          c.flavor,
+         c.pack_size,
          c.preorder_round_id,
          c.round_price,
          p.prod_name AS name,
@@ -679,6 +682,7 @@ router.post('/confirm-payment', async (req, res) => {
       'preorder_round_id',
       'preorderRoundId',
     )
+    const supportsPackSize = await hasOrderDetailColumn(connection, 'pack_size', 'packSize')
 
     for (const [index, item] of mergedItems.entries()) {
       const columns = [
@@ -706,6 +710,11 @@ router.post('/confirm-payment', async (req, res) => {
       if (supportsPreorderRoundId) {
         columns.push('preorder_round_id')
         values.push(item.preorder_round_id || null)
+      }
+
+      if (supportsPackSize) {
+        columns.push('pack_size')
+        values.push(item.pack_size || null)
       }
 
       columns.push('china_shipping_fee_thb')

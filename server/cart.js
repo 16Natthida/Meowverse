@@ -165,6 +165,7 @@ router.get('/', async (req, res) => {
          c.prod_id,
          c.qty,
          c.flavor,
+         c.pack_size,
          COALESCE(c.item_type, CASE
            WHEN p.ready_to_ship_enabled = 1 THEN 'ready-to-ship'
            WHEN p.preorder_enabled = 1 THEN 'preorder'
@@ -284,6 +285,7 @@ router.post('/', async (req, res) => {
     flavor = '',
     round_id = null,
     round_price = null,
+    pack_size = null,
   } = req.body
 
   if (!user_id) return res.status(400).json({ error: 'user_id is required' })
@@ -352,11 +354,11 @@ router.post('/', async (req, res) => {
 
       let existingQuery, existingParams
       if (requestedType === 'preorder' && round_id) {
-        existingQuery = `SELECT cart_id, qty, item_type, flavor, round_id, preorder_round_id FROM cart WHERE user_id = ? AND prod_id = ? AND COALESCE(flavor, '') = COALESCE(?, '') AND item_type = ? AND round_id = ? LIMIT 1`
-        existingParams = [user_id, prod_id, effectiveFlavor, requestedType, round_id]
+        existingQuery = `SELECT cart_id, qty, item_type, flavor, pack_size, round_id, preorder_round_id FROM cart WHERE user_id = ? AND prod_id = ? AND COALESCE(flavor, '') = COALESCE(?, '') AND COALESCE(pack_size, '') = COALESCE(?, '') AND item_type = ? AND round_id = ? LIMIT 1`
+        existingParams = [user_id, prod_id, effectiveFlavor, pack_size, requestedType, round_id]
       } else {
-        existingQuery = `SELECT cart_id, qty, item_type, flavor, round_id, preorder_round_id FROM cart WHERE user_id = ? AND prod_id = ? AND COALESCE(flavor, '') = COALESCE(?, '') AND item_type = ? LIMIT 1`
-        existingParams = [user_id, prod_id, effectiveFlavor, requestedType]
+        existingQuery = `SELECT cart_id, qty, item_type, flavor, pack_size, round_id, preorder_round_id FROM cart WHERE user_id = ? AND prod_id = ? AND COALESCE(flavor, '') = COALESCE(?, '') AND COALESCE(pack_size, '') = COALESCE(?, '') AND item_type = ? LIMIT 1`
+        existingParams = [user_id, prod_id, effectiveFlavor, pack_size, requestedType]
       }
 
       const [existing] = await connection.query(existingQuery, existingParams)
@@ -399,11 +401,12 @@ router.post('/', async (req, res) => {
         }
 
         await connection.query(
-          'UPDATE cart SET qty = ?, item_type = ?, flavor = ?, round_id = ?, preorder_round_id = ?, round_price = ? WHERE cart_id = ?',
+          'UPDATE cart SET qty = ?, item_type = ?, flavor = ?, pack_size = ?, round_id = ?, preorder_round_id = ?, round_price = ? WHERE cart_id = ?',
           [
             newQty,
             requestedType,
             effectiveFlavor || null,
+            pack_size || null,
             round_id || existing[0].round_id || null,
             requestedType === 'preorder' ? round_id || existing[0].round_id || null : null,
             Number(round_price) > 0 ? round_price : Number(existing[0].round_price) > 0 ? existing[0].round_price : null,
@@ -417,8 +420,8 @@ router.post('/', async (req, res) => {
       }
 
       const [result] = await connection.query(
-        'INSERT INTO cart (user_id, prod_id, qty, item_type, flavor, round_id, preorder_round_id, round_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [user_id, prod_id, requestedQty, requestedType, effectiveFlavor || null, effectiveRoundId, requestedType === 'preorder' ? effectiveRoundId : null, effectiveRoundPrice],
+        'INSERT INTO cart (user_id, prod_id, qty, item_type, flavor, pack_size, round_id, preorder_round_id, round_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [user_id, prod_id, requestedQty, requestedType, effectiveFlavor || null, pack_size || null, effectiveRoundId, requestedType === 'preorder' ? effectiveRoundId : null, effectiveRoundPrice],
       )
 
       await connection.commit()
@@ -450,7 +453,7 @@ router.put('/:cart_id', async (req, res) => {
     const db = getDB(req)
     const [cartRows] = await db.query(
       `SELECT
-       c.cart_id, c.qty, c.item_type, c.flavor,
+       c.cart_id, c.qty, c.item_type, c.flavor, c.pack_size,
        c.preorder_round_id,
        p.stock_qty AS stock, p.flavors AS flavors, p.flavor_stock AS flavorStock,
        p.flavor_prices AS flavorPrices,
