@@ -389,3 +389,62 @@ CREATE TABLE `unpaid_preorder_order_items` (
     FOREIGN KEY (`history_id`) REFERENCES `unpaid_preorder_orders` (`history_id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
+CREATE TABLE `preorder_import_fee_settings` (
+  `round_id` INT NOT NULL,
+  `prod_id` INT NOT NULL,
+  `fee_segment` VARCHAR(20) NOT NULL DEFAULT 'Main',
+  `mode` VARCHAR(20) NOT NULL DEFAULT 'aggregate',
+  `group_config` TEXT DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`round_id`, `prod_id`, `fee_segment`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE `preorder_import_fee_saves` (
+  `round_id` INT NOT NULL,
+  `fee_segment` VARCHAR(20) NOT NULL,
+  `saved_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`round_id`,`fee_segment`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE `preorder_import_fee_confirmations` (
+  `round_id` INT NOT NULL,
+  `prod_id` INT NOT NULL,
+  `fee_segment` VARCHAR(20) NOT NULL DEFAULT 'Main',
+  `first_confirmed_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `first_confirmed_by` INT DEFAULT NULL,
+  `missing_checked_at` DATETIME DEFAULT NULL,
+  `confirmation_source` VARCHAR(30) NOT NULL DEFAULT 'admin',
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`round_id`,`prod_id`,`fee_segment`),
+  KEY `idx_preorder_import_fee_confirmations_round` (`round_id`,`fee_segment`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE `preorder_import_fee_history` (
+  `history_id` BIGINT NOT NULL AUTO_INCREMENT,
+  `round_id` INT NOT NULL,
+  `fee_segment` VARCHAR(20) NOT NULL DEFAULT 'Main',
+  `admin_user_id` INT DEFAULT NULL,
+  `action` VARCHAR(30) NOT NULL,
+  `payload_json` LONGTEXT DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`history_id`),
+  KEY `idx_preorder_import_fee_history_scope` (`round_id`,`fee_segment`,`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE `inventory_intake_receipts` (
+  `receipt_id` BIGINT NOT NULL AUTO_INCREMENT,
+  `request_id` VARCHAR(100) NOT NULL,
+  `detail_id` INT NOT NULL,
+  `round_id` INT DEFAULT NULL,
+  `incoming_qty` INT NOT NULL DEFAULT 0,
+  `applied_qty` INT NOT NULL DEFAULT 0,
+  `admin_user_id` INT DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`receipt_id`),
+  UNIQUE KEY `uq_inventory_intake_receipt_request` (`detail_id`,`request_id`),
+  KEY `idx_inventory_intake_receipts_round` (`round_id`),
+  CONSTRAINT `fk_inventory_intake_receipts_detail`
+    FOREIGN KEY (`detail_id`) REFERENCES `order_details` (`detail_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+

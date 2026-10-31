@@ -75,7 +75,11 @@ const orderItems = computed(() => {
   })
 })
 
-const hasMissingItems = computed(() => orderItems.value.some((item) => item.missingQty > 0))
+const hasMissingItems = computed(() =>
+  orderItems.value.some(
+    (item) => item.missingQty > 0 && item.arrivalStatus === 'missing',
+  ),
+)
 const totalReceivedAmount = computed(() =>
   orderItems.value.reduce((sum, item) => sum + item.receivedTotal, 0),
 )

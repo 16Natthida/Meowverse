@@ -63,6 +63,15 @@ export function normalizeImportFeePackSize(value) {
   return normalized || '__unspecified__'
 }
 
+export function buildImportFeeOptionKey(prodId, flavor, packSize, feeSegment = 'Main') {
+  return [
+    prodId,
+    String(flavor ?? '').trim().toLowerCase(),
+    normalizeImportFeePackSize(packSize),
+    String(feeSegment || 'Main').trim().toLowerCase(),
+  ].join('|')
+}
+
 export function buildImportFeeGroupKey(prodId, packSize, status, feeSegment) {
   return [prodId, normalizeImportFeePackSize(packSize), String(status || 'Arrived'), feeSegment]
     .map((value) => String(value).trim().toLowerCase())

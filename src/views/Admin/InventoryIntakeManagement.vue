@@ -173,7 +173,7 @@ function getDraftIntakeStatus(item) {
 
   if (received >= ordered) return 'ready'
   // ยังไม่เคยบันทึกรับของและยังไม่ได้กรอกจำนวน = รอรับเข้า (ยังไม่ใช่ตกหล่น)
-  if (received === 0 && String(item.arrival_status || '').toLowerCase() === 'pending') {
+  if (String(item.arrival_status || '').toLowerCase() === 'pending') {
     return 'pending'
   }
   return 'delayed'
@@ -253,6 +253,7 @@ async function processIntake() {
 
   try {
     const payload = {
+      request_id: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${selectedIntakeOrder.value.round_id}`,
       note: intakeNote.value.trim(),
       move_excess_to_stock: moveExcessToStock.value,
       items: (selectedIntakeOrder.value.items || [])

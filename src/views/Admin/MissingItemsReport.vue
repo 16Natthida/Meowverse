@@ -60,6 +60,7 @@
               <th class="num">ขาด</th>
               <th class="num">ยอดคืน</th>
               <th>สถานะคืนเงิน</th>
+              <th>รับตกหล่นเพิ่ม</th>
               <th>การจัดการ</th>
               <th>ลูกค้า (สั่งซื้อ)</th>
             </tr>
@@ -98,6 +99,26 @@
                 <span :class="['status-badge', refundStatusClass(item)]">
                   {{ refundStatusLabel(item) }}
                 </span>
+              </td>
+              <td>
+                <div class="missing-receive-control">
+                  <input
+                    v-model.number="missingReceiveDraft[item.detail_id]"
+                    type="number"
+                    min="1"
+                    :max="item.missing_qty"
+                    :disabled="isItemActionPending(item) || isRefundPaid(item)"
+                    :placeholder="`สูงสุด ${item.missing_qty}`"
+                  />
+                  <button
+                    type="button"
+                    class="delay-btn"
+                    :disabled="isItemActionPending(item) || isRefundPaid(item) || Number(missingReceiveDraft[item.detail_id] || 0) <= 0"
+                    @click="handleMissingReceive(item)"
+                  >
+                    รับเข้า
+                  </button>
+                </div>
               </td>
               <td>
                 <div class="action-buttons">
@@ -313,6 +334,36 @@ async function handleDelayAction(item) {
   }
 }
 
+async function handleMissingReceive(item) {
+  const requestedQty = Math.floor(Number(missingReceiveDraft.value[item?.detail_id]) || 0)
+  if (!item || requestedQty <= 0 || requestedQty > Number(item.missing_qty || 0)) return
+
+  itemActionLoading.value = {
+    ...itemActionLoading.value,
+    [item.detail_id]: true,
+  }
+  try {
+    const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${item.detail_id}-${requestedQty}`
+    const response = await fetch(`${API_BASE_URL}/admin/inventory-intake/missing/${item.detail_id}/receive`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ incoming_qty: requestedQty, request_id: requestId }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.error || data.message || 'ไม่สามารถรับสินค้าตกหล่นได้')
+    missingReceiveDraft.value = { ...missingReceiveDraft.value, [item.detail_id]: 0 }
+    await fetchData()
+  } catch (error) {
+    console.error(error)
+    alert(error.message || 'เกิดข้อผิดพลาดในการรับสินค้าตกหล่น')
+  } finally {
+    itemActionLoading.value = {
+      ...itemActionLoading.value,
+      [item.detail_id]: false,
+    }
+  }
+}
+
 const missingItemsList = computed(() => {
   if (!selectedRoundId.value) return allMissingItems.value
   return allMissingItems.value.filter(
@@ -321,6 +372,7 @@ const missingItemsList = computed(() => {
 })
 
 const itemActionLoading = ref({})
+const missingReceiveDraft = ref({})
 const previewImage = ref(null)
 
 function openImagePreview(item) {
@@ -407,8 +459,8 @@ async function fetchData() {
 
       for (const item of order.items || []) {
         const missingQty = Math.max(item.ordered_qty - item.received_qty, 0)
-        if (missingQty > 0) {
-          const arrivalStatus = item.arrival_status || 'Pending'
+        const arrivalStatus = item.arrival_status || 'Pending'
+        if (missingQty > 0 && String(arrivalStatus).toLowerCase() === 'missing') {
           missingItems.push({
             detail_id: item.detail_id,
             order_id: order.order_id,
@@ -423,6 +475,7 @@ async function fetchData() {
             received_qty: item.received_qty,
             missing_qty: missingQty,
             arrival_status: arrivalStatus,
+            intake_confirmed: Boolean(item.intake_confirmed),
             refund_amount:
               String(arrivalStatus).toLowerCase() === 'missing'
                 ? missingQty * Number(item.unit_price || 0)
@@ -468,6 +521,18 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 1.5rem;
   padding: 1.5rem;
+}
+.missing-receive-control {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 150px;
+}
+.missing-receive-control input {
+  width: 62px;
+  border: 1px solid #ddd6fe;
+  border-radius: 6px;
+  padding: 0.35rem;
 }
 
 .hero-panel {

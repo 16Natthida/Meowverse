@@ -1265,7 +1265,12 @@ COALESCE(
     const missingItems = detailRows.reduce((sum, item) => {
       const orderedQty = Number(item.qty || 0)
       const receivedQty = item.received_qty != null ? Number(item.received_qty) : orderedQty
-      return sum + (orderedQty > receivedQty ? 1 : 0)
+      return sum + (
+        orderedQty > receivedQty &&
+        String(item.arrival_status || '').trim().toLowerCase() === 'missing'
+          ? 1
+          : 0
+      )
     }, 0)
 
     const receivedAmount = detailRows.reduce((sum, item) => {
