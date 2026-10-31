@@ -4460,6 +4460,7 @@ app.put(
       // Update import fee values per product/pack-size/status segment. Flavor
       // remains a display-only breakdown and is never an allocation boundary.
       const feeByKey = new Map()
+      const flavorFeeByKey = new Map()
       for (const item of fees) {
         const key = buildImportFeeGroupKey(
           item.prod_id,
@@ -4469,6 +4470,18 @@ app.put(
         )
         const feeValue = Math.max(Number(item.import_fee) || 0, 0)
         feeByKey.set(key, Number.isNaN(feeValue) ? 0 : feeValue)
+
+        // Optional per-flavor fees (checkbox "หารเท่ากัน" unticked). When present,
+        // each flavor gets its own total and is allocated only among its own rows.
+        if (Array.isArray(item.flavor_fees) && item.flavor_fees.length > 0) {
+          const byFlavor = new Map()
+          for (const entry of item.flavor_fees) {
+            const flavorKey = String(entry?.flavor ?? '').trim().toLowerCase()
+            const amount = Math.max(Number(entry?.import_fee) || 0, 0)
+            byFlavor.set(flavorKey, Number.isFinite(amount) ? amount : 0)
+          }
+          flavorFeeByKey.set(key, byFlavor)
+        }
       }
 
       // ดึง order_details ที่เป็น preorder ของรอบนี้
@@ -4521,8 +4534,26 @@ app.put(
         rowsByKey.get(key).push(row)
       }
 
-      for (const [key, rows] of rowsByKey.entries()) {
-        const importFeeTotalForKey = feeByKey.get(key) || 0
+      for (const [key, groupRows] of rowsByKey.entries()) {
+        // Equal mode: one total split by pack qty across every flavor in the group.
+        // Per-flavor mode: each flavor has its own total split only among its rows.
+        const flavorFees = flavorFeeByKey.get(key)
+        const chunks = []
+        if (flavorFees) {
+          const rowsByFlavor = new Map()
+          for (const row of groupRows) {
+            const flavorKey = String(row.flavor ?? '').trim().toLowerCase()
+            if (!rowsByFlavor.has(flavorKey)) rowsByFlavor.set(flavorKey, [])
+            rowsByFlavor.get(flavorKey).push(row)
+          }
+          for (const [flavorKey, flavorRows] of rowsByFlavor.entries()) {
+            chunks.push({ total: flavorFees.get(flavorKey) || 0, rows: flavorRows })
+          }
+        } else {
+          chunks.push({ total: feeByKey.get(key) || 0, rows: groupRows })
+        }
+
+        for (const { total: importFeeTotalForKey, rows } of chunks) {
         const allocations = allocateImportFeeCents(importFeeTotalForKey, rows)
 
         for (const row of rows) {
@@ -4537,6 +4568,7 @@ app.put(
           ])
 
           orderTotals[row.order_id] = (orderTotals[row.order_id] || 0) + detailImportFee
+        }
         }
       }
 
