@@ -90,7 +90,7 @@ function resolveIntakeStatusLabel(status) {
   if (key === 'ready_to_ship') return 'พร้อมจัดส่ง'
   if (key === 'partially_received') return 'รับไม่ครบ'
   if (key === 'pending') return 'รอรับเข้า'
-  if (key === 'delayed') return 'ตกหล่น / รอของ'
+  if (key === 'delayed') return 'รอของ'
   if (key === 'missing') return 'ขาดสินค้า'
   if (key === 'received') return 'รับครบ'
   if (key === 'partial') return 'รับบางส่วน'
@@ -109,13 +109,35 @@ function setSelectedIntakeOrder(orderId) {
   const order = intakeOrders.value.find((item) => Number(item.round_id) === Number(orderId))
   const draft = {}
 
+  // receivedDraft เก็บ "จำนวนที่รับเพิ่มในครั้งนี้" เริ่มที่ 0 เสมอ
+  // ยอดที่เคยรับไปแล้วอ่านจาก item.received_qty ทำให้ทยอยรับได้หลายครั้งในออเดอร์เดิม
   for (const item of order?.items || []) {
-    const orderedQty = Math.max(Number(item.ordered_qty) || 0, 0)
-    const receivedQty = Math.max(Number(item.received_qty) || 0, 0)
-    draft[item.detail_id] = Math.min(receivedQty, orderedQty)
+    draft[item.detail_id] = 0
   }
 
   receivedDraft.value = draft
+}
+
+// ยอดที่บันทึกรับเข้าไปแล้วจากครั้งก่อน ๆ (สะสม)
+function getPreviousReceived(item) {
+  const orderedQty = Math.max(Number(item?.ordered_qty) || 0, 0)
+  const receivedQty = Math.max(Number(item?.received_qty) || 0, 0)
+  return Math.min(receivedQty, orderedQty)
+}
+
+// จำนวนที่กรอกรับเพิ่มในครั้งนี้
+function getIncomingQty(item) {
+  return Math.max(Number(receivedDraft.value[item?.detail_id]) || 0, 0)
+}
+
+// ยอดรับรวมหลังบันทึกครั้งนี้ = ยอดเดิม + รับเพิ่ม
+function getTotalAfterIntake(item) {
+  return getPreviousReceived(item) + getIncomingQty(item)
+}
+
+// จำนวนที่ยังค้างรับก่อนกรอกครั้งนี้
+function getOutstandingQty(item) {
+  return Math.max((Number(item?.ordered_qty) || 0) - getPreviousReceived(item), 0)
 }
 
 function clearSelectedIntakeOrder() {
@@ -137,9 +159,7 @@ const itemsNeedingAttention = computed(() => {
   if (!selectedIntakeOrder.value) return []
   return selectedIntakeOrder.value.items.filter((item) => {
     if (isArrivedItem(item)) return false
-    const received = Number(receivedDraft.value[item.detail_id] ?? 0)
-    const ordered = Number(item.ordered_qty)
-    return received < ordered
+    return getTotalAfterIntake(item) < Number(item.ordered_qty)
   })
 })
 
@@ -148,7 +168,7 @@ const editableIntakeItems = computed(() => selectedIntakeOrder.value?.items || [
 function getDraftIntakeStatus(item) {
   if (isArrivedItem(item)) return 'ready'
 
-  const received = Number(receivedDraft.value[item.detail_id] ?? 0)
+  const received = getTotalAfterIntake(item)
   const ordered = Number(item.ordered_qty) || 0
 
   if (received >= ordered) return 'ready'
@@ -164,7 +184,7 @@ const excessReceivedItems = computed(() => {
   return selectedIntakeOrder.value.items
     .filter((item) => !isArrivedItem(item))
     .map((item) => {
-      const received = Number(receivedDraft.value[item.detail_id] ?? 0)
+      const received = getTotalAfterIntake(item)
       const ordered = Number(item.ordered_qty) || 0
       return { ...item, excess_qty: Math.max(received - ordered, 0) }
     })
@@ -173,6 +193,18 @@ const excessReceivedItems = computed(() => {
 
 const totalExcessReceived = computed(() =>
   excessReceivedItems.value.reduce((sum, item) => sum + item.excess_qty, 0),
+)
+
+const totalIncomingQty = computed(() =>
+  (selectedIntakeOrder.value?.items || [])
+    .filter((item) => !isArrivedItem(item))
+    .reduce((sum, item) => sum + getIncomingQty(item), 0),
+)
+
+const totalOutstandingQty = computed(() =>
+  (selectedIntakeOrder.value?.items || [])
+    .filter((item) => !isArrivedItem(item))
+    .reduce((sum, item) => sum + getOutstandingQty(item), 0),
 )
 
 async function fetchIntakeOrders() {
@@ -217,6 +249,7 @@ async function processIntake() {
 
   savingIntake.value = true
   intakeMessage.value = ''
+  const savedIncomingQty = totalIncomingQty.value
 
   try {
     const payload = {
@@ -226,7 +259,9 @@ async function processIntake() {
         .filter((item) => !isArrivedItem(item))
         .map((item) => ({
           detail_id: item.detail_id,
-          received_qty: Number(receivedDraft.value[item.detail_id] ?? 0),
+          // ส่งเฉพาะจำนวนที่รับเพิ่มครั้งนี้ ให้ server บวกกับยอดล่าสุดในฐานข้อมูลเอง
+          // ป้องกันยอดหาย/ซ้ำเมื่อหน้าเว็บค้างข้อมูลเก่าหรือมีแอดมินอื่นบันทึกไปก่อน
+          incoming_qty: getIncomingQty(item),
         })),
     }
 
@@ -246,10 +281,10 @@ async function processIntake() {
       )
     }
 
-    intakeMessage.value = `บันทึกสำเร็จ ยอดคืน: ${formatMoney(data.refund_amount || 0)}`
-    if (Array.isArray(data.delayed_order_ids) && data.delayed_order_ids.length > 0) {
-      intakeMessage.value += ` แยกรายการที่รับไม่ครบเป็นออเดอร์ Delayed แล้ว (#${data.delayed_order_ids.map((id) => String(id).padStart(3, '0')).join(', #')})`
-    }
+    const confirmedIncomingQty = Number(data.incoming_qty ?? savedIncomingQty) || 0
+    intakeMessage.value = confirmedIncomingQty > 0
+      ? `บันทึกรับเพิ่ม ${confirmedIncomingQty} ชิ้นสำเร็จ ยอดคืน: ${formatMoney(data.refund_amount || 0)}`
+      : `บันทึกสำเร็จ ยอดคืน: ${formatMoney(data.refund_amount || 0)}`
     if (Number(data.excess_qty) > 0) {
       intakeMessage.value += data.excess_stock_action === 'moved_to_stock'
         ? ` นำส่วนเกิน ${data.excess_qty} ชิ้นเข้าสต็อกพร้อมส่งแล้ว`
@@ -262,7 +297,12 @@ async function processIntake() {
       (order) => Number(order.round_id) === Number(data.round_id),
     )
     if (refreshedOrder) {
+      const message = intakeMessage.value
       setSelectedIntakeOrder(refreshedOrder.round_id)
+      intakeMessage.value = message
+      if (!refreshedOrder.summary?.fully_received) {
+        intakeMessage.value += ' · ยังรับไม่ครบ สามารถกรอกรับเพิ่มได้อีกในครั้งถัดไป'
+      }
     }
   } catch (error) {
     intakeMessage.value = translateError(error)
@@ -283,7 +323,7 @@ onUnmounted(() => {
 
 <template>
   <div class="inventory-intake-page">
-    <AdminPageHeader title="รับสินค้าเข้าตามรอบพรีออเดอร์" description="เลือก “รอบ” แล้วกรอกจำนวนรับจริงรวมทั้งรอบ ระบบจะคำนวณสินค้ารวมและรายการที่ขาดอัตโนมัติ"></AdminPageHeader>
+    <AdminPageHeader title="รับสินค้าเข้าตามรอบพรีออเดอร์" description="เลือก “รอบ” แล้วกรอกจำนวนรับจริงรวมทั้งรอบ หากรับไม่ครบสามารถบันทึกเพิ่มได้หลายครั้งโดยไม่แยกออเดอร์ของลูกค้า"></AdminPageHeader>
 
     <section class="kpi-grid">
       <article class="kpi-card">
@@ -296,7 +336,7 @@ onUnmounted(() => {
       <header class="panel-head">
         <div>
           <h2>รับสินค้าเข้าตามรอบและตรวจนับสินค้ารวม</h2>
-          <p>เลือก “รอบพรีออเดอร์” แล้วกรอกจำนวนรับจริงแบบรวมทั้งรอบ</p>
+          <p>กรอกจำนวนรับจริงแบบรวมทั้งรอบ บันทึกผลได้หลายครั้งเพื่อทยอยรับสินค้าเข้าโดยคงออเดอร์เดิม</p>
         </div>
         <button class="ghost-btn" type="button" @click="fetchIntakeOrders">รีเฟรช</button>
       </header>
@@ -389,13 +429,14 @@ onUnmounted(() => {
               <div class="items-head">
                 <span>สินค้า</span>
                 <span>รวมสั่ง</span>
-                <span>รับจริง</span>
-                <span>ขาด</span>
+                <span>รับแล้ว</span>
+                <span>รับเพิ่มครั้งนี้</span>
+                <span>คงค้าง</span>
                 <span>สถานะ</span>
               </div>
 
               <div v-if="editableIntakeItems.length > 0" class="items-section-header">
-                <p class="section-title">กรอกจำนวนรับจริงก่อนยืนยัน</p>
+                <p class="section-title">กรอกจำนวนที่รับเพิ่มในครั้งนี้ (ระบบจะบวกกับยอดที่รับไปแล้ว)</p>
               </div>
 
               <div
@@ -435,23 +476,33 @@ onUnmounted(() => {
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>
                     {{ item.received_qty ?? item.ordered_qty }}
                   </span>
-                  <input
-                    v-else
-                    :value="receivedDraft[item.detail_id] ?? 0"
-                    class="qty-input"
-                    min="0"
-                    type="number"
-                    @input="updateDraft(item.detail_id, $event.target.value)"
-                  />
+                  <span v-else class="qty-previous">{{ getPreviousReceived(item) }}</span>
                 </div>
 
                 <div>
                   <template v-if="isArrivedItem(item)">—</template>
-                  <template v-else-if="Number(receivedDraft[item.detail_id] ?? 0) > item.ordered_qty">
-                    เกิน {{ Number(receivedDraft[item.detail_id] ?? 0) - item.ordered_qty }}
+                  <div v-else class="qty-incoming">
+                    <input
+                      :value="receivedDraft[item.detail_id] ?? 0"
+                      class="qty-input"
+                      min="0"
+                      type="number"
+                      :aria-label="`จำนวนรับเพิ่ม ${item.product_name}`"
+                      @input="updateDraft(item.detail_id, $event.target.value)"
+                    />
+                    <small v-if="getIncomingQty(item) > 0" class="qty-total-hint">
+                      รวมเป็น {{ getTotalAfterIntake(item) }} / {{ item.ordered_qty }}
+                    </small>
+                  </div>
+                </div>
+
+                <div>
+                  <template v-if="isArrivedItem(item)">—</template>
+                  <template v-else-if="getTotalAfterIntake(item) > item.ordered_qty">
+                    เกิน {{ getTotalAfterIntake(item) - item.ordered_qty }}
                   </template>
                   <template v-else>
-                    {{ Math.max(item.ordered_qty - Number(receivedDraft[item.detail_id] ?? 0), 0) }}
+                    {{ Math.max(item.ordered_qty - getTotalAfterIntake(item), 0) }}
                   </template>
                 </div>
 
@@ -488,6 +539,13 @@ onUnmounted(() => {
               </label>
             </div>
 
+            <p v-if="totalOutstandingQty > 0" class="intake-progress">
+              ครั้งนี้รับเพิ่ม <strong>{{ totalIncomingQty }}</strong> ชิ้น ·
+              คงค้างก่อนบันทึก {{ totalOutstandingQty }} ชิ้น ·
+              หลังบันทึกจะเหลือค้าง
+              <strong>{{ Math.max(totalOutstandingQty - totalIncomingQty + totalExcessReceived, 0) }}</strong> ชิ้น
+            </p>
+
             <div class="action-row">
               <button
                 class="primary-btn"
@@ -495,7 +553,7 @@ onUnmounted(() => {
                 :disabled="savingIntake"
                 @click="processIntake"
               >
-                {{ savingIntake ? 'กำลังบันทึก...' : selectedIntakeOrder.intake_confirmed ? 'บันทึกการแก้ไขผลตรวจรับ' : 'บันทึกผลตรวจรับ' }}
+                {{ savingIntake ? 'กำลังบันทึก...' : selectedIntakeOrder.intake_confirmed ? 'บันทึกรับสินค้าเพิ่ม' : 'บันทึกผลตรวจรับ' }}
               </button>
               <p v-if="intakeMessage" class="save-message">{{ intakeMessage }}</p>
             </div>
@@ -726,7 +784,7 @@ onUnmounted(() => {
 .items-head,
 .items-row {
   display: grid;
-  grid-template-columns: 1.3fr 80px 110px 80px 110px;
+  grid-template-columns: 1.3fr 70px 70px 150px 80px 110px;
   gap: 0.75rem;
   align-items: center;
 }
@@ -988,6 +1046,31 @@ onUnmounted(() => {
   border-top: 1px solid rgba(160, 126, 191, 0.12);
 }
 
+.qty-previous {
+  font-weight: 700;
+  color: #6b5a86;
+}
+
+.qty-incoming {
+  display: grid;
+  gap: 0.3rem;
+  justify-items: start;
+}
+
+.qty-total-hint {
+  color: #8a7aa3;
+  font-size: 0.75rem;
+}
+
+.intake-progress {
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  border-radius: 12px;
+  background: #f6efff;
+  color: #5a4778;
+  font-size: 0.9rem;
+}
+
 .qty-locked {
   display: inline-flex;
   align-items: center;
@@ -1056,9 +1139,10 @@ onUnmounted(() => {
   }
 
   .items-row > div:nth-child(2)::before { content: 'จำนวนที่สั่ง'; }
-  .items-row > div:nth-child(3)::before { content: 'รับจริง'; }
-  .items-row > div:nth-child(4)::before { content: 'ขาด / เกิน'; }
-  .items-row > div:nth-child(5)::before { content: 'สถานะ'; }
+  .items-row > div:nth-child(3)::before { content: 'รับแล้ว'; }
+  .items-row > div:nth-child(4)::before { content: 'รับเพิ่มครั้งนี้'; }
+  .items-row > div:nth-child(5)::before { content: 'คงค้าง / เกิน'; }
+  .items-row > div:nth-child(6)::before { content: 'สถานะ'; }
 
   .items-row > div:not(.product-col)::before {
     flex: 0 0 auto;

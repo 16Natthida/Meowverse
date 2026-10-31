@@ -1452,7 +1452,7 @@ onMounted(async () => {
                       class="item-price-small"
                       style="color: #f59e42; font-weight: 600"
                     >
-                      <template v-if="it.awaiting_receipt">รอรับของ</template>
+                      <template v-if="it.awaiting_receipt">รอนำเข้า</template>
                       <template v-else>
                         {{ isMissingRound ? 'ค่านำเข้ารอบตกหล่น' : 'ค่านำเข้ารวม' }}: ฿{{ displayPrice(it).toLocaleString() }}
                       </template>

@@ -5403,7 +5403,7 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
 
 // ─────────────────────────────────────────────
 // POST /api/admin/inventory-intake/rounds/:round_id/process
-// รับสินค้าเข้าตามรอบพรีออเดอร์ โดยรวมทุกออเดอร์ในรอบเดียวกัน
+// รับสินค้าเข้าตามรอบพรีออเดอร์ โดยเก็บรายการไว้ในออเดอร์เดิมของลูกค้า
 // ─────────────────────────────────────────────
 app.post(
   '/api/admin/inventory-intake/rounds/:round_id/process',
@@ -5430,9 +5430,13 @@ app.post(
         `SELECT round_id, round_name, status, start_date, end_date
          FROM preorder_rounds
          WHERE round_id = ?
-         LIMIT 1`,
+         LIMIT 1
+         FOR UPDATE`,
         [roundId],
       )
+      // ล็อกแถวของรอบไว้จนจบ transaction: ถ้ามีแอดมิน 2 คนกดบันทึกรอบเดียวกันพร้อมกัน
+      // คำขอที่สองจะรอจนคำขอแรก commit แล้วค่อยอ่านยอด received_qty ล่าสุด
+      // (การล็อกนี้เป็น locking read แรกของ transaction ดังนั้น SELECT ด้านล่างจะเห็นข้อมูลหลังคำขอแรก commit)
 
       if (roundRows.length === 0) {
         await connection.rollback()
@@ -5477,15 +5481,21 @@ app.post(
         return res.status(400).json({ error: 'ไม่มีรายการสินค้าในรอบนี้' })
       }
 
-      // The UI sends the aggregate quantity shown for each product/flavor.
-      // Treat it as an absolute target, not as an additional quantity. This
-      // makes saving the same form twice idempotent.
-      const requestMap = new Map(
-        receivedItems.map((item) => [
-          String(item.detail_id || item.line_key || '').trim(),
-          normalizeIntakeQuantity(item.received_qty, 0),
-        ]),
-      )
+      // แต่ละรายการส่งมาได้ 2 แบบ:
+      //  - incoming_qty: จำนวนที่ "รับเพิ่มครั้งนี้" (แบบที่หน้าเว็บใช้) server จะบวกกับยอดล่าสุดในฐานข้อมูลเอง
+      //    จึงไม่เสียยอดเมื่อหน้าเว็บค้างข้อมูลเก่า หรือมีแอดมินอีกคนบันทึกไปก่อน
+      //  - received_qty: ยอดรวมสะสมแบบ absolute (รูปแบบเดิม เก็บไว้เพื่อความเข้ากันได้)
+      const requestMap = new Map()
+      for (const item of receivedItems) {
+        const key = String(item.detail_id || item.line_key || '').trim()
+        if (!key) continue
+        if (item.incoming_qty !== undefined && item.incoming_qty !== null) {
+          requestMap.set(key, { mode: 'increment', qty: normalizeIntakeQuantity(item.incoming_qty, 0) })
+        } else {
+          requestMap.set(key, { mode: 'absolute', qty: normalizeIntakeQuantity(item.received_qty, 0) })
+        }
+      }
+      let totalIncomingQty = 0
 
       const lineGroups = new Map()
       for (const detail of detailRows) {
@@ -5499,21 +5509,34 @@ app.post(
 
       const detailResults = []
       const orderSummaryMap = new Map()
-      const splitOrderIds = new Set()
-      const forceSplitDetailRefs = new Set()
-      // Product-level shortage: a product delivered under several flavors only
-      // counts as fully arrived once every one of its flavors is complete. Any
-      // prod_id added here had at least one short flavor line in this round.
       const shortProductIds = new Set()
       let hasIntakeChange = false
       let totalExcessQty = 0
 
       for (const [lineKey, lineDetails] of lineGroups.entries()) {
-        const requestedReceived = requestMap.get(lineKey) || 0
         const totalOrderedForLine = lineDetails.reduce(
           (sum, detail) => sum + Math.max(0, Number(detail.ordered_qty) || 0),
           0,
         )
+        // ยอดที่รับไว้แล้วจริงในฐานข้อมูล (อ่านหลังล็อกรอบ จึงเป็นค่าล่าสุด)
+        const currentReceivedForLine = lineDetails.reduce(
+          (sum, detail) =>
+            sum +
+            Math.min(
+              Math.max(0, Number(detail.received_qty) || 0),
+              Math.max(0, Number(detail.ordered_qty) || 0),
+            ),
+          0,
+        )
+        const lineRequest = requestMap.get(lineKey)
+        // รายการที่ไม่ได้ส่งมา = คงยอดเดิม (เดิมจะถูกตีเป็น 0 แล้วล้างยอดที่เคยรับ)
+        let requestedReceived = currentReceivedForLine
+        if (lineRequest?.mode === 'increment') {
+          requestedReceived = currentReceivedForLine + lineRequest.qty
+          totalIncomingQty += lineRequest.qty
+        } else if (lineRequest?.mode === 'absolute') {
+          requestedReceived = lineRequest.qty
+        }
         const arrivedDetails = lineDetails.filter(
           (detail) => String(detail.arrival_status || '').toLowerCase() === 'arrived',
         )
@@ -5544,7 +5567,9 @@ app.post(
 
         // Preserve existing quantities for editable details before allocating
         // any newly received quantity in stable order.
-        for (const detail of lineDetails) {
+        // ต้องวนเฉพาะ editableDetails: รายการ Arrived ถูกนับไว้แล้วใน immutableArrivedQty
+        // ถ้าวนรวมด้วยจะหักยอดซ้ำ ทำให้ยอดรับของออเดอร์อื่นพองเกินจริง
+        for (const detail of editableDetails) {
           const orderedQty = Math.max(0, Number(detail.ordered_qty) || 0)
           const currentReceived = Math.min(
             Math.max(0, Number(detail.received_qty) || 0),
@@ -5597,7 +5622,6 @@ app.post(
             await connection.query(`UPDATE order_details SET Import_fee = 0 WHERE detail_id = ?`, [
               detail.detail_id,
             ])
-            splitOrderIds.add(Number(detail.order_id))
           }
 
           if (!orderSummaryMap.has(Number(detail.order_id))) {
@@ -5676,48 +5700,19 @@ app.post(
           )
         }
 
-        // The import-fee rule is line-level across the whole preorder round:
-        // if any unit of this product line is short, every order's quantity
-        // for the line must move to the delayed segment, including lines that
-        // happened to be fully received in one order.
         if (targetReceived < totalOrderedForLine) {
-          for (const detail of lineDetails) {
-            forceSplitDetailRefs.add(`${detail.order_id}:${detail.detail_id}`)
-          }
           shortProductIds.add(Number(lineDetails[0]?.prod_id))
         }
       }
 
-      // Product-level shortage rule: if this product has more than one
-      // flavor line and any flavor came up short in this round, every other
-      // flavor line of the SAME product must be pulled into the delayed
-      // segment too — even flavors that arrived in full. A product with an
-      // incomplete flavor is treated as "ตกหล่น" as a whole, so none of its
-      // flavors (not even a single one) can have import fee entered until
-      // every flavor has fully arrived together.
-      if (shortProductIds.size > 0) {
-        for (const [, lineDetails] of lineGroups.entries()) {
-          const prodId = Number(lineDetails[0]?.prod_id)
-          if (!shortProductIds.has(prodId)) continue
-          for (const detail of lineDetails) {
-            forceSplitDetailRefs.add(`${detail.order_id}:${detail.detail_id}`)
-          }
-        }
-      }
-
-      // If a line is short by even one unit, move the whole ordered line into
-      // the delayed child order. This keeps the import-fee workflow from
-      // charging the received portion separately from the same product line.
-      const delayedOrderIds = []
-      for (const orderId of splitOrderIds) {
-        const childOrderId = await splitDelayedItemsFromOrder(connection, orderId)
-        if (childOrderId) delayedOrderIds.push(childOrderId)
-      }
-      for (const ref of forceSplitDetailRefs) {
-        const [orderId, detailId] = ref.split(':').map(Number)
-        const childOrderId = await splitDelayedItemsFromOrder(connection, orderId, detailId, true)
-        if (childOrderId && !delayedOrderIds.includes(childOrderId)) {
-          delayedOrderIds.push(childOrderId)
+      // Keep import fees cleared for every flavor of a product while any
+      // quantity remains outstanding, without moving details to another order.
+      for (const [, lineDetails] of lineGroups.entries()) {
+        if (!shortProductIds.has(Number(lineDetails[0]?.prod_id))) continue
+        for (const detail of lineDetails) {
+          await connection.query(`UPDATE order_details SET Import_fee = 0 WHERE detail_id = ?`, [
+            detail.detail_id,
+          ])
         }
       }
 
@@ -5828,8 +5823,8 @@ app.post(
         ordered_amount: orderedAmount,
         received_amount: receivedAmount,
         refund_amount: refundAmount,
-        delayed_order_ids: delayedOrderIds,
         excess_qty: totalExcessQty,
+        incoming_qty: totalIncomingQty,
         excess_stock_action:
           totalExcessQty > 0 ? (moveExcessToStock ? 'moved_to_stock' : 'not_moved') : 'none',
         items: detailResults,
