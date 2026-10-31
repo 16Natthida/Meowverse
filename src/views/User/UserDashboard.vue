@@ -995,6 +995,18 @@ const filteredProducts = computed(() => {
     )
   }
 
+  // หน้า "พร้อมส่ง": ย้ายสินค้าที่หมดสต็อกไปไว้ท้ายรายการ (หน้าหลัง ๆ)
+  // แบ่งเป็น 2 กลุ่มโดยคงลำดับเดิมในแต่ละกลุ่ม และทำก่อนแบ่งหน้า เพื่อให้ของหมดไปอยู่หน้าท้าย ๆ จริง
+  if (activeTab.value === 'พร้อมส่ง') {
+    const inStock = []
+    const outOfStock = []
+    for (const product of list) {
+      if (isOutOfStockForCurrentType(product)) outOfStock.push(product)
+      else inStock.push(product)
+    }
+    list = [...inStock, ...outOfStock]
+  }
+
   return list
 })
 
