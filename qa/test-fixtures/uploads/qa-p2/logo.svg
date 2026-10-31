@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320">
+  <circle cx="160" cy="160" r="145" fill="#ede9fe" stroke="#7c3aed" stroke-width="12"/>
+  <text x="160" y="145" text-anchor="middle" font-family="Arial, sans-serif" font-size="52" font-weight="700" fill="#5b21b6">QA-P2</text>
+  <text x="160" y="205" text-anchor="middle" font-family="Arial, sans-serif" font-size="28" fill="#7c3aed">TEST ONLY</text>
+</svg>

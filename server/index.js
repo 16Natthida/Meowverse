@@ -909,16 +909,62 @@ async function lockOrderDuringSlipUpload(req, res, next) {
 }
 
 function uploadSlipWhileOrderLocked(req, res, next) {
-  upload.single('slip')(req, res, async (error) => {
-    if (!error) return next()
+  // createImageUpload().single() returns an array of middleware functions.
+  // Express can flatten that array when it is passed directly to a route, but
+  // it cannot be invoked as one function here. Run each middleware in order so
+  // the order lock remains active for the whole upload.
+  const middlewares = upload.single('slip')
+  let index = 0
+  let finished = false
+
+  const releaseUploadConnection = async () => {
     const connection = req.paymentUploadConnection
     req.paymentUploadConnection = null
-    if (connection) {
-      await connection.rollback().catch(() => {})
-      connection.release()
+    if (!connection) return
+
+    await connection.rollback().catch(() => {})
+    connection.release()
+  }
+
+  const fail = async (error) => {
+    if (finished) return
+    finished = true
+    await releaseUploadConnection()
+    next(error)
+  }
+
+  const runNext = (error) => {
+    if (finished) return
+    if (error) {
+      void fail(error)
+      return
     }
-    return next(error)
-  })
+
+    const middleware = middlewares[index++]
+    if (!middleware) {
+      finished = true
+      next()
+      return
+    }
+
+    let called = false
+    const middlewareNext = (middlewareError) => {
+      if (called) return
+      called = true
+      runNext(middlewareError)
+    }
+
+    try {
+      const result = middleware(req, res, middlewareNext)
+      if (result && typeof result.then === 'function') {
+        result.catch(middlewareNext)
+      }
+    } catch (middlewareError) {
+      middlewareNext(middlewareError)
+    }
+  }
+
+  runNext()
 }
 
 // CORS: อนุญาตเฉพาะ ALLOWED_ORIGINS (ดูด้านบน)
@@ -4156,6 +4202,23 @@ app.get(
   requireAdmin,
   async (_req, res) => {
     try {
+      // Keep an explicit save marker so a legitimately saved fee of 0.00 is
+      // still distinguishable from a round that has never been saved.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS preorder_import_fee_saves (
+          round_id INT NOT NULL,
+          fee_segment VARCHAR(20) NOT NULL,
+          saved_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (round_id, fee_segment)
+        ) ENGINE=InnoDB
+      `)
+      const [savedFeeRows] = await pool.query(
+        'SELECT round_id, fee_segment FROM preorder_import_fee_saves',
+      )
+      const savedFeeKeys = new Set(
+        savedFeeRows.map((row) => `${row.round_id}|${row.fee_segment || 'Main'}`),
+      )
+
       const [rows] = await pool.query(`
       SELECT
         pr.round_id,
@@ -4263,10 +4326,13 @@ app.get(
             end_date: row.end_date,
             arrival_status: arrivalStatus,
             fee_segment: feeSegment,
+            has_saved_import_fee: savedFeeKeys.has(roundKey),
             products: [],
           })
         }
-        roundMap.get(roundKey).products.push({
+        const round = roundMap.get(roundKey)
+        if (Number(row.import_fee) > 0) round.has_saved_import_fee = true
+        round.products.push({
           key: `${row.prod_id}|${String(row.flavor || '').trim()}|${arrivalStatus.toLowerCase()}|${feeSegment.toLowerCase()}`,
           prod_id: row.prod_id,
           product_name: row.product_name,
@@ -4314,6 +4380,14 @@ app.put(
 
     const connection = await pool.getConnection()
     try {
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS preorder_import_fee_saves (
+          round_id INT NOT NULL,
+          fee_segment VARCHAR(20) NOT NULL,
+          saved_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (round_id, fee_segment)
+        ) ENGINE=InnoDB
+      `)
       await connection.beginTransaction()
 
       // Update import fee values per product/flavor/status segment.
@@ -4457,6 +4531,13 @@ app.put(
           await connection.query(`UPDATE orders SET import_fee_total = 0 WHERE order_id = ?`, [orderId])
         }
       }
+
+      await connection.query(
+        `INSERT INTO preorder_import_fee_saves (round_id, fee_segment, saved_at)
+         VALUES (?, ?, NOW())
+         ON DUPLICATE KEY UPDATE saved_at = NOW()`,
+        [roundId, feeSegment],
+      )
 
       if (orderIds.size > 0) {
         const orderIdList = Array.from(orderIds)
@@ -4616,6 +4697,30 @@ app.post(
 
       // สต็อกของออเดอร์พร้อมส่งถูกตัดไปแล้วตั้งแต่ตอนกดสั่งซื้อ (สร้างออเดอร์)
       // จึงไม่ต้องตัดสต็อกซ้ำอีกครั้งตอนแนบสลิป
+    }
+
+    // ป้องกันการส่งสลิปซ้ำของออเดอร์/รอบชำระเงินเดียวกัน
+    // ล็อกแถว orders ไว้ตั้งแต่ middleware แล้ว ดังนั้นคำขอที่กดซ้ำจะมาตรวจจุดนี้
+    // หลังคำขอแรก commit เสร็จ และจะไม่สามารถ INSERT payment ซ้ำได้
+    const [activePayments] = await connection.query(
+      `SELECT pay_id
+       FROM payment
+       WHERE order_id = ?
+         AND type = ?
+         AND status IN ('Pending', 'Approved')
+       ORDER BY pay_id DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [order_id, paymentType],
+    )
+
+    if (activePayments.length > 0) {
+      // ไฟล์ที่เพิ่งอัปโหลดมาคือคำขอซ้ำ จึงลบทิ้งไม่ให้เหลือไฟล์ orphan
+      if (req.file?.path) await unlink(req.file.path).catch(() => {})
+      await connection.rollback()
+      return res.status(409).json({
+        error: 'ออเดอร์นี้มีการส่งหลักฐานการชำระเงินแล้ว กรุณารอแอดมินตรวจสอบ',
+      })
     }
 
     if (effectiveShippingFee > 0 && Number(orderData.shipping_fee) <= 0) {
@@ -5214,6 +5319,8 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
           detail_ids: [],
           order_ids: new Set(),
           has_editable_details: false,
+          // นับรายการที่แอดมินยังไม่เคยกดบันทึกรับของ (ยังเป็น Pending ในฐานข้อมูล)
+          pending_detail_count: 0,
         })
       }
 
@@ -5225,7 +5332,15 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
       if (String(row.arrival_status || '').toLowerCase() !== 'arrived') {
         item.has_editable_details = true
       }
-      item.arrival_status = resolveIntakeStatus(item.ordered_qty, item.received_qty)
+      if (String(row.arrival_status || 'Pending').toLowerCase() === 'pending') {
+        item.pending_detail_count += 1
+      }
+      // ยังไม่เคยบันทึกรับของเลย (ทุกรายการยัง Pending และรับ 0) = "รอรับเข้า"
+      // ไม่ใช่ "ตกหล่น" — จะเป็นตกหล่น/รอของก็ต่อเมื่อแอดมินบันทึกรับแล้วแต่ของไม่ครบ
+      item.arrival_status =
+        item.received_qty === 0 && item.pending_detail_count === item.detail_ids.length
+          ? 'Pending'
+          : resolveIntakeStatus(item.ordered_qty, item.received_qty)
     }
 
     const rounds = Array.from(roundMap.values()).map((round) => {
@@ -5241,8 +5356,9 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
         const lineTotal = item.ordered_qty * item.unit_price
         const receivedTotal = item.received_qty * item.unit_price
 
+        const { pending_detail_count: _pendingDetailCount, ...itemRest } = item
         return {
-          ...item,
+          ...itemRest,
           order_count: item.order_ids.size,
           order_ids: Array.from(item.order_ids),
           missing_qty: missingQty,

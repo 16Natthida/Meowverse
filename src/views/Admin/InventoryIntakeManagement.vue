@@ -89,6 +89,7 @@ function resolveIntakeStatusLabel(status) {
   const key = String(status || '').toLowerCase()
   if (key === 'ready_to_ship') return 'พร้อมจัดส่ง'
   if (key === 'partially_received') return 'รับไม่ครบ'
+  if (key === 'pending') return 'รอรับเข้า'
   if (key === 'delayed') return 'ตกหล่น / รอของ'
   if (key === 'missing') return 'ขาดสินค้า'
   if (key === 'received') return 'รับครบ'
@@ -151,6 +152,10 @@ function getDraftIntakeStatus(item) {
   const ordered = Number(item.ordered_qty) || 0
 
   if (received >= ordered) return 'ready'
+  // ยังไม่เคยบันทึกรับของและยังไม่ได้กรอกจำนวน = รอรับเข้า (ยังไม่ใช่ตกหล่น)
+  if (received === 0 && String(item.arrival_status || '').toLowerCase() === 'pending') {
+    return 'pending'
+  }
   return 'delayed'
 }
 

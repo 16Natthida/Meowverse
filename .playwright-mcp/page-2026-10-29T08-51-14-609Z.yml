@@ -1,0 +1,25 @@
+- generic [active] [ref=f41e1]:
+  - main [ref=f41e3]:
+    - generic [ref=f41e4]:
+      - generic [ref=f41e7]:
+        - heading "Meowverse" [level=1] [ref=f41e8]
+        - paragraph [ref=f41e9]: Pet Shop Portal
+      - generic [ref=f41e10]:
+        - generic [ref=f41e11]:
+          - generic [ref=f41e12]: ยินดีต้อนรับกลับ
+          - heading "เข้าสู่ระบบพรีออเดอร์สินค้าแมว" [level=2] [ref=f41e13]
+          - paragraph [ref=f41e14]: เข้าสู่ระบบเพื่อจัดการคำสั่งซื้อและติดตามสถานะสินค้า
+        - generic [ref=f41e15]:
+          - generic [ref=f41e16]:
+            - generic [ref=f41e17]: รหัสสมาชิก
+            - textbox "ชื่อผู้ใช้" [ref=f41e19]
+          - generic [ref=f41e20]:
+            - generic [ref=f41e21]: Password
+            - generic [ref=f41e22]:
+              - textbox "รหัสผ่าน" [ref=f41e23]
+              - button "แสดงรหัสผ่าน" [ref=f41e24] [cursor=pointer]
+          - generic [ref=f41e28]: Remember me
+          - button "Login" [ref=f41e31] [cursor=pointer]
+  - generic [ref=f41e33]:
+    - generic "Toggle devtools panel" [ref=f41e34] [cursor=pointer]
+    - generic "Toggle Component Inspector" [ref=f41e40] [cursor=pointer]

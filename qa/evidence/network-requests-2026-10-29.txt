@@ -1,0 +1,5 @@
+50. [GET] http://localhost:5173/api/site-settings/logo => [200] OK
+51. [GET] http://localhost:5173/api/site-settings/logo => [200] OK
+52. [GET] http://localhost:5173/api/site-settings/logo => [200] OK
+
+Note: 55 static requests not shown, run with "static" option to see them.

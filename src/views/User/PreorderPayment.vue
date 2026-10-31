@@ -80,6 +80,7 @@ function resolveItemImage(it) {
 }
 
 const loading = ref(true)
+const isSubmitting = ref(false)
 const error = ref(null)
 const notice = ref({ msg: '', type: '' })
 
@@ -891,7 +892,7 @@ const fetchOrder = async () => {
 }
 
 const confirmPayment = async () => {
-  if (loading.value || isReadOnlyStage.value || isRoundOpen.value) {
+  if (loading.value || isSubmitting.value || isReadOnlyStage.value || isRoundOpen.value) {
     if (isRoundOpen.value) {
       showNotice('รอบพรีออเดอร์ยังไม่ปิด จึงยังไม่สามารถชำระเงินได้', 'warning')
     }
@@ -942,6 +943,9 @@ const confirmPayment = async () => {
       return
     }
   }
+
+  // ล็อกการกดซ้ำทันที ก่อนเริ่ม request แรก
+  isSubmitting.value = true
 
   try {
     loading.value = true
@@ -1052,6 +1056,7 @@ const confirmPayment = async () => {
     showNotice(err.message, 'error')
   } finally {
     loading.value = false
+    isSubmitting.value = false
   }
 }
 
@@ -2301,7 +2306,7 @@ onMounted(async () => {
                  v-if="normalizedOrderStatus !== 'delayed'"
                  class="btn-checkout"
                  @click="confirmPayment"
-                 :disabled="loading || isReadOnlyStage || isPaymentActionLocked || isRoundOpen || !termsAccepted"
+                 :disabled="loading || isSubmitting || isReadOnlyStage || isPaymentActionLocked || isRoundOpen || !termsAccepted"
                >
                 {{
                   loading

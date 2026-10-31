@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360">
+  <rect width="1200" height="360" fill="#7c3aed"/>
+  <text x="600" y="155" text-anchor="middle" font-family="Arial, sans-serif" font-size="64" font-weight="700" fill="#ffffff">MEOWVERSE QA-P2</text>
+  <text x="600" y="235" text-anchor="middle" font-family="Arial, sans-serif" font-size="36" fill="#f5f3ff">TEST ENVIRONMENT ONLY</text>
+</svg>

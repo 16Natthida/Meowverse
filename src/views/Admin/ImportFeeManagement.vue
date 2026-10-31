@@ -70,7 +70,7 @@
               :key="item.key"
               :class="{
                 'row--filled': feeInputs[item.key] > 0,
-                'row--locked': item.isFeeLocked || !item.canEnterImportFee,
+                'row--locked': item.isFeeLocked || !item.canEnterImportFee || (hasSavedImportFee && !isEditMode),
               }"
             >
               <td class="cell-product">
@@ -111,7 +111,7 @@
               </td>
               <td class="num cell-price">{{ formatMoney(item.unit_price) }}</td>
               <td class="num">
-                <div v-if="item.isFeeLocked" class="fee-locked-chip">
+                <div v-if="isItemInputLocked(item)" class="fee-locked-chip">
                   <svg
                     width="14"
                     height="14"
@@ -130,14 +130,17 @@
                 </div>
                 <div v-else class="fee-input-wrap">
                   <span class="fee-prefix">฿</span>
-                  <!-- ลบ @input="onFeeInput(...)" ออก เพราะไม่ต้องซิงค์ข้ามแถวแล้ว -->
+                  <!-- รับค่าเงินบาทแบบทศนิยมได้สูงสุด 2 ตำแหน่ง -->
                   <input
                     type="text"
-                    inputmode="numeric"
+                    inputmode="decimal"
                     class="fee-input"
-                    v-model.number="feeInputs[item.key]"
-                    :disabled="saving || !item.canEnterImportFee"
-                    placeholder="0"
+                    v-model="feeInputs[item.key]"
+                    @input="onFeeInput(item.key, $event)"
+                    @blur="onFeeInputBlur(item.key)"
+                    :disabled="saving || !item.canEnterImportFee || (hasSavedImportFee && !isEditMode)"
+                    maxlength="13"
+                    placeholder="0.00"
                   />
                 </div>
               </td>
@@ -169,7 +172,24 @@
 
       <!-- Actions -->
       <div class="actions">
-        <button class="btn-save" @click="saveImportFees" :disabled="saving || loading">
+        <button
+          v-if="hasSavedImportFee && !isEditMode"
+          class="btn-edit"
+          type="button"
+          :disabled="saving || loading"
+          @click="requestEdit"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M12 20h9" />
+            <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z" />
+          </svg>
+          แก้ไขค่านำเข้า
+        </button>
+        <button
+          class="btn-save"
+          @click="saveImportFees"
+          :disabled="saving || loading || (hasSavedImportFee && !isEditMode)"
+        >
           <span v-if="saving" class="spinner spinner--sm" aria-hidden="true"></span>
           <svg
             v-else
@@ -274,6 +294,8 @@ const selectedRoundId = ref('')
 const feeInputs = ref({})
 const loading = ref(false)
 const saving = ref(false)
+const isEditMode = ref(false)
+const savedRoundKeys = ref(loadSavedRoundKeys())
 const successMessage = ref('')
 const errorMessage = ref('')
 const previewImage = ref(null)
@@ -294,6 +316,52 @@ function handleImagePreviewKeydown(e) {
 const selectedRound = computed(
   () => rounds.value.find((r) => r.round_key === selectedRoundId.value) || null,
 )
+
+function loadSavedRoundKeys() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('meowverse:import-fee-saved-rounds') || '[]')
+    return new Set(Array.isArray(saved) ? saved.map(String) : [])
+  } catch {
+    return new Set()
+  }
+}
+
+function rememberSavedRound(roundKey) {
+  if (!roundKey) return
+  const next = new Set(savedRoundKeys.value)
+  next.add(String(roundKey))
+  savedRoundKeys.value = next
+  localStorage.setItem('meowverse:import-fee-saved-rounds', JSON.stringify([...next]))
+}
+
+const hasSavedImportFee = computed(() => {
+  const roundKey = selectedRound.value?.round_key
+  const hasExistingFee = selectedRound.value?.products?.some(
+    (item) => Number(item.current_import_fee) > 0,
+  )
+  return Boolean(
+    selectedRound.value?.has_saved_import_fee ||
+      hasExistingFee ||
+      (roundKey && savedRoundKeys.value.has(String(roundKey))),
+  )
+})
+
+function isItemInputLocked(item) {
+  return item.isFeeLocked || !item.canEnterImportFee || (hasSavedImportFee.value && !isEditMode.value)
+}
+
+function requestEdit() {
+  if (!hasSavedImportFee.value || isEditMode.value) return
+
+  const confirmed = window.confirm(
+    'ยืนยันการแก้ไขค่านำเข้า? ค่าที่บันทึกไว้จะถูกแทนที่ด้วยค่าใหม่เมื่อกดบันทึก',
+  )
+  if (!confirmed) return
+
+  isEditMode.value = true
+  successMessage.value = ''
+  errorMessage.value = ''
+}
 
 function normalizeArrivalStatus(status) {
   const normalized = String(status || 'Pending').trim().toLowerCase()
@@ -333,11 +401,9 @@ const groupedProducts = computed(() => {
       arrival_status: arrivalStatus,
       arrival_group: arrivalStatus,
       hasReceivedQty: receivedQty > 0,
-      // รายการที่มี order_details.Import_fee บันทึกไว้แล้ว (ไม่ใช่ 0.00) ให้ล็อกถาวร
-      // ห้ามแก้ไข/บันทึกทับค่าเดิมอีก
-      isFeeLocked: Number(item.current_import_fee) > 0,
-      canEnterImportFee:
-        arrivalStatus === 'Arrived' && receivedQty >= orderedQty && !(Number(item.current_import_fee) > 0),
+      // รายการที่รับเข้าครบแล้วสามารถแก้ไขค่านำเข้าที่เคยบันทึกไว้ได้
+      canEnterImportFee: arrivalStatus === 'Arrived' && receivedQty >= orderedQty,
+      isFeeLocked: arrivalStatus !== 'Arrived' || receivedQty < orderedQty,
     }
   })
 })
@@ -385,12 +451,35 @@ function formatMoney(value) {
   return new Intl.NumberFormat('th-TH', {
     style: 'currency',
     currency: 'THB',
-    maximumFractionDigits: 0,
+    maximumFractionDigits: 2,
   }).format(Number(value) || 0)
+}
+
+function normalizeFeeInput(value) {
+  let normalized = String(value ?? '').replace(',', '.').replace(/[^\d.]/g, '')
+  const dotIndex = normalized.indexOf('.')
+
+  if (dotIndex >= 0) {
+    const integerPart = normalized.slice(0, dotIndex) || '0'
+    const decimalPart = normalized.slice(dotIndex + 1).replace(/\./g, '').slice(0, 2)
+    normalized = `${integerPart}.${decimalPart}`
+  }
+
+  return normalized
+}
+
+function onFeeInput(key, event) {
+  feeInputs.value[key] = normalizeFeeInput(event?.target?.value)
+}
+
+function onFeeInputBlur(key) {
+  const value = String(feeInputs.value[key] ?? '').trim()
+  if (!value || value === '.') feeInputs.value[key] = '0'
 }
 
 async function fetchRounds() {
   loading.value = true
+  isEditMode.value = false
   errorMessage.value = ''
   try {
     const res = await fetch(`${API_BASE_URL}/admin/preorder-import-fee/rounds`, {
@@ -420,12 +509,12 @@ async function fetchRounds() {
 
 // เซ็ตค่า Input ให้สอดคล้องกับสินค้าที่ถูกจัดกลุ่มแล้ว
 watch(selectedRoundId, () => {
+  isEditMode.value = false
   feeInputs.value = {}
   if (selectedRound.value) {
     for (const item of groupedProducts.value) {
-      if (item.isFeeLocked) continue
       const fee = Number(item.current_import_fee) || 0
-      feeInputs.value[item.key] = item.canEnterImportFee && fee > 0 ? fee : 0
+      feeInputs.value[item.key] = item.canEnterImportFee ? String(fee) : ''
     }
   }
   successMessage.value = ''
@@ -451,12 +540,13 @@ onUnmounted(() => {
 // บันทึกค่านำเข้าโดยดึงจาก prod_id เป็นหลัก
 async function saveImportFees() {
   if (!selectedRound.value) return
+  if (hasSavedImportFee.value && !isEditMode.value) return
   errorMessage.value = ''
   successMessage.value = ''
 
   const fees = []
   for (const item of groupedProducts.value) {
-    if (item.isFeeLocked) {
+    if (!item.canEnterImportFee) {
       // รายการที่มี order_details.Import_fee บันทึกไว้แล้ว (ไม่ใช่ 0.00):
       // ต้อง "ส่งค่าเดิมกลับไปเสมอ" ห้ามข้ามรายการนี้ไปเฉยๆ เพราะ backend จะถือว่า
       // รายการที่ไม่ถูกส่งมาในลิสต์นี้ = ให้เคลียร์ค่าทิ้ง (กลายเป็น 0.00) ทำให้ข้อมูลเดิมหาย
@@ -472,7 +562,7 @@ async function saveImportFees() {
     }
 
     const val = item.canEnterImportFee ? feeInputs.value[item.key] : 0
-    if (val === '' || val == null || isNaN(val) || Number(val) < 0) {
+    if (val === '' || val == null || val === '.' || isNaN(Number(val)) || Number(val) < 0) {
       errorMessage.value = 'กรุณากรอกค่านำเข้าทุกแถวที่สามารถกรอกได้ (ต้องไม่ติดลบ)'
       return
     }
@@ -481,7 +571,7 @@ async function saveImportFees() {
       key: item.key,
       prod_id: item.prod_id,
       flavor: item.flavor || null,
-      import_fee: item.canEnterImportFee ? Number(val) : 0,
+      import_fee: Math.round(Number(val) * 100) / 100,
     })
   }
 
@@ -505,6 +595,8 @@ async function saveImportFees() {
     }
 
     successMessage.value = data.message || 'บันทึกค่านำเข้าเรียบร้อย'
+    rememberSavedRound(selectedRound.value.round_key)
+    isEditMode.value = false
     await fetchRounds()
   } catch (e) {
     errorMessage.value = translateError(e)
@@ -957,6 +1049,33 @@ async function saveImportFees() {
     box-shadow 0.15s;
   box-shadow: 0 2px 8px rgba(124, 58, 237, 0.25);
 }
+
+.btn-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0.55rem 1.25rem;
+  background: #fff;
+  color: #7c3aed;
+  border: 1.5px solid #c4b5fd;
+  border-radius: 9px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    transform 0.1s;
+}
+.btn-edit:hover:not(:disabled) {
+  background: #f5f3ff;
+  border-color: #8b5cf6;
+  transform: translateY(-1px);
+}
+.btn-edit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 .btn-save:hover:not(:disabled) {
   background: #6d28d9;
   box-shadow: 0 4px 14px rgba(124, 58, 237, 0.35);
@@ -1078,6 +1197,10 @@ async function saveImportFees() {
     padding: 1rem;
   }
   .btn-save {
+    width: 100%;
+    justify-content: center;
+  }
+  .btn-edit {
     width: 100%;
     justify-content: center;
   }
