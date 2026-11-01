@@ -1047,6 +1047,14 @@ router.get('/', async (req, res) => {
               ), 0) AS refund_item_count
        FROM orders
        WHERE user_id = ?
+         -- ซ่อนออเดอร์ตกหล่นที่ไม่เหลือสินค้าแล้ว (ของถูกย้ายไปออเดอร์ใบอื่นหมด)
+         AND NOT (
+           COALESCE(split_parent_order_id, 0) > 0
+           AND NOT EXISTS (
+             SELECT 1 FROM order_details od_live
+             WHERE od_live.order_id = orders.order_id AND od_live.qty > 0
+           )
+         )
        ORDER BY Order_date DESC`,
       [user_id],
     )

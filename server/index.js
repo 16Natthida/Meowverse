@@ -2268,6 +2268,17 @@ async function ensureAdminSchema() {
     ADD COLUMN IF NOT EXISTS split_kind VARCHAR(20) NULL
   `)
 
+  // ปิดออเดอร์ตกหล่นที่ไม่เหลือสินค้าแล้ว (ของถูกย้ายไปออเดอร์ตกหล่นใบใหม่/ออเดอร์คืนเงินหมด)
+  await pool.query(`
+    UPDATE orders o
+    SET o.status = 'Cancelled', o.total_amount = 0
+    WHERE COALESCE(o.split_parent_order_id, 0) > 0
+      AND COALESCE(o.split_kind, 'delayed') <> 'refund'
+      AND LOWER(COALESCE(o.status, '')) NOT IN ('cancelled', 'shipped', 'delivered')
+      AND EXISTS (SELECT 1 FROM order_details od WHERE od.order_id = o.order_id)
+      AND NOT EXISTS (SELECT 1 FROM order_details od WHERE od.order_id = o.order_id AND od.qty > 0)
+  `).catch((error) => console.error('[migrate] close empty split orders failed:', error.message))
+
   // ครั้งที่แยกออเดอร์ตกหล่น (1 = แยกครั้งแรก, 2 = แยกเพิ่มครั้งที่ 2 ...) ใช้แยกกลุ่มในหน้ากรอกค่านำเข้า
   await pool.query(`
     ALTER TABLE orders
@@ -7730,13 +7741,24 @@ app.post('/api/admin/refunds/items', authenticateToken, requireAdmin, async (req
       let summary = await recalculateOrderAfterShortageSplit(connection, orderId)
       // ออเดอร์ที่ทุกรายการถูกย้ายไปคืนเงินหมดแล้ว (เหลือ qty 0) ไม่ควรขึ้นว่าพร้อมส่ง
       const [qtyRows] = await connection.query(
-        'SELECT COALESCE(SUM(qty), 0) AS total_qty FROM order_details WHERE order_id = ?',
+        `SELECT COALESCE(SUM(od.qty), 0) AS total_qty,
+                MAX(COALESCE(o.split_parent_order_id, 0)) AS split_parent_order_id,
+                MAX(COALESCE(o.split_kind, '')) AS split_kind
+         FROM orders o LEFT JOIN order_details od ON od.order_id = o.order_id
+         WHERE o.order_id = ?`,
         [orderId],
       )
       if (summary && Number(qtyRows[0]?.total_qty || 0) === 0 &&
+          String(qtyRows[0]?.split_kind || '').toLowerCase() !== 'refund' &&
           !['shipped', 'delivered', 'cancelled'].includes(String(summary.status || '').toLowerCase())) {
-        await connection.query(`UPDATE orders SET status = 'Missing' WHERE order_id = ?`, [orderId])
-        summary = { ...summary, status: 'Missing' }
+        // ออเดอร์ตกหล่นที่ว่างแล้ว = ปิดใบ (ของย้ายไปออเดอร์คืนเงินหมดแล้ว)
+        // ออเดอร์หลักที่ว่างแล้ว = Missing (เก็บไว้เพราะมีประวัติการชำระเงิน)
+        const nextStatus = Number(qtyRows[0]?.split_parent_order_id || 0) > 0 ? 'Cancelled' : 'Missing'
+        await connection.query(`UPDATE orders SET status = ?, total_amount = 0 WHERE order_id = ?`, [
+          nextStatus,
+          orderId,
+        ])
+        summary = { ...summary, status: nextStatus, total_amount: 0 }
       }
       const refundStatus = await syncOrderRefundStatus(connection, orderId, req.user?.id)
       if (summary) orders.push({ ...summary, refund_status: refundStatus })
