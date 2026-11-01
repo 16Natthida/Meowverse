@@ -4627,6 +4627,97 @@ app.get(
   },
 )
 
+// ─────────────────────────────────────────────
+// ร่างค่านำเข้า: กรอกเก็บไว้ได้หลายครั้ง (ยังไม่กระจายยอด/ไม่ยืนยัน) แล้วค่อยกดส่งเมื่อกรอกครบ
+// GET/PUT/DELETE /api/admin/preorder-import-fee/:roundId/draft?fee_segment=Main
+// ─────────────────────────────────────────────
+async function ensureImportFeeDraftTable(db) {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS preorder_import_fee_drafts (
+      round_id INT NOT NULL,
+      fee_segment VARCHAR(20) NOT NULL,
+      draft_json LONGTEXT NOT NULL,
+      updated_by INT NULL,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (round_id, fee_segment)
+    ) ENGINE=InnoDB
+  `)
+}
+
+function readDraftParams(req) {
+  const roundId = Number(req.params.roundId)
+  const feeSegment = String(req.query?.fee_segment || req.body?.fee_segment || 'Main').trim()
+  const validSegment = feeSegment === 'Main' || isMissingFeeSegment(feeSegment)
+  return { roundId, feeSegment, valid: Number.isInteger(roundId) && roundId > 0 && validSegment }
+}
+
+app.get('/api/admin/preorder-import-fee/:roundId/draft', authenticateToken, requireAdmin, async (req, res) => {
+  const { roundId, feeSegment, valid } = readDraftParams(req)
+  if (!valid) return res.status(400).json({ success: false, message: 'round_id / fee_segment ไม่ถูกต้อง' })
+  try {
+    await ensureImportFeeDraftTable(pool)
+    const [rows] = await pool.query(
+      `SELECT d.draft_json, d.updated_at, d.updated_by, a.username AS updated_by_name
+       FROM preorder_import_fee_drafts d
+       LEFT JOIN accounts a ON a.user_id = d.updated_by
+       WHERE d.round_id = ? AND d.fee_segment = ?
+       LIMIT 1`,
+      [roundId, feeSegment],
+    )
+    if (rows.length === 0) return res.json({ success: true, draft: null })
+    let draft = null
+    try { draft = JSON.parse(rows[0].draft_json) } catch { draft = null }
+    res.json({
+      success: true,
+      draft,
+      updated_at: rows[0].updated_at,
+      updated_by_name: rows[0].updated_by_name || null,
+    })
+  } catch (error) {
+    sendServerError(res, error, 'message')
+  }
+})
+
+app.put('/api/admin/preorder-import-fee/:roundId/draft', authenticateToken, requireAdmin, async (req, res) => {
+  const { roundId, feeSegment, valid } = readDraftParams(req)
+  if (!valid) return res.status(400).json({ success: false, message: 'round_id / fee_segment ไม่ถูกต้อง' })
+  const draft = req.body?.draft
+  if (!draft || typeof draft !== 'object' || Array.isArray(draft)) {
+    return res.status(400).json({ success: false, message: 'draft is required' })
+  }
+  const draftJson = JSON.stringify(draft)
+  if (draftJson.length > 1_000_000) {
+    return res.status(413).json({ success: false, message: 'ร่างมีขนาดใหญ่เกินไป' })
+  }
+  try {
+    await ensureImportFeeDraftTable(pool)
+    await pool.query(
+      `INSERT INTO preorder_import_fee_drafts (round_id, fee_segment, draft_json, updated_by, updated_at)
+       VALUES (?, ?, ?, ?, NOW())
+       ON DUPLICATE KEY UPDATE draft_json = VALUES(draft_json), updated_by = VALUES(updated_by), updated_at = NOW()`,
+      [roundId, feeSegment, draftJson, req.user?.id || null],
+    )
+    res.json({ success: true, message: 'บันทึกร่างเรียบร้อย', updated_at: new Date().toISOString() })
+  } catch (error) {
+    sendServerError(res, error, 'message')
+  }
+})
+
+app.delete('/api/admin/preorder-import-fee/:roundId/draft', authenticateToken, requireAdmin, async (req, res) => {
+  const { roundId, feeSegment, valid } = readDraftParams(req)
+  if (!valid) return res.status(400).json({ success: false, message: 'round_id / fee_segment ไม่ถูกต้อง' })
+  try {
+    await ensureImportFeeDraftTable(pool)
+    await pool.query('DELETE FROM preorder_import_fee_drafts WHERE round_id = ? AND fee_segment = ?', [
+      roundId,
+      feeSegment,
+    ])
+    res.json({ success: true })
+  } catch (error) {
+    sendServerError(res, error, 'message')
+  }
+})
+
 // 1B. PUT /api/admin/preorder-import-fee/:roundId
 app.put(
   '/api/admin/preorder-import-fee/:roundId',
@@ -4672,6 +4763,7 @@ app.put(
           PRIMARY KEY (round_id, fee_segment)
         ) ENGINE=InnoDB
       `)
+      await ensureImportFeeDraftTable(connection)
       await connection.beginTransaction()
 
       // Update import fee values by the admin-selected allocation mode. Flavor
@@ -5100,6 +5192,11 @@ app.put(
         `INSERT INTO preorder_import_fee_saves (round_id, fee_segment, saved_at)
          VALUES (?, ?, NOW())
          ON DUPLICATE KEY UPDATE saved_at = NOW()`,
+        [roundId, feeSegment],
+      )
+      // ส่งจริงแล้ว ร่างของกลุ่มนี้ไม่ต้องใช้อีก
+      await connection.query(
+        'DELETE FROM preorder_import_fee_drafts WHERE round_id = ? AND fee_segment = ?',
         [roundId, feeSegment],
       )
 
