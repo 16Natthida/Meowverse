@@ -245,8 +245,19 @@ function formatOrderIds(ids) {
 }
 
 // แยกได้หลายครั้ง: แม้เคยแยกเป็นออเดอร์ตกหล่นแล้ว ถ้ายังมีของค้างก็แยกต่อเป็นออเดอร์ตกหล่นใบใหม่ได้
+// จำนวนที่ค้างอยู่ในออเดอร์ตกหล่น (ไม่ผูกกับการยืนยันค่านำเข้ารอบหลัก)
+function getSplitOutstandingQty(item) {
+  return Math.max(Number(item?.split_delayed_outstanding_qty) || 0, 0)
+}
+
+// จำนวนที่แยกได้ครั้งนี้: ถ้ายืนยันค่านำเข้ารอบหลักแล้ว แยกได้เฉพาะส่วนที่อยู่ในออเดอร์ตกหล่น
+function getSplittableQty(item) {
+  if (!item || isArrivedItem(item)) return 0
+  return isFeeLocked(item) ? getSplitOutstandingQty(item) : getOutstandingQty(item)
+}
+
 function canSelectForSplit(item) {
-  return Boolean(item) && !isArrivedItem(item) && getOutstandingQty(item) > 0 && !isFeeLocked(item)
+  return getSplittableQty(item) > 0
 }
 
 function getSplitTimes(item) {
@@ -256,8 +267,10 @@ function getSplitTimes(item) {
 function splitDisabledReason(item) {
   if (isRefundedItem(item)) return 'คืนเงินแล้ว — รับเข้าเพิ่มไม่ได้'
   if (isArrivedItem(item)) return 'รับสินค้าครบแล้ว'
-  if (isFeeLocked(item)) return 'ยืนยันค่านำเข้าแล้ว — จัดการที่หน้าสินค้าขาด/ตกหล่น'
   if (getOutstandingQty(item) <= 0) return 'ไม่มีจำนวนคงค้าง'
+  if (isFeeLocked(item) && getSplitOutstandingQty(item) <= 0) {
+    return 'ยืนยันค่านำเข้าแล้ว — จัดการที่หน้าสินค้าขาด/ตกหล่น'
+  }
   if (item?.is_split_delayed) return 'เคยแยกแล้ว — เลือกเพื่อแยกเป็นออเดอร์ตกหล่นใบใหม่อีกครั้ง'
   return 'เลือกเพื่อแยกเป็นออเดอร์ตกหล่น'
 }
@@ -270,7 +283,7 @@ const selectedSplitItems = computed(() => {
 })
 
 const selectedSplitQty = computed(() =>
-  selectedSplitItems.value.reduce((sum, item) => sum + getOutstandingQty(item), 0),
+  selectedSplitItems.value.reduce((sum, item) => sum + getSplittableQty(item), 0),
 )
 
 const allSplitSelected = computed(
@@ -303,7 +316,7 @@ async function splitSelectedAsMissing() {
   const summary = selectedSplitItems.value
     .map(
       (item) =>
-        `• ${item.product_name}${item.flavor ? ` (${item.flavor})` : ''}: ค้าง ${getOutstandingQty(item)} ชิ้น` +
+        `• ${item.product_name}${item.flavor ? ` (${item.flavor})` : ''}: ค้าง ${getSplittableQty(item)} ชิ้น` +
         (item.is_split_delayed ? ' (เคยแยกแล้ว → แยกใหม่อีกครั้ง)' : ''),
     )
     .join('\n')
@@ -340,7 +353,7 @@ async function splitSelectedAsMissing() {
     }
     const childIds = (data.split_order_ids || []).map((id) => `#${id}`).join(', ')
     intakeMessage.value =
-      `แยกเป็นออเดอร์ตกหล่นแล้ว ${data.split_count} รายการจาก ${data.parent_order_count} ออเดอร์` +
+      `แยกเป็นออเดอร์ตกหล่น${data.split_seq > 1 ? ` (ครั้งที่ ${data.split_seq})` : ''} แล้ว ${data.split_count} รายการจาก ${data.parent_order_count} ออเดอร์` +
       (childIds ? ` → ออเดอร์ตกหล่น ${childIds}` : '') +
       (data.skipped_count ? ` · ข้าม ${data.skipped_count} รายการที่รับครบ/แยกไปแล้ว` : '')
   } catch (error) {

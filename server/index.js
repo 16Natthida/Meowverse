@@ -2268,6 +2268,12 @@ async function ensureAdminSchema() {
     ADD COLUMN IF NOT EXISTS split_kind VARCHAR(20) NULL
   `)
 
+  // ครั้งที่แยกออเดอร์ตกหล่น (1 = แยกครั้งแรก, 2 = แยกเพิ่มครั้งที่ 2 ...) ใช้แยกกลุ่มในหน้ากรอกค่านำเข้า
+  await pool.query(`
+    ALTER TABLE orders
+    ADD COLUMN IF NOT EXISTS split_seq INT NULL
+  `)
+
   await pool.query(`
     ALTER TABLE orders
     MODIFY COLUMN status ENUM(
@@ -4323,11 +4329,25 @@ function getImportFeeDisplayStatus(row) {
 // Delayed/missing items stay linked to the original preorder round. The
 // import-fee page creates a virtual missing segment for the child order;
 // no separate preorder round is created in the database.
+// ตกหล่นครั้งที่ 1 = 'Missing' (คงชื่อเดิมไว้ให้เข้ากับข้อมูลที่ยืนยันไปแล้ว), ครั้งที่ 2 ขึ้นไป = 'Missing-2', 'Missing-3' ...
 function getImportFeeSegment(row) {
-  return Number(row.split_parent_order_id || 0) > 0 &&
+  if (
+    Number(row.split_parent_order_id || 0) > 0 &&
     String(row.split_kind || '').toLowerCase() !== 'refund'
-    ? 'Missing'
-    : 'Main'
+  ) {
+    const seq = Number(row.split_seq) || 1
+    return seq <= 1 ? 'Missing' : `Missing-${seq}`
+  }
+  return 'Main'
+}
+
+function isMissingFeeSegment(segment) {
+  return /^Missing(-\d+)?$/.test(String(segment || ''))
+}
+
+function getMissingSegmentSeq(segment) {
+  const match = /^Missing-(\d+)$/.exec(String(segment || ''))
+  return match ? Number(match[1]) : 1
 }
 
 function normalizeImportFeeMode(value) {
@@ -4421,7 +4441,8 @@ app.get(
         MIN(od.Price) AS unit_price,
         COALESCE(SUM(od.Import_fee), 0) AS import_fee,
         CASE
-          WHEN COALESCE(o.split_parent_order_id, 0) > 0 AND COALESCE(o.split_kind, '') <> 'refund' THEN 'Missing'
+          WHEN COALESCE(o.split_parent_order_id, 0) > 0 AND COALESCE(o.split_kind, '') <> 'refund'
+            THEN CASE WHEN COALESCE(o.split_seq, 1) <= 1 THEN 'Missing' ELSE CONCAT('Missing-', o.split_seq) END
           ELSE 'Main'
         END AS fee_segment,
         COALESCE(
@@ -4476,7 +4497,8 @@ app.get(
         END,
         o.status,
         CASE
-          WHEN COALESCE(o.split_parent_order_id, 0) > 0 AND COALESCE(o.split_kind, '') <> 'refund' THEN 'Missing'
+          WHEN COALESCE(o.split_parent_order_id, 0) > 0 AND COALESCE(o.split_kind, '') <> 'refund'
+            THEN CASE WHEN COALESCE(o.split_seq, 1) <= 1 THEN 'Missing' ELSE CONCAT('Missing-', o.split_seq) END
           ELSE 'Main'
         END
       ORDER BY pr.round_id DESC, od.prod_id ASC, NULLIF(TRIM(od.pack_size), '') ASC, od.flavor ASC
@@ -4498,7 +4520,8 @@ app.get(
           od.arrival_status,
           o.status AS order_status,
           COALESCE(o.split_parent_order_id, 0) AS split_parent_order_id,
-          COALESCE(o.split_kind, '') AS split_kind
+          COALESCE(o.split_kind, '') AS split_kind,
+          COALESCE(o.split_seq, 1) AS split_seq
         FROM order_details od
         JOIN orders o ON o.order_id = od.order_id
         LEFT JOIN products p ON p.prod_id = od.prod_id
@@ -4529,8 +4552,10 @@ app.get(
             round_id: row.round_id,
             round_key: roundKey,
             round_name:
-              feeSegment === 'Missing'
-                ? `${row.round_name} (ตกหล่น)`
+              isMissingFeeSegment(feeSegment)
+                ? getMissingSegmentSeq(feeSegment) > 1
+                  ? `${row.round_name} (ตกหล่น ครั้งที่ ${getMissingSegmentSeq(feeSegment)})`
+                  : `${row.round_name} (ตกหล่น)`
                 : arrivalStatus === 'Arrived'
                   ? row.round_name
                   : `${row.round_name} (${arrivalStatus})`,
@@ -4539,6 +4564,7 @@ app.get(
             end_date: row.end_date,
             arrival_status: arrivalStatus,
             fee_segment: feeSegment,
+            split_seq: isMissingFeeSegment(feeSegment) ? getMissingSegmentSeq(feeSegment) : 0,
             has_saved_import_fee: savedFeeKeys.has(roundKey),
             requires_admin_confirmation: legacyConfirmationKeys.has(roundKey),
             products: [],
@@ -4577,7 +4603,13 @@ app.get(
           fee_segment: feeSegment,
         })
       }
-      res.json(Array.from(roundMap.values()))
+      // เรียง: รอบใหม่ก่อน, ในรอบเดียวกัน รอบหลัก → ตกหล่น → ตกหล่นครั้งที่ 2 → ...
+      const segmentOrder = (round) => (isMissingFeeSegment(round.fee_segment) ? round.split_seq : 0)
+      res.json(
+        Array.from(roundMap.values()).sort(
+          (a, b) => Number(b.round_id) - Number(a.round_id) || segmentOrder(a) - segmentOrder(b),
+        ),
+      )
     } catch (error) {
       sendServerError(res, error, 'message')
     }
@@ -4611,9 +4643,10 @@ app.put(
     // Only an explicit Arrived filter limits allocation rows; Pending/Delayed
     // are still allowed to trigger the one-time missing check.
     const segment = requestedSegment === 'Arrived' ? 'Arrived' : null
-    const feeSegment = ['Main', 'Missing'].includes(requestedFeeSegment)
-      ? requestedFeeSegment
-      : 'Main'
+    const feeSegment =
+      requestedFeeSegment === 'Main' || isMissingFeeSegment(requestedFeeSegment)
+        ? requestedFeeSegment
+        : 'Main'
     if (!Array.isArray(fees) || fees.length === 0) {
       return res.status(400).json({ success: false, message: 'fees array is required' })
     }
@@ -4641,6 +4674,7 @@ app.put(
           o.status AS order_status,
           COALESCE(o.split_parent_order_id, 0) AS split_parent_order_id,
           COALESCE(o.split_kind, '') AS split_kind,
+          COALESCE(o.split_seq, 1) AS split_seq,
           p.flavors AS product_flavors
          FROM order_details od
          JOIN orders o ON o.order_id = od.order_id
@@ -4886,7 +4920,7 @@ app.put(
                AND od.prod_id = ?
                AND od.item_type = 'preorder'
                AND od.qty > COALESCE(od.received_qty, 0)
-               AND NOT (COALESCE(o.split_parent_order_id, 0) > 0 AND COALESCE(o.split_kind, '') = 'refund')
+               AND COALESCE(o.split_parent_order_id, 0) = 0
              FOR UPDATE`,
             [roundId, prodId],
           )
@@ -6149,6 +6183,8 @@ app.post(
            od.qty AS ordered_qty,
            COALESCE(od.received_qty, 0) AS received_qty,
            COALESCE(od.arrival_status, 'Pending') AS arrival_status,
+           COALESCE(od.refund_status, 'pending') AS refund_status,
+           COALESCE(o.split_parent_order_id, 0) AS split_parent_order_id,
            o.total_amount,
            o.status AS order_status,
            o.Order_date AS order_date,
@@ -6223,15 +6259,27 @@ app.post(
         lineGroups.get(lineKey).push(detail)
       }
 
-      // A confirmed product is closed for normal intake.  Its later stock
-      // must go through the dedicated missing-receipt endpoint.
+      // รายการในออเดอร์หลักที่ยืนยันค่านำเข้าแล้ว/ถูกตั้งเป็นขาด (Missing) ถูกปิดสำหรับการรับปกติ
+      // ต้องใช้ขั้นตอนรับสินค้าตกหล่น — แต่รายการในออเดอร์ตกหล่น (แยกออกมาแล้ว) ยังรับเข้าได้ตามปกติ
+      // เพราะมีค่านำเข้าของรอบตกหล่นแยกต่างหาก
+      const isProtectedIntakeDetail = (detail) => {
+        const arrival = String(detail.arrival_status || '').toLowerCase()
+        if (arrival === 'arrived') return false
+        if (Number(detail.split_parent_order_id || 0) > 0) {
+          return String(detail.refund_status || '').toLowerCase() === 'paid'
+        }
+        return confirmedProductIds.has(Number(detail.prod_id)) || arrival === 'missing'
+      }
       for (const [lineKey, lineRequest] of requestMap.entries()) {
         if (!lineRequest || lineRequest.mode !== 'increment' || lineRequest.qty <= 0) continue
-        const lineDetails = lineGroups.get(lineKey)
-        if (lineDetails?.some((detail) => (
-          confirmedProductIds.has(Number(detail.prod_id)) ||
-          String(detail.arrival_status || '').toLowerCase() === 'missing'
-        ))) {
+        const lineDetails = lineGroups.get(lineKey) || []
+        const hasReceivableDetail = lineDetails.some(
+          (detail) =>
+            String(detail.arrival_status || '').toLowerCase() !== 'arrived' &&
+            !isProtectedIntakeDetail(detail) &&
+            (Number(detail.ordered_qty) || 0) > (Number(detail.received_qty) || 0),
+        )
+        if (!hasReceivableDetail && lineDetails.some(isProtectedIntakeDetail)) {
           await connection.rollback()
           return res.status(409).json({
             error: 'สินค้านี้ยืนยันค่านำเข้าแล้ว กรุณาใช้ขั้นตอนรับสินค้าตกหล่น',
@@ -6245,10 +6293,14 @@ app.post(
       let totalExcessQty = 0
 
       for (const [lineKey, lineDetails] of lineGroups.entries()) {
-        const totalOrderedForLine = lineDetails.reduce(
-          (sum, detail) => sum + Math.max(0, Number(detail.ordered_qty) || 0),
-          0,
-        )
+        // ความจุที่รับได้ = ยอดที่ล็อกไว้แล้ว (Arrived / ออเดอร์หลักที่ปิดรับ) + จำนวนสั่งของรายการที่ยังรับได้
+        const totalOrderedForLine = lineDetails.reduce((sum, detail) => {
+          const ordered = Math.max(0, Number(detail.ordered_qty) || 0)
+          const locked =
+            String(detail.arrival_status || '').toLowerCase() === 'arrived' ||
+            isProtectedIntakeDetail(detail)
+          return sum + (locked ? Math.min(Math.max(0, Number(detail.received_qty) || 0), ordered) : ordered)
+        }, 0)
         // ยอดที่รับไว้แล้วจริงในฐานข้อมูล (อ่านหลังล็อกรอบ จึงเป็นค่าล่าสุด)
         const currentReceivedForLine = lineDetails.reduce(
           (sum, detail) =>
@@ -6269,7 +6321,9 @@ app.post(
           requestedReceived = lineRequest.qty
         }
         const arrivedDetails = lineDetails.filter(
-          (detail) => String(detail.arrival_status || '').toLowerCase() === 'arrived',
+          (detail) =>
+            String(detail.arrival_status || '').toLowerCase() === 'arrived' ||
+            isProtectedIntakeDetail(detail),
         )
         const immutableArrivedQty = arrivedDetails.reduce(
           (sum, detail) =>
@@ -6293,7 +6347,9 @@ app.post(
         }
 
         const editableDetails = lineDetails.filter(
-          (detail) => String(detail.arrival_status || '').toLowerCase() !== 'arrived',
+          (detail) =>
+            String(detail.arrival_status || '').toLowerCase() !== 'arrived' &&
+            !isProtectedIntakeDetail(detail),
         )
 
         // Preserve existing quantities for editable details before allocating
@@ -6335,9 +6391,13 @@ app.post(
           // still waiting for receipt, not a missing item. Existing missing
           // rows from older rounds remain protected and use the dedicated
           // late-receipt flow.
-          const feeConfirmed = confirmedProductIds.has(Number(detail.prod_id))
-          const existingMissing = String(detail.arrival_status || '').toLowerCase() === 'missing'
-          const existingDelayed = String(detail.arrival_status || '').toLowerCase() === 'delayed'
+          // ออเดอร์ตกหล่นไม่อยู่ใต้การยืนยันค่านำเข้ารอบหลัก: ของยังไม่ครบ = รอของ
+          const isSplitChild = Number(detail.split_parent_order_id || 0) > 0
+          const feeConfirmed = !isSplitChild && confirmedProductIds.has(Number(detail.prod_id))
+          const existingMissing =
+            !isSplitChild && String(detail.arrival_status || '').toLowerCase() === 'missing'
+          const existingDelayed =
+            isSplitChild || String(detail.arrival_status || '').toLowerCase() === 'delayed'
           const arrivalStatus = finalReceivedQty >= orderedQty
             ? 'Arrived'
             : feeConfirmed || existingMissing
@@ -7115,7 +7175,7 @@ async function recalculateOrderAfterShortageSplit(connection, orderId) {
 }
 
 // สร้างออเดอร์ตกหล่นใบใหม่ (ไม่ใช้ใบเดิมซ้ำ) เพื่อให้แยกได้หลายครั้ง: ตกหล่นครั้งที่ 1, 2, 3 ...
-async function createDelayedChildOrder(connection, rootOrderId) {
+async function createDelayedChildOrder(connection, rootOrderId, splitSeq = 1) {
   const [rootRows] = await connection.query(
     `SELECT user_id, Order_type, deadline FROM orders WHERE order_id = ? LIMIT 1`,
     [rootOrderId],
@@ -7126,9 +7186,9 @@ async function createDelayedChildOrder(connection, rootOrderId) {
   const [insertResult] = await connection.query(
     `INSERT INTO orders
        (user_id, total_amount, status, Order_type, deadline, import_fee_total,
-        split_parent_order_id, split_kind)
-     VALUES (?, 0, 'Delayed', ?, ?, 0, ?, 'delayed')`,
-    [root.user_id, root.Order_type, root.deadline || null, rootOrderId],
+        split_parent_order_id, split_kind, split_seq)
+     VALUES (?, 0, 'Delayed', ?, ?, 0, ?, 'delayed', ?)`,
+    [root.user_id, root.Order_type, root.deadline || null, rootOrderId, splitSeq],
   )
   const childOrderId = Number(insertResult.insertId)
 
@@ -7197,6 +7257,7 @@ app.post(
                 COALESCE(od.arrival_status, 'Pending') AS arrival_status,
                 COALESCE(o.split_parent_order_id, 0) AS split_parent_order_id,
                 COALESCE(o.split_kind, '') AS split_kind,
+                COALESCE(od.refund_status, 'pending') AS refund_status,
                 od.item_type, od.preorder_round_id,
                 p.prod_name AS product_name,
                 EXISTS (
@@ -7231,15 +7292,9 @@ app.post(
         return res.status(404).json({ error: 'ไม่พบรายการที่เลือกในรอบนี้ (ข้อมูลอาจเปลี่ยนไปแล้ว กรุณารีเฟรช)' })
       }
 
-      // ยืนยันค่านำเข้าแล้ว = ต้องไปจัดการที่หน้าสินค้าขาด/ตกหล่น
-      const blocked = selectedDetails.filter((detail) => Number(detail.fee_confirmed) === 1)
-      if (blocked.length > 0) {
-        await connection.rollback()
-        const names = [...new Set(blocked.map((detail) => detail.product_name || `#${detail.prod_id}`))]
-        return res.status(409).json({
-          error: `สินค้าต่อไปนี้ยืนยันค่านำเข้าแล้ว ต้องจัดการผ่านหน้าสินค้าขาด/ตกหล่น: ${names.join(', ')}`,
-        })
-      }
+      // ออเดอร์หลักที่ยืนยันค่านำเข้าแล้ว = ต้องจัดการที่หน้าสินค้าขาด/ตกหล่น (ข้าม)
+      // ส่วนรายการในออเดอร์ตกหล่นแยกต่อได้เสมอ (ยกเว้นที่โอนเงินคืนแล้ว)
+      const blockedNames = new Set()
 
       const splitResults = []
       const touchedParentOrders = new Set()
@@ -7248,14 +7303,36 @@ app.post(
       let skippedCount = 0
       let movedQty = 0
 
+      // การกดแยกแต่ละครั้ง = ตกหล่นครั้งใหม่ของรอบนี้ (ออเดอร์ตกหล่นเก่าที่ยังไม่มีเลข นับเป็นครั้งที่ 1)
+      const [seqRows] = await connection.query(
+        `SELECT MAX(COALESCE(o.split_seq, 1)) AS max_seq
+         FROM orders o
+         JOIN order_details od ON od.order_id = o.order_id
+         WHERE od.preorder_round_id = ?
+           AND COALESCE(o.split_parent_order_id, 0) > 0
+           AND COALESCE(o.split_kind, 'delayed') <> 'refund'`,
+        [roundId],
+      )
+      const splitSeq = seqRows[0]?.max_seq == null ? 1 : Number(seqRows[0].max_seq) + 1
+
       for (const detail of selectedDetails) {
         const orderedQty = Math.max(Number(detail.ordered_qty) || 0, 0)
         const receivedQty = Math.min(Math.max(Number(detail.received_qty) || 0, 0), orderedQty)
         const shortageQty = Math.max(orderedQty - receivedQty, 0)
         const arrival = String(detail.arrival_status || '').toLowerCase()
 
-        // ข้ามรายการที่รับครบแล้ว / ไม่มีจำนวน / อยู่ในขั้นตอนคืนเงิน (Missing)
-        if (shortageQty <= 0 || arrival === 'arrived' || arrival === 'missing') {
+        const inSplitChild = Number(detail.split_parent_order_id) > 0
+        if (shortageQty <= 0 || arrival === 'arrived') {
+          skippedCount += 1
+          continue
+        }
+        if (inSplitChild) {
+          if (String(detail.refund_status || '').toLowerCase() === 'paid') {
+            skippedCount += 1
+            continue
+          }
+        } else if (Number(detail.fee_confirmed) === 1 || arrival === 'missing') {
+          blockedNames.add(detail.product_name || `#${detail.prod_id}`)
           skippedCount += 1
           continue
         }
@@ -7267,7 +7344,7 @@ app.post(
           ? Number(detail.split_parent_order_id)
           : sourceOrderId
         if (!childByRoot.has(rootOrderId)) {
-          childByRoot.set(rootOrderId, await createDelayedChildOrder(connection, rootOrderId))
+          childByRoot.set(rootOrderId, await createDelayedChildOrder(connection, rootOrderId, splitSeq))
         }
         const childOrderId = childByRoot.get(rootOrderId)
         const unitPrice = Number(detail.unit_price) || 0
@@ -7333,8 +7410,10 @@ app.post(
 
       if (splitResults.length === 0) {
         await connection.rollback()
-        return res.status(400).json({
-          error: 'รายการที่เลือกรับครบแล้ว หรือถูกแยกเป็นออเดอร์ตกหล่นไปแล้ว',
+        return res.status(blockedNames.size > 0 ? 409 : 400).json({
+          error: blockedNames.size > 0
+            ? `สินค้าต่อไปนี้ยืนยันค่านำเข้าแล้ว ต้องจัดการผ่านหน้าสินค้าขาด/ตกหล่น: ${[...blockedNames].join(', ')}`
+            : 'รายการที่เลือกรับครบแล้ว ไม่มีจำนวนที่ต้องแยก',
         })
       }
 
@@ -7383,6 +7462,7 @@ app.post(
         success: true,
         round_id: roundId,
         split_count: splitResults.length,
+        split_seq: splitSeq,
         skipped_count: skippedCount,
         moved_qty: movedQty,
         parent_order_count: touchedParentOrders.size,
