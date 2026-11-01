@@ -41,8 +41,51 @@
     <!-- Missing Items Table -->
     <section class="panel">
       <header class="panel-head">
-        <h2>รายการสินค้าที่ขาด</h2>
+        <div>
+          <h2>รายการสินค้าที่ขาด</h2>
+          <p class="panel-sub">ติ๊กเลือกได้หลายรายการ แล้วกดคืนเงิน — รายการที่คืนเงินจะถูกแยกออกจากออเดอร์เดิมไปเป็น "ออเดอร์คืนเงิน" ส่วนรายการที่มาช้ายังอยู่ในออเดอร์ตกหล่นตามเดิม</p>
+        </div>
       </header>
+
+      <div v-if="selectableItems.length > 0" :class="['bulk-bar', { 'bulk-bar--active': selectedItems.length > 0 }]">
+        <label class="bulk-bar__select">
+          <input type="checkbox" class="row-check" :checked="allSelected" @change="toggleSelectAll" />
+          <span v-if="selectedItems.length === 0">เลือกทั้งหมดที่คืนเงินได้ ({{ selectableItems.length }} รายการ)</span>
+          <span v-else>
+            เลือก <strong>{{ selectedItems.length }}</strong> รายการ · ยอดคืน
+            <strong>฿{{ selectedRefundTotal.toLocaleString() }}</strong>
+          </span>
+        </label>
+        <div class="bulk-bar__actions">
+          <button
+            v-if="selectedItems.length > 0"
+            type="button"
+            class="ghost-btn"
+            :disabled="bulkLoading"
+            @click="selectedDetailIds = []"
+          >
+            ล้างที่เลือก
+          </button>
+          <button
+            type="button"
+            class="refund-btn"
+            :disabled="bulkLoading || selectedNotSplit.length === 0"
+            :title="selectedNotSplit.length === 0 ? 'รายการที่เลือกแยกเป็นออเดอร์คืนเงินแล้ว' : ''"
+            @click="handleBulkRefund('pending')"
+          >
+            {{ bulkLoading ? 'กำลังบันทึก...' : `คืนเงิน + แยกออเดอร์ (${selectedNotSplit.length})` }}
+          </button>
+          <button
+            type="button"
+            class="paid-btn"
+            :disabled="bulkLoading || selectedItems.length === 0"
+            @click="handleBulkRefund('paid')"
+          >
+            บันทึกว่าโอนแล้ว ({{ selectedItems.length }})
+          </button>
+        </div>
+      </div>
+      <p v-if="bulkMessage" class="bulk-message">{{ bulkMessage }}</p>
 
       <div v-if="loading" class="state-box">กำลังโหลด...</div>
       <div v-else-if="missingItemsList.length === 0" class="empty-box">ไม่มีสินค้าที่ขาด</div>
@@ -51,6 +94,16 @@
          <table class="data-table data-table--items">
           <thead>
             <tr>
+              <th class="check-col">
+                <input
+                  type="checkbox"
+                  class="row-check"
+                  :checked="allSelected"
+                  :disabled="selectableItems.length === 0"
+                  aria-label="เลือกทั้งหมด"
+                  @change="toggleSelectAll"
+                />
+              </th>
               <th class="image-col">รูปภาพ</th>
               <th>สินค้า</th>
               <th>รสชาติ</th>
@@ -69,8 +122,19 @@
             <tr
               v-for="item in missingItemsList"
               :key="`${item.detail_id}-${item.order_id}`"
-              class="missing-row"
+              :class="['missing-row', { 'missing-row--selected': isSelected(item) }]"
             >
+              <td class="check-col">
+                <input
+                  type="checkbox"
+                  class="row-check"
+                  :checked="isSelected(item)"
+                  :disabled="!canSelect(item) || bulkLoading"
+                  :title="canSelect(item) ? 'เลือกเพื่อคืนเงิน' : 'โอนเงินคืนแล้ว'"
+                  :aria-label="`เลือก ${item.product_name}`"
+                  @change="toggleSelect(item)"
+                />
+              </td>
               <td class="image-col">
                 <button
                   v-if="item.image_url"
@@ -146,6 +210,103 @@
               <td class="customer">
                 <div class="customer-name">{{ item.username }}</div>
                 <small class="order-id">คำสั่ง #{{ String(item.order_id).padStart(3, '0') }}</small>
+                <small v-if="isRefundOrderItem(item)" class="order-id refund-tag">
+                  ออเดอร์คืนเงิน (แยกจาก #{{ String(item.parent_order_id).padStart(3, '0') }})
+                </small>
+                <small v-else-if="item.is_split_order" class="order-id split-tag">
+                  ออเดอร์ตกหล่น (แยกจาก #{{ String(item.parent_order_id).padStart(3, '0') }})
+                </small>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Refund by Order -->
+    <section class="panel">
+      <header class="panel-head">
+        <div>
+          <h2>คืนเงินตามออเดอร์</h2>
+          <p class="panel-sub">รวมรายการที่ขาดของแต่ละออเดอร์ กดครั้งเดียวเพื่อบันทึกว่าโอนเงินคืนครบทั้งออเดอร์</p>
+        </div>
+      </header>
+
+      <div v-if="missingOrders.length === 0" class="empty-box">ไม่มีออเดอร์ที่ต้องคืนเงิน</div>
+
+      <div v-else class="table-wrap">
+        <table class="data-table data-table--orders">
+          <thead>
+            <tr>
+              <th>ออเดอร์ / ลูกค้า</th>
+              <th>รายการที่ขาด</th>
+              <th class="num">ชิ้นที่ขาด</th>
+              <th class="num">ยอดคืนทั้งหมด</th>
+              <th class="num">ค้างโอน</th>
+              <th>สถานะ</th>
+              <th>การจัดการ</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="order in missingOrders" :key="order.order_id" class="affected-row">
+              <td class="customer">
+                <div class="customer-name">คำสั่ง #{{ String(order.order_id).padStart(3, '0') }}</div>
+                <small class="order-id">{{ order.username || order.full_name || '—' }}</small>
+                <small v-if="order.round_name" class="order-id"> · {{ order.round_name }}</small>
+                <small v-if="order.split_kind === 'refund'" class="order-id refund-tag">
+                  ออเดอร์คืนเงิน (แยกจาก #{{ String(order.parent_order_id).padStart(3, '0') }})
+                </small>
+                <small v-else-if="order.split_kind" class="order-id split-tag">
+                  ออเดอร์ตกหล่น (แยกจาก #{{ String(order.parent_order_id).padStart(3, '0') }})
+                </small>
+              </td>
+              <td>
+                <ul class="order-item-list">
+                  <li v-for="it in order.items" :key="it.detail_id">
+                    {{ it.product_name }}<span v-if="it.flavor"> ({{ it.flavor }})</span> × {{ it.missing_qty }}
+                    <span v-if="isRefundPaid(it)" class="mini-paid">โอนแล้ว</span>
+                  </li>
+                </ul>
+              </td>
+              <td class="num">{{ order.missing_qty }}</td>
+              <td class="num">฿{{ order.total_refund.toLocaleString() }}</td>
+              <td class="num" :style="{ color: order.pending_refund > 0 ? '#ef4444' : '#16794c', fontWeight: 600 }">
+                ฿{{ order.pending_refund.toLocaleString() }}
+              </td>
+              <td>
+                <span
+                  :class="[
+                    'status-badge',
+                    order.pending_count > 0
+                      ? 'status-refund-pending'
+                      : order.delayed_count > 0
+                        ? 'status-delayed'
+                        : 'status-refund-paid',
+                  ]"
+                >
+                  {{
+                    order.pending_count > 0
+                      ? order.paid_count > 0
+                        ? `โอนแล้ว ${order.paid_count}/${order.paid_count + order.pending_count}`
+                        : 'รอโอนคืน'
+                      : order.delayed_count > 0
+                        ? `รอของ ${order.delayed_count} รายการ`
+                        : 'โอนครบแล้ว'
+                  }}
+                </span>
+              </td>
+              <td>
+                <button
+                  v-if="order.pending_count > 0"
+                  type="button"
+                  class="refund-btn"
+                  :disabled="Boolean(orderRefundLoading[order.order_id])"
+                  @click="handleOrderRefund(order)"
+                >
+                  {{ orderRefundLoading[order.order_id] ? 'กำลังบันทึก...' : `บันทึกโอนคืนทั้งออเดอร์ ฿${order.pending_refund.toLocaleString()}` }}
+                </button>
+                <span v-else-if="order.delayed_count > 0" class="hint-text">เลือกรายการด้านบนเพื่อคืนเงิน</span>
+                <span v-else class="refund-completed-label">โอนแล้ว</span>
               </td>
             </tr>
           </tbody>
@@ -228,13 +389,20 @@ function isRefundRequested(item) {
   return String(item?.arrival_status || '').toLowerCase() === 'missing'
 }
 
+function isRefundOrderItem(item) {
+  return item?.split_kind === 'refund'
+}
+
 function isDelayed(item) {
-  return String(item?.arrival_status || '').toLowerCase() === 'delayed'
+  if (isRefundOrderItem(item)) return false
+  const key = String(item?.arrival_status || '').toLowerCase()
+  return key === 'delayed' || (Boolean(item?.is_split_order) && key !== 'missing' && key !== 'arrived')
 }
 
 function refundStatusLabel(item) {
   if (isRefundPaid(item)) return 'โอนแล้ว'
-  if (isDelayed(item)) return 'เลื่อนรอของ'
+  if (isDelayed(item)) return 'ตกหล่น · รอของ'
+  if (isRefundOrderItem(item)) return 'แจ้งคืนแล้ว · รอโอน'
   return 'ยังไม่โอน'
 }
 
@@ -269,37 +437,51 @@ function canPerformRefundAction(item) {
   return isRefundRequested(item) ? canMarkRefundPaid(item) : canRequestRefund(item)
 }
 
+async function submitRefund(detailIds, status) {
+  const response = await fetch(`${API_BASE_URL}/admin/refunds/items`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ detail_ids: detailIds, status }),
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(data.error || data.message || 'ไม่สามารถบันทึกรายการคืนเงินได้')
+  }
+  return data
+}
+
+function describeRefundResult(data, status) {
+  const orderIds = (data.refund_order_ids || []).map((id) => `#${id}`).join(', ')
+  const base =
+    status === 'paid'
+      ? `บันทึกว่าโอนเงินคืนแล้ว ${data.refunded_count} รายการ (฿${Number(data.refund_amount || 0).toLocaleString()})`
+      : `แจ้งคืนเงิน ${data.refunded_count} รายการ (฿${Number(data.refund_amount || 0).toLocaleString()})`
+  const skipped = (data.skipped || []).length ? ` · ข้าม ${data.skipped.length} รายการ` : ''
+  return `${base}${orderIds ? ` → ออเดอร์คืนเงิน ${orderIds}` : ''}${skipped}`
+}
+
 async function handleRefundAction(item) {
   if (!item || !canPerformRefundAction(item)) return
-  itemActionLoading.value = {
-    ...itemActionLoading.value,
-    [item.detail_id]: true,
+  const status = isRefundRequested(item) ? 'paid' : 'pending'
+  if (
+    status === 'pending' &&
+    !window.confirm(
+      `คืนเงิน ${item.product_name}${item.flavor ? ` (${item.flavor})` : ''} × ${item.missing_qty} = ฿${Number(item.refund_amount || 0).toLocaleString()}\n` +
+        `รายการนี้จะถูกแยกออกจากคำสั่ง #${item.order_id} ไปเป็นออเดอร์คืนเงิน`,
+    )
+  ) {
+    return
   }
-
+  itemActionLoading.value = { ...itemActionLoading.value, [item.detail_id]: true }
   try {
-    const response = await fetch(`${API_BASE_URL}/admin/refunds/orders/${item.order_id}/status`, {
-      method: 'PATCH',
-      headers: authHeaders(),
-      body: JSON.stringify({
-        detail_id: item.detail_id,
-        status: isRefundRequested(item) ? 'paid' : 'pending',
-      }),
-    })
-
-    const data = await response.json().catch(() => ({}))
-    if (!response.ok) {
-      throw new Error(data.error || data.message || 'ไม่สามารถบันทึกรายการคืนเงินได้')
-    }
-
+    const data = await submitRefund([item.detail_id], status)
+    bulkMessage.value = describeRefundResult(data, status)
     await fetchData()
   } catch (error) {
     console.error(error)
     alert(error.message || 'เกิดข้อผิดพลาดในการบันทึกรายการคืนเงิน')
   } finally {
-    itemActionLoading.value = {
-      ...itemActionLoading.value,
-      [item.detail_id]: false,
-    }
+    itemActionLoading.value = { ...itemActionLoading.value, [item.detail_id]: false }
   }
 }
 
@@ -384,6 +566,145 @@ function closeImagePreview() {
   previewImage.value = null
 }
 
+const orderRefundLoading = ref({})
+const selectedDetailIds = ref([])
+const bulkLoading = ref(false)
+const bulkMessage = ref('')
+
+function canSelect(item) {
+  return Boolean(item) && !isRefundPaid(item) && Number(item.missing_qty) > 0
+}
+
+function isSelected(item) {
+  return selectedDetailIds.value.includes(Number(item?.detail_id))
+}
+
+function toggleSelect(item) {
+  if (!canSelect(item)) return
+  const id = Number(item.detail_id)
+  selectedDetailIds.value = isSelected(item)
+    ? selectedDetailIds.value.filter((x) => x !== id)
+    : [...selectedDetailIds.value, id]
+}
+
+const selectableItems = computed(() => missingItemsList.value.filter(canSelect))
+const selectedItems = computed(() =>
+  missingItemsList.value.filter((item) => canSelect(item) && isSelected(item)),
+)
+const selectedNotSplit = computed(() => selectedItems.value.filter((item) => !isRefundOrderItem(item)))
+const selectedRefundTotal = computed(() =>
+  selectedItems.value.reduce((sum, item) => sum + Number(item.refund_amount || 0), 0),
+)
+const allSelected = computed(
+  () => selectableItems.value.length > 0 && selectableItems.value.every((item) => isSelected(item)),
+)
+
+function toggleSelectAll() {
+  selectedDetailIds.value = allSelected.value
+    ? []
+    : selectableItems.value.map((item) => Number(item.detail_id))
+}
+
+async function handleBulkRefund(status) {
+  const targets = status === 'paid' ? selectedItems.value : selectedNotSplit.value
+  if (targets.length === 0 || bulkLoading.value) return
+
+  const total = targets.reduce((sum, item) => sum + Number(item.refund_amount || 0), 0)
+  const lines = targets
+    .slice(0, 15)
+    .map((it) => `• #${it.order_id} ${it.product_name}${it.flavor ? ` (${it.flavor})` : ''} × ${it.missing_qty}`)
+    .join('\n')
+  const more = targets.length > 15 ? `\n...และอีก ${targets.length - 15} รายการ` : ''
+  const title =
+    status === 'paid'
+      ? `บันทึกว่าโอนเงินคืนแล้ว ${targets.length} รายการ`
+      : `คืนเงิน ${targets.length} รายการ และแยกออกจากออเดอร์เดิมเป็นออเดอร์คืนเงิน`
+  if (!window.confirm(`${title}\n\n${lines}${more}\n\nรวม ฿${total.toLocaleString()}`)) return
+
+  bulkLoading.value = true
+  bulkMessage.value = ''
+  try {
+    const data = await submitRefund(targets.map((item) => Number(item.detail_id)), status)
+    bulkMessage.value = describeRefundResult(data, status)
+    selectedDetailIds.value = []
+    await fetchData()
+  } catch (error) {
+    console.error(error)
+    alert(error.message || 'เกิดข้อผิดพลาดในการคืนเงิน')
+  } finally {
+    bulkLoading.value = false
+  }
+}
+
+const missingOrders = computed(() => {
+  const map = new Map()
+  for (const item of missingItemsList.value) {
+    const key = Number(item.order_id)
+    if (!map.has(key)) {
+      map.set(key, {
+        order_id: key,
+        username: item.username,
+        full_name: item.full_name,
+        round_name: item.round_name,
+        split_kind: item.split_kind,
+        parent_order_id: item.parent_order_id,
+        items: [],
+        missing_qty: 0,
+        total_refund: 0,
+        pending_refund: 0,
+        pending_count: 0,
+        paid_count: 0,
+        delayed_count: 0,
+        payable_ids: [],
+      })
+    }
+    const order = map.get(key)
+    const amount = Number(item.refund_amount || 0)
+    order.items.push(item)
+    order.missing_qty += Number(item.missing_qty || 0)
+    order.total_refund += amount
+    if (isRefundPaid(item)) {
+      order.paid_count += 1
+    } else if (isRefundRequested(item)) {
+      // แจ้งคืนเงินแล้ว (อยู่ในออเดอร์คืนเงิน / Missing) รอบันทึกการโอน
+      order.pending_count += 1
+      order.pending_refund += amount
+      order.payable_ids.push(Number(item.detail_id))
+    } else {
+      // มาช้า / ตกหล่น ยังไม่ได้ตัดสินใจคืนเงิน — ไม่รวมในปุ่มคืนเงินทั้งออเดอร์
+      order.delayed_count += 1
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => {
+    if ((a.pending_count > 0) !== (b.pending_count > 0)) return a.pending_count > 0 ? -1 : 1
+    return b.pending_refund - a.pending_refund || b.order_id - a.order_id
+  })
+})
+
+async function handleOrderRefund(order) {
+  if (!order || order.pending_count === 0 || orderRefundLoading.value[order.order_id]) return
+  const lines = order.items
+    .filter((it) => order.payable_ids.includes(Number(it.detail_id)))
+    .map((it) => `• ${it.product_name}${it.flavor ? ` (${it.flavor})` : ''} × ${it.missing_qty} = ฿${Number(it.refund_amount || 0).toLocaleString()}`)
+    .join('\n')
+  const ok = window.confirm(
+    `ยืนยันว่าโอนเงินคืนให้ออเดอร์ #${order.order_id} (${order.username || order.full_name || 'ลูกค้า'}) แล้ว\n\n${lines}\n\nรวม ฿${order.pending_refund.toLocaleString()}`,
+  )
+  if (!ok) return
+
+  orderRefundLoading.value = { ...orderRefundLoading.value, [order.order_id]: true }
+  try {
+    const data = await submitRefund(order.payable_ids, 'paid')
+    bulkMessage.value = describeRefundResult(data, 'paid')
+    await fetchData()
+  } catch (error) {
+    console.error(error)
+    alert(error.message || 'เกิดข้อผิดพลาดในการคืนเงินทั้งออเดอร์')
+  } finally {
+    orderRefundLoading.value = { ...orderRefundLoading.value, [order.order_id]: false }
+  }
+}
+
 const totalMissingItems = computed(() => missingItemsList.value.length)
 const totalRefundAmount = computed(() =>
   missingItemsList.value.reduce((sum, item) => sum + Number(item.refund_amount || 0), 0),
@@ -460,13 +781,23 @@ async function fetchData() {
       for (const item of order.items || []) {
         const missingQty = Math.max(item.ordered_qty - item.received_qty, 0)
         const arrivalStatus = item.arrival_status || 'Pending'
-        if (missingQty > 0 && String(arrivalStatus).toLowerCase() === 'missing') {
+        const arrivalKey = String(arrivalStatus).toLowerCase()
+        const isSplitOrder = Number(order.split_parent_order_id || 0) > 0
+        // แสดงทั้งรายการที่ขาด (Missing) และรายการตกหล่น (Delayed / อยู่ในออเดอร์ตกหล่น)
+        const isShortageItem =
+          arrivalKey === 'missing' ||
+          arrivalKey === 'delayed' ||
+          (isSplitOrder && arrivalKey !== 'arrived')
+        if (missingQty > 0 && isShortageItem) {
           missingItems.push({
             detail_id: item.detail_id,
             order_id: order.order_id,
             username: order.username,
             order_status: order.status,
-            refund_status: String(order.refund_status || 'pending').toLowerCase() === 'paid' ? 'paid' : 'pending',
+            // ใช้สถานะคืนเงินของแต่ละรายการ (ไม่ใช่ของทั้งออเดอร์) เพื่อให้รายการที่โอนแล้วแสดงถูกต้อง
+            refund_status: String(item.refund_status || 'pending').toLowerCase() === 'paid' ? 'paid' : 'pending',
+            order_refund_status: String(order.refund_status || 'pending').toLowerCase() === 'paid' ? 'paid' : 'pending',
+            full_name: order.full_name || '',
             product_name: item.product_name,
             image_url: item.image_url || '',
             flavor: item.flavor,
@@ -476,10 +807,10 @@ async function fetchData() {
             missing_qty: missingQty,
             arrival_status: arrivalStatus,
             intake_confirmed: Boolean(item.intake_confirmed),
-            refund_amount:
-              String(arrivalStatus).toLowerCase() === 'missing'
-                ? missingQty * Number(item.unit_price || 0)
-                : 0,
+            is_split_order: isSplitOrder,
+            split_kind: isSplitOrder ? order.split_kind || 'delayed' : null,
+            parent_order_id: isSplitOrder ? Number(order.split_parent_order_id) : null,
+            refund_amount: missingQty * Number(item.unit_price || 0),
             round_id: roundInfo.round_id,
             round_name: roundInfo.round_name,
           })
@@ -488,6 +819,10 @@ async function fetchData() {
     }
 
     allMissingItems.value = missingItems.sort((a, b) => b.refund_amount - a.refund_amount)
+    const stillSelectable = new Set(
+      missingItems.filter((item) => canSelect(item)).map((item) => Number(item.detail_id)),
+    )
+    selectedDetailIds.value = selectedDetailIds.value.filter((id) => stillSelectable.has(id))
   } catch (err) {
     console.error(err)
   } finally {
@@ -948,6 +1283,135 @@ onUnmounted(() => {
 
 .refund-btn:hover:not(:disabled) {
   background: #fce7f3;
+}
+
+.panel-sub {
+  margin: 0.25rem 0 0;
+  color: #8d7cad;
+  font-size: 0.82rem;
+}
+
+.order-item-list {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: 0.85rem;
+  color: #4b3d66;
+}
+
+.order-item-list li + li {
+  margin-top: 0.15rem;
+}
+
+.check-col {
+  width: 36px;
+  text-align: center;
+}
+
+.row-check {
+  width: 18px;
+  height: 18px;
+  accent-color: #e5484d;
+  cursor: pointer;
+}
+
+.row-check:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.missing-row--selected {
+  background: #fff3f6;
+}
+
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.9rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 14px;
+  border: 1px dashed rgba(165, 94, 234, 0.35);
+  background: #fbf8ff;
+  color: #6b5a84;
+  font-size: 0.88rem;
+}
+
+.bulk-bar--active {
+  position: sticky;
+  top: 0.5rem;
+  z-index: 5;
+  border-style: solid;
+  border-color: rgba(229, 72, 77, 0.35);
+  background: #fff5f7;
+  color: #5a2a3c;
+  box-shadow: 0 10px 22px rgba(140, 99, 174, 0.12);
+}
+
+.bulk-bar__select {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  cursor: pointer;
+}
+
+.bulk-bar__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.paid-btn {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.55rem 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  color: #fff;
+  background: #16794c;
+}
+
+.paid-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.bulk-message {
+  margin: 0 0 0.9rem;
+  padding: 0.55rem 0.8rem;
+  border-radius: 12px;
+  background: #ecfdf3;
+  color: #16794c;
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.hint-text {
+  color: #8d7cad;
+  font-size: 0.8rem;
+}
+
+.refund-tag {
+  display: block;
+  color: #b42318;
+  font-weight: 600;
+}
+
+.split-tag {
+  display: block;
+  color: #c2410c;
+  font-weight: 600;
+}
+
+.mini-paid {
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: #e2f8eb;
+  color: #16794c;
+  font-size: 0.72rem;
+  font-weight: 700;
 }
 
 .refund-completed-label {

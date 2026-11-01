@@ -19,6 +19,8 @@ const intakeNote = ref('')
 const receivedDraft = ref({})
 const moveExcessToStock = ref(true)
 const previewImage = ref(null)
+const selectedLineKeys = ref([])
+const splitting = ref(false)
 
 function openImagePreview(url, title, subtitle) {
   if (!url) return
@@ -116,6 +118,7 @@ function setSelectedIntakeOrder(orderId) {
   }
 
   receivedDraft.value = draft
+  selectedLineKeys.value = []
 }
 
 // ยอดที่บันทึกรับเข้าไปแล้วจากครั้งก่อน ๆ (สะสม)
@@ -145,6 +148,7 @@ function clearSelectedIntakeOrder() {
   intakeMessage.value = ''
   intakeNote.value = ''
   receivedDraft.value = {}
+  selectedLineKeys.value = []
 }
 
 function updateDraft(detailId, rawValue) {
@@ -206,6 +210,133 @@ const totalOutstandingQty = computed(() =>
     .filter((item) => !isArrivedItem(item))
     .reduce((sum, item) => sum + getOutstandingQty(item), 0),
 )
+
+// ── เลือกหลายรายการเพื่อตั้งเป็นตกหล่น + แยกออเดอร์เพิ่ม ──
+function lineKeyOf(item) {
+  return String(item?.line_key || item?.detail_id || '')
+}
+
+function isFeeLocked(item) {
+  return (
+    Boolean(item?.fee_confirmed) ||
+    String(item?.arrival_status || '').toLowerCase() === 'missing'
+  )
+}
+
+// จำนวนคงค้างที่ยังไม่ได้แยกเป็นออเดอร์ตกหล่น/คืนเงิน
+function getUnsplitOutstandingQty(item) {
+  if (item?.unsplit_outstanding_qty === undefined) return getOutstandingQty(item)
+  return Math.max(Number(item.unsplit_outstanding_qty) || 0, 0)
+}
+
+function formatOrderIds(ids) {
+  return (ids || []).map((id) => `#${String(id).padStart(3, '0')}`).join(', ')
+}
+
+function canSelectForSplit(item) {
+  return (
+    Boolean(item) &&
+    !isArrivedItem(item) &&
+    getOutstandingQty(item) > 0 &&
+    getUnsplitOutstandingQty(item) > 0 &&
+    !isFeeLocked(item)
+  )
+}
+
+function splitDisabledReason(item) {
+  if (isArrivedItem(item)) return 'รับสินค้าครบแล้ว'
+  if (isFeeLocked(item)) return 'ยืนยันค่านำเข้าแล้ว — จัดการที่หน้าสินค้าขาด/ตกหล่น'
+  if (getOutstandingQty(item) <= 0) return 'ไม่มีจำนวนคงค้าง'
+  if (getUnsplitOutstandingQty(item) <= 0) return 'แยกเป็นออเดอร์ตกหล่นแล้ว'
+  return 'เลือกเพื่อแยกเป็นออเดอร์ตกหล่น'
+}
+
+const selectableSplitItems = computed(() => editableIntakeItems.value.filter(canSelectForSplit))
+
+const selectedSplitItems = computed(() => {
+  const keys = new Set(selectedLineKeys.value)
+  return editableIntakeItems.value.filter((item) => keys.has(lineKeyOf(item)) && canSelectForSplit(item))
+})
+
+const selectedSplitQty = computed(() =>
+  selectedSplitItems.value.reduce((sum, item) => sum + getUnsplitOutstandingQty(item), 0),
+)
+
+const allSplitSelected = computed(
+  () =>
+    selectableSplitItems.value.length > 0 &&
+    selectableSplitItems.value.every((item) => selectedLineKeys.value.includes(lineKeyOf(item))),
+)
+
+function isLineSelected(item) {
+  return selectedLineKeys.value.includes(lineKeyOf(item))
+}
+
+function toggleLineSelection(item) {
+  if (!canSelectForSplit(item)) return
+  const key = lineKeyOf(item)
+  selectedLineKeys.value = isLineSelected(item)
+    ? selectedLineKeys.value.filter((k) => k !== key)
+    : [...selectedLineKeys.value, key]
+}
+
+function toggleSelectAllSplit() {
+  selectedLineKeys.value = allSplitSelected.value
+    ? []
+    : selectableSplitItems.value.map(lineKeyOf)
+}
+
+async function splitSelectedAsMissing() {
+  if (!selectedIntakeOrder.value || selectedSplitItems.value.length === 0 || splitting.value) return
+
+  const summary = selectedSplitItems.value
+    .map(
+      (item) =>
+        `• ${item.product_name}${item.flavor ? ` (${item.flavor})` : ''}: ค้าง ${getUnsplitOutstandingQty(item)} ชิ้น · ${item.order_count || item.order_ids?.length || 0} ออเดอร์`,
+    )
+    .join('\n')
+  const confirmed = window.confirm(
+    `ตั้งเป็น "ตกหล่น" และแยกเป็นออเดอร์เพิ่ม ${selectedSplitItems.value.length} รายการ\n\n${summary}\n\n` +
+      'ระบบจะย้ายรายการเหล่านี้ของลูกค้าแต่ละคนไปไว้ในออเดอร์ตกหล่น (ออเดอร์ลูก) สถานะ "รอของ" ' +
+      'ส่วนที่เหลือในออเดอร์หลักจัดส่งต่อได้ตามปกติ\n' +
+      'หมายเหตุ: ถ้ารายการใดรับมาแล้วบางส่วน ทั้งบรรทัดจะถูกย้ายไปออเดอร์ตกหล่น\n\nยืนยันหรือไม่?',
+  )
+  if (!confirmed) return
+
+  splitting.value = true
+  intakeMessage.value = ''
+  const roundId = selectedIntakeOrder.value.round_id
+
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/admin/inventory-intake/rounds/${roundId}/split-missing`,
+      {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ line_keys: selectedSplitItems.value.map(lineKeyOf) }),
+      },
+    )
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new Error(data.error || data.message || `แยกออเดอร์ตกหล่นไม่สำเร็จ (${response.status})`)
+    }
+
+    await fetchIntakeOrders()
+    window.dispatchEvent(new Event('meowverse:inventory-intake-updated'))
+    if (intakeOrders.value.some((order) => Number(order.round_id) === Number(roundId))) {
+      setSelectedIntakeOrder(roundId)
+    }
+    const childIds = (data.split_order_ids || []).map((id) => `#${id}`).join(', ')
+    intakeMessage.value =
+      `แยกเป็นออเดอร์ตกหล่นแล้ว ${data.split_count} รายการจาก ${data.parent_order_count} ออเดอร์` +
+      (childIds ? ` → ออเดอร์ตกหล่น ${childIds}` : '') +
+      (data.skipped_count ? ` · ข้าม ${data.skipped_count} รายการที่รับครบ/แยกไปแล้ว` : '')
+  } catch (error) {
+    intakeMessage.value = translateError(error)
+  } finally {
+    splitting.value = false
+  }
+}
 
 async function fetchIntakeOrders() {
   intakeLoading.value = true
@@ -428,7 +559,17 @@ onUnmounted(() => {
 
             <div class="items-table">
               <div class="items-head">
-                <span>สินค้า</span>
+                <span class="head-product">
+                  <input
+                    type="checkbox"
+                    class="line-check"
+                    :checked="allSplitSelected"
+                    :disabled="selectableSplitItems.length === 0"
+                    title="เลือกทุกรายการที่แยกเป็นตกหล่นได้"
+                    @change="toggleSelectAllSplit"
+                  />
+                  สินค้า
+                </span>
                 <span>รวมสั่ง</span>
                 <span>รับแล้ว</span>
                 <span>รับเพิ่มครั้งนี้</span>
@@ -440,12 +581,58 @@ onUnmounted(() => {
                 <p class="section-title">กรอกจำนวนที่รับเพิ่มในครั้งนี้ (ระบบจะบวกกับยอดที่รับไปแล้ว)</p>
               </div>
 
+              <div v-if="selectableSplitItems.length > 0" :class="['bulk-bar', { 'bulk-bar--active': selectedSplitItems.length > 0 }]">
+                <label class="bulk-bar__select">
+                  <input
+                    type="checkbox"
+                    class="line-check"
+                    :checked="allSplitSelected"
+                    @change="toggleSelectAllSplit"
+                  />
+                  <span v-if="selectedSplitItems.length === 0">
+                    ติ๊กเลือกรายการที่ของไม่มา เพื่อตั้งเป็นตกหล่นและแยกออเดอร์เพิ่ม
+                  </span>
+                  <span v-else>
+                    เลือก <strong>{{ selectedSplitItems.length }}</strong> รายการ · ค้างรวม
+                    <strong>{{ selectedSplitQty }}</strong> ชิ้น
+                  </span>
+                </label>
+                <div class="bulk-bar__actions">
+                  <button
+                    v-if="selectedSplitItems.length > 0"
+                    type="button"
+                    class="ghost-btn ghost-btn--sm"
+                    :disabled="splitting"
+                    @click="selectedLineKeys = []"
+                  >
+                    ล้างที่เลือก
+                  </button>
+                  <button
+                    type="button"
+                    class="split-btn"
+                    :disabled="splitting || selectedSplitItems.length === 0"
+                    @click="splitSelectedAsMissing"
+                  >
+                    {{ splitting ? 'กำลังแยกออเดอร์...' : 'ตั้งเป็นตกหล่น + แยกออเดอร์เพิ่ม' }}
+                  </button>
+                </div>
+              </div>
+
               <div
                 v-for="item in editableIntakeItems"
                 :key="item.detail_id"
-                :class="['items-row', { 'items-row--arrived': isArrivedItem(item) }]"
+                :class="['items-row', { 'items-row--arrived': isArrivedItem(item), 'items-row--selected': isLineSelected(item) && canSelectForSplit(item) }]"
               >
                 <div class="product-col">
+                  <input
+                    type="checkbox"
+                    class="line-check"
+                    :checked="isLineSelected(item) && canSelectForSplit(item)"
+                    :disabled="!canSelectForSplit(item) || splitting"
+                    :title="splitDisabledReason(item)"
+                    :aria-label="`เลือก ${item.product_name} เพื่อแยกเป็นออเดอร์ตกหล่น`"
+                    @change="toggleLineSelection(item)"
+                  />
                   <button
                     v-if="item.image_url"
                     type="button"
@@ -467,6 +654,27 @@ onUnmounted(() => {
                     <small
                       >฿{{ Number(item.unit_price || 0).toLocaleString('th-TH') }} / ชิ้น</small
                     >
+                    <div v-if="item.is_split_delayed || item.is_split_refund" class="split-badges">
+                      <span
+                        v-if="item.is_split_delayed"
+                        class="split-badge split-badge--delayed"
+                        :title="`ออเดอร์ตกหล่น: ${formatOrderIds(item.split_delayed_order_ids)}`"
+                      >
+                        {{ getUnsplitOutstandingQty(item) > 0 ? 'แยกออเดอร์ตกหล่นบางส่วน' : 'ตกหล่น · แยกออเดอร์แล้ว' }}
+                        {{ item.split_delayed_qty }} ชิ้น
+                        <template v-if="item.split_delayed_order_ids.length <= 3">
+                          ({{ formatOrderIds(item.split_delayed_order_ids) }})
+                        </template>
+                        <template v-else>({{ item.split_delayed_order_ids.length }} ออเดอร์)</template>
+                      </span>
+                      <span
+                        v-if="item.is_split_refund"
+                        class="split-badge split-badge--refund"
+                        :title="`ออเดอร์คืนเงิน: ${formatOrderIds(item.split_refund_order_ids)}`"
+                      >
+                        แยกคืนเงินแล้ว {{ item.split_refund_qty }} ชิ้น
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -1086,6 +1294,119 @@ onUnmounted(() => {
 .qty-locked svg {
   flex: 0 0 auto;
   opacity: 0.8;
+}
+
+.head-product {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.line-check {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  accent-color: #a55eea;
+  cursor: pointer;
+}
+
+.line-check:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+.split-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+}
+
+.split-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.split-badge--delayed {
+  background: #fff1e6;
+  color: #c2410c;
+  border: 1px solid #fed7aa;
+}
+
+.split-badge--refund {
+  background: #fde2e1;
+  color: #b42318;
+  border: 1px solid #fecaca;
+}
+
+.items-row--selected {
+  background: #fff3f8;
+  border-radius: 14px;
+}
+
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0.25rem 0 0.6rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 14px;
+  border: 1px dashed rgba(165, 94, 234, 0.35);
+  background: #fbf8ff;
+  color: #6b5a84;
+  font-size: 0.86rem;
+}
+
+.bulk-bar--active {
+  position: sticky;
+  top: 0.5rem;
+  z-index: 5;
+  border-style: solid;
+  border-color: rgba(229, 72, 77, 0.35);
+  background: #fff5f7;
+  color: #5a2a3c;
+  box-shadow: 0 10px 22px rgba(140, 99, 174, 0.12);
+}
+
+.bulk-bar__select {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  cursor: pointer;
+}
+
+.bulk-bar__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.ghost-btn--sm {
+  padding: 0.55rem 0.9rem;
+}
+
+.split-btn {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.6rem 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  color: #fff;
+  background: linear-gradient(135deg, #e5484d, #ff7eb6);
+}
+
+.split-btn:disabled,
+.ghost-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .badge--arrived {

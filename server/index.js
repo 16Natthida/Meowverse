@@ -244,7 +244,7 @@ async function splitDelayedItemsFromOrder(
            AND od.qty > 0
          )
          OR (
-           LOWER(COALESCE(od.arrival_status, '')) IN ('delayed', 'missing')
+           LOWER(COALESCE(od.arrival_status, '')) = 'delayed'
            AND od.qty > COALESCE(od.received_qty, 0)
          )
        )
@@ -259,6 +259,7 @@ async function splitDelayedItemsFromOrder(
     `SELECT order_id
      FROM orders
      WHERE split_parent_order_id = ?
+       AND COALESCE(split_kind, 'delayed') <> 'refund'
      ORDER BY order_id DESC
      LIMIT 1`,
     [orderId],
@@ -269,8 +270,8 @@ async function splitDelayedItemsFromOrder(
   } else {
     const [childResult] = await connection.query(
       `INSERT INTO orders
-       (user_id, total_amount, status, Order_type, deadline, import_fee_total, split_parent_order_id)
-       VALUES (?, 0, 'Delayed', ?, ?, 0, ?)`,
+       (user_id, total_amount, status, Order_type, deadline, import_fee_total, split_parent_order_id, split_kind)
+       VALUES (?, 0, 'Delayed', ?, ?, 0, ?, 'delayed')`,
       [parent.user_id, parent.Order_type, parent.deadline || null, orderId],
     )
     childOrderId = Number(childResult.insertId)
@@ -2259,6 +2260,12 @@ async function ensureAdminSchema() {
   await pool.query(`
     ALTER TABLE orders
     ADD COLUMN IF NOT EXISTS split_parent_order_id INT NULL
+  `)
+
+  // ประเภทของออเดอร์ที่แยกออกมา: 'delayed' = ออเดอร์ตกหล่น/รอของ, 'refund' = ออเดอร์คืนเงิน
+  await pool.query(`
+    ALTER TABLE orders
+    ADD COLUMN IF NOT EXISTS split_kind VARCHAR(20) NULL
   `)
 
   await pool.query(`
@@ -4317,7 +4324,10 @@ function getImportFeeDisplayStatus(row) {
 // import-fee page creates a virtual missing segment for the child order;
 // no separate preorder round is created in the database.
 function getImportFeeSegment(row) {
-  return Number(row.split_parent_order_id || 0) > 0 ? 'Missing' : 'Main'
+  return Number(row.split_parent_order_id || 0) > 0 &&
+    String(row.split_kind || '').toLowerCase() !== 'refund'
+    ? 'Missing'
+    : 'Main'
 }
 
 function normalizeImportFeeMode(value) {
@@ -4411,7 +4421,7 @@ app.get(
         MIN(od.Price) AS unit_price,
         COALESCE(SUM(od.Import_fee), 0) AS import_fee,
         CASE
-          WHEN COALESCE(o.split_parent_order_id, 0) > 0 THEN 'Missing'
+          WHEN COALESCE(o.split_parent_order_id, 0) > 0 AND COALESCE(o.split_kind, '') <> 'refund' THEN 'Missing'
           ELSE 'Main'
         END AS fee_segment,
         COALESCE(
@@ -4465,7 +4475,7 @@ app.get(
         END,
         o.status,
         CASE
-          WHEN COALESCE(o.split_parent_order_id, 0) > 0 THEN 'Missing'
+          WHEN COALESCE(o.split_parent_order_id, 0) > 0 AND COALESCE(o.split_kind, '') <> 'refund' THEN 'Missing'
           ELSE 'Main'
         END
       ORDER BY pr.round_id DESC, od.prod_id ASC, NULLIF(TRIM(od.pack_size), '') ASC, od.flavor ASC
@@ -4486,7 +4496,8 @@ app.get(
           od.received_qty,
           od.arrival_status,
           o.status AS order_status,
-          COALESCE(o.split_parent_order_id, 0) AS split_parent_order_id
+          COALESCE(o.split_parent_order_id, 0) AS split_parent_order_id,
+          COALESCE(o.split_kind, '') AS split_kind
         FROM order_details od
         JOIN orders o ON o.order_id = od.order_id
         LEFT JOIN products p ON p.prod_id = od.prod_id
@@ -4627,6 +4638,7 @@ app.put(
           COALESCE(od.Import_fee, 0) AS current_import_fee,
           o.status AS order_status,
           COALESCE(o.split_parent_order_id, 0) AS split_parent_order_id,
+          COALESCE(o.split_kind, '') AS split_kind,
           p.flavors AS product_flavors
          FROM order_details od
          JOIN orders o ON o.order_id = od.order_id
@@ -5557,6 +5569,8 @@ app.get('/api/admin/inventory-intake/orders', authenticateToken, requireAdmin, a
         o.status,
         o.refund_status,
         o.refund_completed_at,
+        COALESCE(o.split_parent_order_id, 0) AS split_parent_order_id,
+        COALESCE(o.split_kind, '') AS split_kind,
         o.Order_type AS order_type,
         o.Order_date AS order_date,
         a.username,
@@ -5683,6 +5697,8 @@ app.get('/api/admin/inventory-intake/orders', authenticateToken, requireAdmin, a
         status: order.status || 'Pending',
         refund_status: String(order.refund_status || 'pending').toLowerCase() === 'paid' ? 'paid' : 'pending',
         refund_completed_at: order.refund_completed_at || null,
+        split_parent_order_id: Number(order.split_parent_order_id) || null,
+        split_kind: Number(order.split_parent_order_id) > 0 ? (order.split_kind || 'delayed') : null,
         order_type: order.order_type || 'Preorder',
         order_date: order.order_date,
         total_amount: Number(order.total_amount) || 0,
@@ -5780,6 +5796,8 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
         o.total_amount,
         o.status AS order_status,
         o.Order_date AS order_date,
+        COALESCE(o.split_parent_order_id, 0) AS split_parent_order_id,
+        COALESCE(o.split_kind, '') AS split_kind,
         a.username,
         a.full_name,
         od.detail_id,
@@ -5924,12 +5942,34 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
           fee_confirmed: Number(row.fee_confirmed) === 1,
           // นับรายการที่แอดมินยังไม่เคยกดบันทึกรับของ (ยังเป็น Pending ในฐานข้อมูล)
           pending_detail_count: 0,
+          // ข้อมูลการแยกออเดอร์ของรายการนี้
+          split_delayed_qty: 0,
+          split_delayed_outstanding_qty: 0,
+          split_delayed_order_ids: new Set(),
+          split_refund_qty: 0,
+          split_refund_order_ids: new Set(),
+          unsplit_outstanding_qty: 0,
         })
       }
 
       const item = round.itemsMap.get(lineKey)
       item.ordered_qty += orderedQty
       item.received_qty += receivedQty
+      {
+        const splitParentId = Number(row.split_parent_order_id) || 0
+        const splitKind = String(row.split_kind || '').toLowerCase()
+        const detailOutstanding = Math.max(orderedQty - receivedQty, 0)
+        if (splitParentId > 0 && splitKind === 'refund') {
+          item.split_refund_qty += orderedQty
+          if (orderedQty > 0) item.split_refund_order_ids.add(orderId)
+        } else if (splitParentId > 0) {
+          item.split_delayed_qty += orderedQty
+          item.split_delayed_outstanding_qty += detailOutstanding
+          if (orderedQty > 0) item.split_delayed_order_ids.add(orderId)
+        } else if (String(row.arrival_status || '').toLowerCase() !== 'arrived') {
+          item.unsplit_outstanding_qty += detailOutstanding
+        }
+      }
       item.detail_ids.push(Number(row.detail_id))
       item.order_ids.add(orderId)
       item.fee_confirmed = item.fee_confirmed || Number(row.fee_confirmed) === 1
@@ -5975,6 +6015,10 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
         const { pending_detail_count: _pendingDetailCount, ...itemRest } = item
         return {
           ...itemRest,
+          split_delayed_order_ids: Array.from(item.split_delayed_order_ids),
+          split_refund_order_ids: Array.from(item.split_refund_order_ids),
+          is_split_delayed: item.split_delayed_order_ids.size > 0,
+          is_split_refund: item.split_refund_order_ids.size > 0,
           order_count: item.order_ids.size,
           order_ids: Array.from(item.order_ids),
           missing_qty: missingQty,
@@ -6270,11 +6314,14 @@ app.post(
           // late-receipt flow.
           const feeConfirmed = confirmedProductIds.has(Number(detail.prod_id))
           const existingMissing = String(detail.arrival_status || '').toLowerCase() === 'missing'
+          const existingDelayed = String(detail.arrival_status || '').toLowerCase() === 'delayed'
           const arrivalStatus = finalReceivedQty >= orderedQty
             ? 'Arrived'
             : feeConfirmed || existingMissing
               ? 'Missing'
-              : 'Pending'
+              : existingDelayed
+                ? 'Delayed'
+                : 'Pending'
 
           remainingNew -= extraQty
 
@@ -6830,7 +6877,8 @@ app.post(
       }
 
       const detail = detailRows[0]
-      if (String(detail.arrival_status).toLowerCase() !== 'missing') {
+      const currentArrival = String(detail.arrival_status).toLowerCase()
+      if (!['missing', 'delayed'].includes(currentArrival)) {
         await connection.rollback()
         return res.status(409).json({ error: 'item is not marked as missing' })
       }
@@ -6856,7 +6904,9 @@ app.post(
 
       const nextReceivedQty = currentReceivedQty + incomingQty
       const nextMissingQty = Math.max(orderedQty - nextReceivedQty, 0)
-      const nextArrivalStatus = nextMissingQty === 0 ? 'Arrived' : 'Missing'
+      const nextArrivalStatus = nextMissingQty === 0
+        ? 'Arrived'
+        : currentArrival === 'delayed' ? 'Delayed' : 'Missing'
 
       await connection.query(
         `UPDATE order_details
@@ -6973,6 +7023,548 @@ app.post(
   },
 )
 
+// ─────────────────────────────────────────────
+// คำนวณยอด/สถานะของออเดอร์ใหม่ หลังจากย้ายรายการขาดไปออเดอร์ตกหล่น
+// ─────────────────────────────────────────────
+async function recalculateOrderAfterShortageSplit(connection, orderId) {
+  const [orderRows] = await connection.query(
+    `SELECT status, COALESCE(shipping_fee, 0) AS shipping_fee,
+            CASE WHEN LOWER(Order_type) = 'ready' THEN 1 ELSE 0 END AS is_ready_order
+     FROM orders WHERE order_id = ? LIMIT 1`,
+    [orderId],
+  )
+  if (orderRows.length === 0) return null
+  const order = orderRows[0]
+
+  const [orderDetails] = await connection.query(
+    `SELECT od.qty AS ordered_qty, COALESCE(od.received_qty, 0) AS received_qty,
+            COALESCE(od.arrival_status, 'Pending') AS arrival_status, od.Price AS unit_price
+     FROM order_details od
+     WHERE od.order_id = ?`,
+    [orderId],
+  )
+
+  const orderedAmount = orderDetails.reduce(
+    (sum, item) => sum + (Number(item.ordered_qty) || 0) * (Number(item.unit_price) || 0),
+    0,
+  )
+  const refundAmount = orderDetails.reduce((sum, item) => {
+    if (String(item.arrival_status || '').toLowerCase() !== 'missing') return sum
+    const missingQty = Math.max((Number(item.ordered_qty) || 0) - (Number(item.received_qty) || 0), 0)
+    return sum + missingQty * (Number(item.unit_price) || 0)
+  }, 0)
+  const allReceived = orderDetails.every(
+    (item) => (Number(item.received_qty) || 0) >= (Number(item.ordered_qty) || 0),
+  )
+  const allMissing = orderDetails.length > 0 && orderDetails.every(
+    (item) =>
+      (Number(item.received_qty) || 0) === 0 &&
+      String(item.arrival_status || '').toLowerCase() === 'missing',
+  )
+  const hasDelayedItems = orderDetails.some(
+    (item) =>
+      (Number(item.ordered_qty) || 0) > (Number(item.received_qty) || 0) &&
+      String(item.arrival_status || '').toLowerCase() === 'delayed',
+  )
+  const lockedStatuses = ['shipped', 'delivered', 'cancelled']
+  const newStatus = lockedStatuses.includes(String(order.status || '').toLowerCase())
+    ? order.status
+    : hasDelayedItems
+      ? 'Delayed'
+      : resolveOrderStatusAfterIntake(order.status, allReceived, allMissing)
+  const totalAmount = Math.max(
+    orderedAmount - refundAmount + (Number(order.is_ready_order) === 1 ? Number(order.shipping_fee) || 0 : 0),
+    0,
+  )
+
+  await connection.query('UPDATE orders SET total_amount = ?, status = ? WHERE order_id = ?', [
+    totalAmount,
+    newStatus,
+    orderId,
+  ])
+
+  return { order_id: Number(orderId), status: newStatus, total_amount: totalAmount }
+}
+
+// ─────────────────────────────────────────────
+// POST /api/admin/inventory-intake/rounds/:round_id/split-missing
+// เลือกหลายรายการ (รวมทั้งรอบ) แล้วตั้งเป็น "ตกหล่น" + แยกออกเป็นออเดอร์เพิ่ม
+// body: { line_keys: string[], note?: string }
+// ─────────────────────────────────────────────
+app.post(
+  '/api/admin/inventory-intake/rounds/:round_id/split-missing',
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    const roundId = Number(req.params.round_id)
+    const lineKeys = Array.isArray(req.body?.line_keys)
+      ? [...new Set(req.body.line_keys.map((key) => String(key || '').trim()).filter(Boolean))]
+      : []
+
+    if (!roundId) {
+      return res.status(400).json({ error: 'round_id is required' })
+    }
+    if (lineKeys.length === 0) {
+      return res.status(400).json({ error: 'กรุณาเลือกรายการสินค้าอย่างน้อย 1 รายการ' })
+    }
+    if (lineKeys.length > 500) {
+      return res.status(400).json({ error: 'เลือกรายการมากเกินไป' })
+    }
+
+    const connection = await pool.getConnection()
+    try {
+      await connection.beginTransaction()
+
+      const [roundRows] = await connection.query(
+        `SELECT round_id, status FROM preorder_rounds WHERE round_id = ? LIMIT 1 FOR UPDATE`,
+        [roundId],
+      )
+      if (roundRows.length === 0) {
+        await connection.rollback()
+        return res.status(404).json({ error: 'ไม่พบรอบพรีออเดอร์' })
+      }
+      if (String(roundRows[0].status || '').trim().toLowerCase() !== 'closed') {
+        await connection.rollback()
+        return res.status(400).json({ error: 'รอบนี้ยังไม่ปิด จึงยังแยกออเดอร์ตกหล่นไม่ได้' })
+      }
+
+      const [detailRows] = await connection.query(
+        `SELECT od.detail_id, od.order_id, od.prod_id, od.flavor, od.pack_size,
+                od.Price AS unit_price, od.qty AS ordered_qty,
+                COALESCE(od.received_qty, 0) AS received_qty,
+                COALESCE(od.arrival_status, 'Pending') AS arrival_status,
+                COALESCE(o.split_parent_order_id, 0) AS split_parent_order_id,
+                COALESCE(o.split_kind, '') AS split_kind,
+                p.prod_name AS product_name,
+                EXISTS (
+                  SELECT 1 FROM preorder_import_fee_confirmations pifc
+                  WHERE pifc.round_id = od.preorder_round_id
+                    AND pifc.prod_id = od.prod_id
+                    AND pifc.fee_segment = 'Main'
+                    AND pifc.confirmation_source = 'admin'
+                ) AS fee_confirmed
+         FROM order_details od
+         JOIN orders o ON o.order_id = od.order_id
+         LEFT JOIN products p ON p.prod_id = od.prod_id
+         WHERE od.preorder_round_id = ?
+           AND LOWER(o.Order_type) = 'preorder'
+           AND ${approvedFirstPaymentSql('o')}
+         ORDER BY o.order_id ASC, od.detail_id ASC
+         FOR UPDATE`,
+        [roundId],
+      )
+
+      const requestedKeys = new Set(lineKeys)
+      const selectedDetails = detailRows.filter((detail) => {
+        // รายการที่อยู่ในออเดอร์คืนเงินแล้ว ไม่เกี่ยวกับการแยกตกหล่น
+        if (String(detail.split_kind || '').toLowerCase() === 'refund') return false
+        const unitPrice = Number(detail.unit_price) || 0
+        const lineKey = `${detail.prod_id}|${String(detail.flavor || '').trim()}|${String(detail.pack_size || '').trim()}|${unitPrice}`
+        return requestedKeys.has(lineKey)
+      })
+
+      if (selectedDetails.length === 0) {
+        await connection.rollback()
+        return res.status(404).json({ error: 'ไม่พบรายการที่เลือกในรอบนี้ (ข้อมูลอาจเปลี่ยนไปแล้ว กรุณารีเฟรช)' })
+      }
+
+      const blocked = selectedDetails.filter(
+        (detail) =>
+          Number(detail.fee_confirmed) === 1 ||
+          String(detail.arrival_status || '').toLowerCase() === 'missing',
+      )
+      if (blocked.length > 0) {
+        await connection.rollback()
+        const names = [...new Set(blocked.map((detail) => detail.product_name || `#${detail.prod_id}`))]
+        return res.status(409).json({
+          error: `สินค้าต่อไปนี้ยืนยันค่านำเข้าแล้ว ต้องจัดการผ่านหน้าสินค้าขาด/ตกหล่น: ${names.join(', ')}`,
+        })
+      }
+
+      const splitResults = []
+      const touchedParentOrders = new Set()
+      const childOrderIds = new Set()
+      let skippedCount = 0
+      let movedQty = 0
+
+      for (const detail of selectedDetails) {
+        const orderedQty = Math.max(Number(detail.ordered_qty) || 0, 0)
+        const receivedQty = Math.max(Number(detail.received_qty) || 0, 0)
+        const arrival = String(detail.arrival_status || '').toLowerCase()
+
+        // ข้ามรายการที่รับครบแล้ว / ไม่มีจำนวน / อยู่ในออเดอร์ตกหล่นอยู่แล้ว
+        if (
+          orderedQty <= 0 ||
+          receivedQty >= orderedQty ||
+          arrival === 'arrived' ||
+          Number(detail.split_parent_order_id) > 0
+        ) {
+          skippedCount += 1
+          continue
+        }
+
+        await connection.query(
+          `UPDATE order_details SET arrival_status = 'Delayed' WHERE detail_id = ?`,
+          [detail.detail_id],
+        )
+
+        const childOrderId = await splitDelayedItemsFromOrder(
+          connection,
+          Number(detail.order_id),
+          Number(detail.detail_id),
+        )
+
+        await connection.query(
+          `UPDATE inventory_intake_session_items
+           SET arrival_status = 'Delayed', refund_amount = 0
+           WHERE detail_id = ?`,
+          [detail.detail_id],
+        )
+
+        touchedParentOrders.add(Number(detail.order_id))
+        if (childOrderId) childOrderIds.add(Number(childOrderId))
+        movedQty += orderedQty
+        splitResults.push({
+          detail_id: Number(detail.detail_id),
+          order_id: Number(detail.order_id),
+          split_order_id: childOrderId ? Number(childOrderId) : null,
+          product_name: detail.product_name || '',
+          flavor: detail.flavor || '',
+          qty: orderedQty,
+        })
+      }
+
+      if (splitResults.length === 0) {
+        await connection.rollback()
+        return res.status(400).json({
+          error: 'รายการที่เลือกรับครบแล้ว หรือถูกแยกเป็นออเดอร์ตกหล่นไปแล้ว',
+        })
+      }
+
+      const parentOrders = []
+      for (const orderId of touchedParentOrders) {
+        const summary = await recalculateOrderAfterShortageSplit(connection, orderId)
+        if (summary) parentOrders.push(summary)
+      }
+
+      // ออเดอร์ลูกที่ถูกสร้าง/เพิ่มรายการ: ปรับยอดให้ตรงกับรายการที่ย้ายมา
+      for (const childId of childOrderIds) {
+        await connection.query(
+          `UPDATE orders o
+           SET o.total_amount = (
+             SELECT COALESCE(SUM(od.qty * od.Price), 0)
+             FROM order_details od WHERE od.order_id = o.order_id
+           )
+           WHERE o.order_id = ?`,
+          [childId],
+        )
+      }
+
+      await connection.commit()
+
+      res.json({
+        success: true,
+        round_id: roundId,
+        split_count: splitResults.length,
+        skipped_count: skippedCount,
+        moved_qty: movedQty,
+        parent_order_count: touchedParentOrders.size,
+        split_order_ids: [...childOrderIds],
+        parent_orders: parentOrders,
+        items: splitResults,
+      })
+    } catch (error) {
+      await connection.rollback()
+      console.error('[POST /api/admin/inventory-intake/rounds/:round_id/split-missing]', error)
+      sendServerError(res, error)
+    } finally {
+      connection.release()
+    }
+  },
+)
+
+// ─────────────────────────────────────────────
+// POST /api/admin/refunds/items
+// คืนเงินหลายรายการพร้อมกัน — รายการที่คืนเงินจะถูก "แยกออกจากออเดอร์เดิม"
+// ไปไว้ในออเดอร์คืนเงิน (split_kind = 'refund') ของออเดอร์หลักนั้น
+// ส่วนรายการที่มาช้ายังอยู่ในออเดอร์ตกหล่น/ออเดอร์เดิมตามปกติ
+// body: { detail_ids: number[], status: 'pending' | 'paid' }
+//   pending = แยกออเดอร์ + แจ้งคืนเงิน (ยังไม่โอน)
+//   paid    = แยกออเดอร์ (ถ้ายังไม่แยก) + บันทึกว่าโอนเงินคืนแล้ว
+// ─────────────────────────────────────────────
+async function getOrCreateRefundOrder(connection, rootOrderId, cache) {
+  if (cache.has(rootOrderId)) return cache.get(rootOrderId)
+
+  const [existingRows] = await connection.query(
+    `SELECT order_id FROM orders
+     WHERE split_parent_order_id = ? AND split_kind = 'refund'
+     ORDER BY order_id DESC
+     LIMIT 1
+     FOR UPDATE`,
+    [rootOrderId],
+  )
+  if (existingRows.length > 0) {
+    const id = Number(existingRows[0].order_id)
+    cache.set(rootOrderId, { order_id: id, created: false })
+    return cache.get(rootOrderId)
+  }
+
+  const [rootRows] = await connection.query(
+    `SELECT user_id, Order_type, deadline FROM orders WHERE order_id = ? LIMIT 1`,
+    [rootOrderId],
+  )
+  if (rootRows.length === 0) throw new Error(`root order ${rootOrderId} not found`)
+  const root = rootRows[0]
+
+  const [insertResult] = await connection.query(
+    `INSERT INTO orders
+       (user_id, total_amount, status, Order_type, deadline, import_fee_total,
+        split_parent_order_id, split_kind)
+     VALUES (?, 0, 'Missing', ?, ?, 0, ?, 'refund')`,
+    [root.user_id, root.Order_type, root.deadline || null, rootOrderId],
+  )
+  const refundOrderId = Number(insertResult.insertId)
+
+  const [shippingRows] = await connection.query(
+    `SELECT name, phone, address, notes, Shipping_Carrier
+     FROM shipping WHERE order_id = ? ORDER BY ship_id DESC LIMIT 1`,
+    [rootOrderId],
+  )
+  if (shippingRows.length > 0) {
+    const shipping = shippingRows[0]
+    await connection.query(
+      `INSERT INTO shipping (order_id, name, phone, address, notes, Shipping_Carrier)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [refundOrderId, shipping.name, shipping.phone, shipping.address, shipping.notes, shipping.Shipping_Carrier],
+    )
+  }
+
+  cache.set(rootOrderId, { order_id: refundOrderId, created: true })
+  return cache.get(rootOrderId)
+}
+
+async function syncOrderRefundStatus(connection, orderId, adminUserId) {
+  const [rows] = await connection.query(
+    `SELECT qty AS ordered_qty, COALESCE(received_qty, 0) AS received_qty,
+            COALESCE(arrival_status, 'Pending') AS arrival_status,
+            COALESCE(refund_status, 'pending') AS refund_status
+     FROM order_details WHERE order_id = ?`,
+    [orderId],
+  )
+  const missingRows = rows.filter(
+    (row) =>
+      (Number(row.ordered_qty) || 0) > (Number(row.received_qty) || 0) &&
+      String(row.arrival_status || '').toLowerCase() === 'missing',
+  )
+  const allPaid =
+    missingRows.length > 0 &&
+    missingRows.every((row) => String(row.refund_status || '').toLowerCase() === 'paid')
+  await connection.query(
+    `UPDATE orders
+     SET refund_status = ?,
+         refund_completed_at = CASE WHEN ? = 1 THEN COALESCE(refund_completed_at, NOW()) ELSE NULL END,
+         refund_completed_by = CASE WHEN ? = 1 THEN COALESCE(refund_completed_by, ?) ELSE NULL END
+     WHERE order_id = ?`,
+    [allPaid ? 'paid' : 'pending', allPaid ? 1 : 0, allPaid ? 1 : 0, adminUserId || null, orderId],
+  )
+  return allPaid ? 'paid' : 'pending'
+}
+
+app.post('/api/admin/refunds/items', authenticateToken, requireAdmin, async (req, res) => {
+  const detailIds = Array.isArray(req.body?.detail_ids)
+    ? [...new Set(req.body.detail_ids.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))]
+    : []
+  const requestedStatus = String(req.body?.status || 'pending').trim().toLowerCase()
+
+  if (detailIds.length === 0) {
+    return res.status(400).json({ error: 'กรุณาเลือกรายการที่ต้องการคืนเงินอย่างน้อย 1 รายการ' })
+  }
+  if (detailIds.length > 500) {
+    return res.status(400).json({ error: 'เลือกรายการมากเกินไป' })
+  }
+  if (!['pending', 'paid'].includes(requestedStatus)) {
+    return res.status(400).json({ error: 'status must be pending or paid' })
+  }
+
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+
+    const [detailRows] = await connection.query(
+      `SELECT od.detail_id, od.order_id, od.prod_id, od.flavor, od.pack_size,
+              od.Price AS unit_price, od.qty AS ordered_qty,
+              COALESCE(od.received_qty, 0) AS received_qty,
+              COALESCE(od.arrival_status, 'Pending') AS arrival_status,
+              COALESCE(od.refund_status, 'pending') AS refund_status,
+              od.item_type, od.preorder_round_id,
+              COALESCE(o.split_parent_order_id, 0) AS split_parent_order_id,
+              COALESCE(o.split_kind, '') AS split_kind,
+              p.prod_name AS product_name
+       FROM order_details od
+       JOIN orders o ON o.order_id = od.order_id
+       LEFT JOIN products p ON p.prod_id = od.prod_id
+       WHERE od.detail_id IN (?)
+       ORDER BY od.order_id ASC, od.detail_id ASC
+       FOR UPDATE`,
+      [detailIds],
+    )
+
+    if (detailRows.length === 0) {
+      await connection.rollback()
+      return res.status(404).json({ error: 'ไม่พบรายการที่เลือก' })
+    }
+
+    const refundOrderCache = new Map()
+    const touchedOrders = new Set()
+    const results = []
+    const skipped = []
+    let refundAmount = 0
+
+    for (const detail of detailRows) {
+      const orderedQty = Math.max(Number(detail.ordered_qty) || 0, 0)
+      const receivedQty = Math.min(Math.max(Number(detail.received_qty) || 0, 0), orderedQty)
+      const shortageQty = Math.max(orderedQty - receivedQty, 0)
+      const unitPrice = Number(detail.unit_price) || 0
+      const label = `${detail.product_name || `#${detail.prod_id}`}${detail.flavor ? ` (${detail.flavor})` : ''}`
+
+      if (shortageQty <= 0) {
+        skipped.push({ detail_id: Number(detail.detail_id), reason: 'ไม่มีจำนวนที่ขาด', label })
+        continue
+      }
+      if (String(detail.refund_status || '').toLowerCase() === 'paid') {
+        skipped.push({ detail_id: Number(detail.detail_id), reason: 'โอนเงินคืนแล้ว', label })
+        continue
+      }
+
+      // อยู่ในออเดอร์คืนเงินแล้ว: แค่อัปเดตสถานะการโอน
+      if (String(detail.split_kind).toLowerCase() === 'refund') {
+        if (requestedStatus === 'paid') {
+          await connection.query(
+            `UPDATE order_details SET arrival_status = 'Missing', refund_status = 'paid' WHERE detail_id = ?`,
+            [detail.detail_id],
+          )
+          touchedOrders.add(Number(detail.order_id))
+          refundAmount += shortageQty * unitPrice
+          results.push({
+            detail_id: Number(detail.detail_id),
+            source_order_id: Number(detail.order_id),
+            refund_order_id: Number(detail.order_id),
+            refund_detail_id: Number(detail.detail_id),
+            qty: shortageQty,
+            amount: shortageQty * unitPrice,
+            label,
+          })
+        } else {
+          skipped.push({ detail_id: Number(detail.detail_id), reason: 'แยกเป็นออเดอร์คืนเงินแล้ว', label })
+        }
+        continue
+      }
+
+      const sourceOrderId = Number(detail.order_id)
+      const rootOrderId = Number(detail.split_parent_order_id) > 0
+        ? Number(detail.split_parent_order_id)
+        : sourceOrderId
+      const refundOrder = await getOrCreateRefundOrder(connection, rootOrderId, refundOrderCache)
+
+      // ออเดอร์เดิมเหลือเฉพาะจำนวนที่รับมาแล้ว (ถ้ามี)
+      if (receivedQty > 0) {
+        await connection.query(
+          `UPDATE order_details
+           SET qty = ?, received_qty = ?, arrival_status = 'Arrived', refund_status = 'pending'
+           WHERE detail_id = ?`,
+          [receivedQty, receivedQty, detail.detail_id],
+        )
+      } else {
+        await connection.query(
+          `UPDATE order_details
+           SET qty = 0, received_qty = 0, arrival_status = 'Arrived', refund_status = 'pending', Import_fee = 0
+           WHERE detail_id = ?`,
+          [detail.detail_id],
+        )
+      }
+
+      const [insertResult] = await connection.query(
+        `INSERT INTO order_details
+           (order_id, prod_id, flavor, Price, qty, received_qty, arrival_status, refund_status,
+            Import_fee, item_type, preorder_round_id)
+         VALUES (?, ?, ?, ?, ?, 0, 'Missing', ?, 0, ?, ?)`,
+        [
+          refundOrder.order_id,
+          detail.prod_id,
+          detail.flavor || null,
+          unitPrice,
+          shortageQty,
+          requestedStatus,
+          detail.item_type || null,
+          detail.preorder_round_id || null,
+        ],
+      )
+      if (detail.pack_size) {
+        await connection.query('UPDATE order_details SET pack_size = ? WHERE detail_id = ?', [
+          detail.pack_size,
+          insertResult.insertId,
+        ])
+      }
+
+      touchedOrders.add(sourceOrderId)
+      touchedOrders.add(refundOrder.order_id)
+      refundAmount += shortageQty * unitPrice
+      results.push({
+        detail_id: Number(detail.detail_id),
+        source_order_id: sourceOrderId,
+        refund_order_id: refundOrder.order_id,
+        refund_detail_id: Number(insertResult.insertId),
+        qty: shortageQty,
+        amount: shortageQty * unitPrice,
+        label,
+      })
+    }
+
+    if (results.length === 0) {
+      await connection.rollback()
+      return res.status(400).json({
+        error: 'ไม่มีรายการที่คืนเงินได้: ' + skipped.map((s) => `${s.label} (${s.reason})`).join(', '),
+        skipped,
+      })
+    }
+
+    const orders = []
+    for (const orderId of touchedOrders) {
+      let summary = await recalculateOrderAfterShortageSplit(connection, orderId)
+      // ออเดอร์ที่ทุกรายการถูกย้ายไปคืนเงินหมดแล้ว (เหลือ qty 0) ไม่ควรขึ้นว่าพร้อมส่ง
+      const [qtyRows] = await connection.query(
+        'SELECT COALESCE(SUM(qty), 0) AS total_qty FROM order_details WHERE order_id = ?',
+        [orderId],
+      )
+      if (summary && Number(qtyRows[0]?.total_qty || 0) === 0 &&
+          !['shipped', 'delivered', 'cancelled'].includes(String(summary.status || '').toLowerCase())) {
+        await connection.query(`UPDATE orders SET status = 'Missing' WHERE order_id = ?`, [orderId])
+        summary = { ...summary, status: 'Missing' }
+      }
+      const refundStatus = await syncOrderRefundStatus(connection, orderId, req.user?.id)
+      if (summary) orders.push({ ...summary, refund_status: refundStatus })
+    }
+
+    await connection.commit()
+    res.json({
+      success: true,
+      status: requestedStatus,
+      refunded_count: results.length,
+      refund_amount: refundAmount,
+      refund_order_ids: [...new Set(results.map((r) => r.refund_order_id))],
+      items: results,
+      skipped,
+      orders,
+    })
+  } catch (error) {
+    await connection.rollback()
+    console.error('[POST /api/admin/refunds/items]', error)
+    sendServerError(res, error)
+  } finally {
+    connection.release()
+  }
+})
+
 // PATCH /api/admin/refunds/orders/:order_id/status
 // แจ้งคืนเงินหรือบันทึกการโอนเงินคืนเฉพาะรายการที่เลือก
 // ─────────────────────────────────────────────
@@ -7002,7 +7594,8 @@ app.patch(
       await connection.beginTransaction()
 
       const [orderRows] = await connection.query(
-        `SELECT order_id, refund_status, refund_completed_at
+        `SELECT order_id, refund_status, refund_completed_at,
+                COALESCE(split_parent_order_id, 0) AS split_parent_order_id
          FROM orders
          WHERE order_id = ?
          LIMIT 1`,
@@ -7049,10 +7642,15 @@ app.patch(
       const hasAdminConfirmation = confirmationRows.some(
         (row) => String(row.confirmation_source || '').toLowerCase() === 'admin',
       )
+      // รายการตกหล่น (แยกเป็นออเดอร์ตกหล่น / สถานะรอของ) คืนเงินได้เลย ไม่ต้องรอยืนยันค่านำเข้า
+      const isSplitShortage =
+        currentArrivalStatus === 'delayed' ||
+        Number(orderRows[0].split_parent_order_id || 0) > 0
       if (
         requestedStatus === 'pending' &&
         currentArrivalStatus !== 'missing' &&
-        !hasAdminConfirmation
+        !hasAdminConfirmation &&
+        !isSplitShortage
       ) {
         await connection.rollback()
         return res.status(409).json({ error: 'import fee must be confirmed before refund handling' })
