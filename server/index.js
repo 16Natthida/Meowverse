@@ -4447,6 +4447,7 @@ app.get(
       LEFT JOIN products p ON p.prod_id = od.prod_id
       WHERE LOWER(o.Order_type) = 'preorder'
         AND LOWER(COALESCE(o.status, '')) NOT IN ('cancelled', 'invalid slip', 'invalid_slip', 'invalid import slip')
+        AND NOT (COALESCE(o.split_parent_order_id, 0) > 0 AND COALESCE(o.split_kind, '') = 'refund')
         AND od.qty > 0
       GROUP BY
         pr.round_id,
@@ -4505,6 +4506,7 @@ app.get(
           AND od.qty > 0
           AND COALESCE(od.received_qty, 0) >= od.qty
           AND LOWER(COALESCE(o.status, '')) NOT IN ('cancelled', 'invalid slip', 'invalid_slip', 'invalid import slip')
+          AND NOT (COALESCE(o.split_parent_order_id, 0) > 0 AND COALESCE(o.split_kind, '') = 'refund')
       `)
       const customerIdsByPack = new Map()
       for (const row of customerCountRows) {
@@ -4646,6 +4648,7 @@ app.put(
          WHERE od.preorder_round_id = ?
            AND od.item_type = 'preorder'
            AND LOWER(COALESCE(o.status, '')) NOT IN ('cancelled', 'invalid slip', 'invalid_slip', 'invalid import slip')
+           AND NOT (COALESCE(o.split_parent_order_id, 0) > 0 AND COALESCE(o.split_kind, '') = 'refund')
            AND od.qty > 0`,
         [roundId],
       )
@@ -4876,12 +4879,14 @@ app.put(
       if (feeSegment === 'Main' && firstConfirmedProductIds.size > 0) {
         for (const prodId of firstConfirmedProductIds) {
           const [missingRows] = await connection.query(
-            `SELECT detail_id, order_id
-             FROM order_details
-             WHERE preorder_round_id = ?
-               AND prod_id = ?
-               AND item_type = 'preorder'
-               AND qty > COALESCE(received_qty, 0)
+            `SELECT od.detail_id, od.order_id
+             FROM order_details od
+             JOIN orders o ON o.order_id = od.order_id
+             WHERE od.preorder_round_id = ?
+               AND od.prod_id = ?
+               AND od.item_type = 'preorder'
+               AND od.qty > COALESCE(od.received_qty, 0)
+               AND NOT (COALESCE(o.split_parent_order_id, 0) > 0 AND COALESCE(o.split_kind, '') = 'refund')
              FOR UPDATE`,
             [roundId, prodId],
           )
@@ -5897,8 +5902,12 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
 
       const round = roundMap.get(roundId)
       const orderId = Number(row.order_id)
+      // รายการในออเดอร์คืนเงิน: คืนเงินแล้ว ไม่ต้องรับเข้า (นับแยกไว้แสดงป้ายเท่านั้น)
+      const isRefundRow =
+        Number(row.split_parent_order_id || 0) > 0 &&
+        String(row.split_kind || '').toLowerCase() === 'refund'
 
-      if (!round.ordersMap.has(orderId)) {
+      if (!isRefundRow && !round.ordersMap.has(orderId)) {
         round.ordersMap.set(orderId, {
           order_id: orderId,
           user_id: Number(row.user_id) || null,
@@ -5918,8 +5927,10 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
       const lineKey = `${row.prod_id}|${String(row.flavor || '').trim()}|${String(row.pack_size || '').trim()}|${unitPrice}`
 
       const order = round.ordersMap.get(orderId)
-      order.item_count += 1
-      order.total_qty += orderedQty
+      if (order) {
+        order.item_count += 1
+        order.total_qty += orderedQty
+      }
 
       if (!round.itemsMap.has(lineKey)) {
         round.itemsMap.set(lineKey, {
@@ -5953,6 +5964,11 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
       }
 
       const item = round.itemsMap.get(lineKey)
+      if (isRefundRow) {
+        item.split_refund_qty += Math.max(orderedQty - receivedQty, 0)
+        if (orderedQty > 0) item.split_refund_order_ids.add(orderId)
+        continue
+      }
       item.ordered_qty += orderedQty
       item.received_qty += receivedQty
       {
@@ -6008,6 +6024,11 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
 
       const items = Array.from(round.itemsMap.values()).map((item) => {
         const outstandingQty = Math.max(item.ordered_qty - item.received_qty, 0)
+        // ส่วนที่ยังไม่ได้รับถูกคืนเงินหมดแล้ว → ล็อกไม่ให้รับเข้าเพิ่ม
+        const isRefundLocked = item.split_refund_qty > 0 && outstandingQty === 0
+        if (isRefundLocked && String(item.arrival_status || '').toLowerCase() !== 'arrived') {
+          item.arrival_status = 'Refunded'
+        }
         const missingQty = item.fee_confirmed || item.existing_missing ? outstandingQty : 0
         const lineTotal = item.ordered_qty * item.unit_price
         const receivedTotal = item.received_qty * item.unit_price
@@ -6019,6 +6040,7 @@ app.get('/api/admin/inventory-intake/rounds', authenticateToken, requireAdmin, a
           split_refund_order_ids: Array.from(item.split_refund_order_ids),
           is_split_delayed: item.split_delayed_order_ids.size > 0,
           is_split_refund: item.split_refund_order_ids.size > 0,
+          refund_locked: isRefundLocked,
           order_count: item.order_ids.size,
           order_ids: Array.from(item.order_ids),
           missing_qty: missingQty,
@@ -6137,6 +6159,7 @@ app.post(
          LEFT JOIN accounts a ON a.user_id = o.user_id
          WHERE od.preorder_round_id = ?
            AND LOWER(o.Order_type) = 'preorder'
+           AND NOT (COALESCE(o.split_parent_order_id, 0) > 0 AND COALESCE(o.split_kind, '') = 'refund')
            AND ${approvedFirstPaymentSql('o')}
          ORDER BY o.Order_date ASC, o.order_id ASC, od.detail_id ASC`,
         [roundId],
@@ -6863,7 +6886,8 @@ app.post(
                 od.Price AS unit_price,
                 COALESCE(o.status, 'Pending') AS order_status,
                 COALESCE(o.shipping_fee, 0) AS shipping_fee,
-                LOWER(COALESCE(o.Order_type, '')) AS order_type
+                LOWER(COALESCE(o.Order_type, '')) AS order_type,
+                COALESCE(o.split_kind, '') AS split_kind
          FROM order_details od
          JOIN orders o ON o.order_id = od.order_id
          WHERE od.detail_id = ?
@@ -6877,6 +6901,10 @@ app.post(
       }
 
       const detail = detailRows[0]
+      if (String(detail.split_kind || '').toLowerCase() === 'refund') {
+        await connection.rollback()
+        return res.status(409).json({ error: 'รายการนี้คืนเงินแล้ว ไม่สามารถรับเข้าเพิ่มได้' })
+      }
       const currentArrival = String(detail.arrival_status).toLowerCase()
       if (!['missing', 'delayed'].includes(currentArrival)) {
         await connection.rollback()

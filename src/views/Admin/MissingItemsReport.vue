@@ -171,13 +171,13 @@
                     type="number"
                     min="1"
                     :max="item.missing_qty"
-                    :disabled="isItemActionPending(item) || isRefundPaid(item)"
-                    :placeholder="`สูงสุด ${item.missing_qty}`"
+                    :disabled="isItemActionPending(item) || isRefundPaid(item) || isRefundOrderItem(item)"
+                    :placeholder="isRefundOrderItem(item) ? 'คืนเงินแล้ว' : `สูงสุด ${item.missing_qty}`"
                   />
                   <button
                     type="button"
                     class="delay-btn"
-                    :disabled="isItemActionPending(item) || isRefundPaid(item) || Number(missingReceiveDraft[item.detail_id] || 0) <= 0"
+                    :disabled="isItemActionPending(item) || isRefundPaid(item) || isRefundOrderItem(item) || Number(missingReceiveDraft[item.detail_id] || 0) <= 0"
                     @click="handleMissingReceive(item)"
                   >
                     รับเข้า

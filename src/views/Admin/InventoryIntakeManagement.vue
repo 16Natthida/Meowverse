@@ -99,8 +99,19 @@ function resolveIntakeStatusLabel(status) {
   return status || 'Pending'
 }
 
+// รายการที่คืนเงินแล้ว (ส่วนที่ยังไม่ได้รับถูกแยกไปออเดอร์คืนเงินหมดแล้ว)
+function isRefundedItem(item) {
+  return (
+    Boolean(item?.refund_locked) ||
+    String(item?.arrival_status || '').trim().toLowerCase() === 'refunded'
+  )
+}
+
+// ล็อกไม่ให้กรอกรับเพิ่ม: รับครบแล้ว หรือ คืนเงินแล้ว
 function isArrivedItem(item) {
-  return String(item?.arrival_status || '').trim().toLowerCase() === 'arrived'
+  return (
+    String(item?.arrival_status || '').trim().toLowerCase() === 'arrived' || isRefundedItem(item)
+  )
 }
 
 function setSelectedIntakeOrder(orderId) {
@@ -244,6 +255,7 @@ function canSelectForSplit(item) {
 }
 
 function splitDisabledReason(item) {
+  if (isRefundedItem(item)) return 'คืนเงินแล้ว — รับเข้าเพิ่มไม่ได้'
   if (isArrivedItem(item)) return 'รับสินค้าครบแล้ว'
   if (isFeeLocked(item)) return 'ยืนยันค่านำเข้าแล้ว — จัดการที่หน้าสินค้าขาด/ตกหล่น'
   if (getOutstandingQty(item) <= 0) return 'ไม่มีจำนวนคงค้าง'
@@ -621,7 +633,7 @@ onUnmounted(() => {
               <div
                 v-for="item in editableIntakeItems"
                 :key="item.detail_id"
-                :class="['items-row', { 'items-row--arrived': isArrivedItem(item), 'items-row--selected': isLineSelected(item) && canSelectForSplit(item) }]"
+                :class="['items-row', { 'items-row--arrived': isArrivedItem(item), 'items-row--refunded': isRefundedItem(item), 'items-row--selected': isLineSelected(item) && canSelectForSplit(item) }]"
               >
                 <div class="product-col">
                   <input
@@ -716,7 +728,8 @@ onUnmounted(() => {
                 </div>
 
                 <div>
-                  <span v-if="isArrivedItem(item)" class="badge badge--arrived">รับสินค้าแล้ว</span>
+                  <span v-if="isRefundedItem(item)" class="badge badge--refunded" title="คืนเงินแล้ว — รับเข้าเพิ่มไม่ได้">คืนเงินแล้ว</span>
+                  <span v-else-if="isArrivedItem(item)" class="badge badge--arrived">รับสินค้าแล้ว</span>
                   <span v-else :class="resolveIntakeStatusClass(getDraftIntakeStatus(item))">
                     {{ resolveIntakeStatusLabel(getDraftIntakeStatus(item)) }}
                   </span>
@@ -1407,6 +1420,15 @@ onUnmounted(() => {
 .ghost-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.badge--refunded {
+  background: #b42318;
+  color: #fff;
+}
+
+.items-row--refunded {
+  background: #fdf1f0;
 }
 
 .badge--arrived {
