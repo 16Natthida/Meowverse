@@ -244,14 +244,13 @@ function formatOrderIds(ids) {
   return (ids || []).map((id) => `#${String(id).padStart(3, '0')}`).join(', ')
 }
 
+// แยกได้หลายครั้ง: แม้เคยแยกเป็นออเดอร์ตกหล่นแล้ว ถ้ายังมีของค้างก็แยกต่อเป็นออเดอร์ตกหล่นใบใหม่ได้
 function canSelectForSplit(item) {
-  return (
-    Boolean(item) &&
-    !isArrivedItem(item) &&
-    getOutstandingQty(item) > 0 &&
-    getUnsplitOutstandingQty(item) > 0 &&
-    !isFeeLocked(item)
-  )
+  return Boolean(item) && !isArrivedItem(item) && getOutstandingQty(item) > 0 && !isFeeLocked(item)
+}
+
+function getSplitTimes(item) {
+  return (item?.split_delayed_order_ids || []).length
 }
 
 function splitDisabledReason(item) {
@@ -259,7 +258,7 @@ function splitDisabledReason(item) {
   if (isArrivedItem(item)) return 'รับสินค้าครบแล้ว'
   if (isFeeLocked(item)) return 'ยืนยันค่านำเข้าแล้ว — จัดการที่หน้าสินค้าขาด/ตกหล่น'
   if (getOutstandingQty(item) <= 0) return 'ไม่มีจำนวนคงค้าง'
-  if (getUnsplitOutstandingQty(item) <= 0) return 'แยกเป็นออเดอร์ตกหล่นแล้ว'
+  if (item?.is_split_delayed) return 'เคยแยกแล้ว — เลือกเพื่อแยกเป็นออเดอร์ตกหล่นใบใหม่อีกครั้ง'
   return 'เลือกเพื่อแยกเป็นออเดอร์ตกหล่น'
 }
 
@@ -271,7 +270,7 @@ const selectedSplitItems = computed(() => {
 })
 
 const selectedSplitQty = computed(() =>
-  selectedSplitItems.value.reduce((sum, item) => sum + getUnsplitOutstandingQty(item), 0),
+  selectedSplitItems.value.reduce((sum, item) => sum + getOutstandingQty(item), 0),
 )
 
 const allSplitSelected = computed(
@@ -304,14 +303,15 @@ async function splitSelectedAsMissing() {
   const summary = selectedSplitItems.value
     .map(
       (item) =>
-        `• ${item.product_name}${item.flavor ? ` (${item.flavor})` : ''}: ค้าง ${getUnsplitOutstandingQty(item)} ชิ้น · ${item.order_count || item.order_ids?.length || 0} ออเดอร์`,
+        `• ${item.product_name}${item.flavor ? ` (${item.flavor})` : ''}: ค้าง ${getOutstandingQty(item)} ชิ้น` +
+        (item.is_split_delayed ? ' (เคยแยกแล้ว → แยกใหม่อีกครั้ง)' : ''),
     )
     .join('\n')
   const confirmed = window.confirm(
     `ตั้งเป็น "ตกหล่น" และแยกเป็นออเดอร์เพิ่ม ${selectedSplitItems.value.length} รายการ\n\n${summary}\n\n` +
-      'ระบบจะย้ายรายการเหล่านี้ของลูกค้าแต่ละคนไปไว้ในออเดอร์ตกหล่น (ออเดอร์ลูก) สถานะ "รอของ" ' +
-      'ส่วนที่เหลือในออเดอร์หลักจัดส่งต่อได้ตามปกติ\n' +
-      'หมายเหตุ: ถ้ารายการใดรับมาแล้วบางส่วน ทั้งบรรทัดจะถูกย้ายไปออเดอร์ตกหล่น\n\nยืนยันหรือไม่?',
+      'ระบบจะสร้างออเดอร์ตกหล่นใบใหม่ให้ลูกค้าแต่ละคน แล้วย้าย "จำนวนที่ยังไม่มา" ไปไว้ในนั้น สถานะ "รอของ"\n' +
+      'ส่วนที่รับมาแล้วยังอยู่ในออเดอร์เดิม จัดส่งต่อได้ตามปกติ\n' +
+      'รายการที่เคยแยกแล้วแต่ยังไม่มา จะถูกย้ายไปออเดอร์ตกหล่นใบใหม่ (แยกครั้งถัดไป)\n\nยืนยันหรือไม่?',
   )
   if (!confirmed) return
 
@@ -673,7 +673,7 @@ onUnmounted(() => {
                         :title="`ออเดอร์ตกหล่น: ${formatOrderIds(item.split_delayed_order_ids)}`"
                       >
                         {{ getUnsplitOutstandingQty(item) > 0 ? 'แยกออเดอร์ตกหล่นบางส่วน' : 'ตกหล่น · แยกออเดอร์แล้ว' }}
-                        {{ item.split_delayed_qty }} ชิ้น
+                        {{ item.split_delayed_qty }} ชิ้น · {{ getSplitTimes(item) }} ใบ
                         <template v-if="item.split_delayed_order_ids.length <= 3">
                           ({{ formatOrderIds(item.split_delayed_order_ids) }})
                         </template>

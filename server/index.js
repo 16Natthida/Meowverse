@@ -7114,6 +7114,40 @@ async function recalculateOrderAfterShortageSplit(connection, orderId) {
   return { order_id: Number(orderId), status: newStatus, total_amount: totalAmount }
 }
 
+// สร้างออเดอร์ตกหล่นใบใหม่ (ไม่ใช้ใบเดิมซ้ำ) เพื่อให้แยกได้หลายครั้ง: ตกหล่นครั้งที่ 1, 2, 3 ...
+async function createDelayedChildOrder(connection, rootOrderId) {
+  const [rootRows] = await connection.query(
+    `SELECT user_id, Order_type, deadline FROM orders WHERE order_id = ? LIMIT 1`,
+    [rootOrderId],
+  )
+  if (rootRows.length === 0) throw new Error(`root order ${rootOrderId} not found`)
+  const root = rootRows[0]
+
+  const [insertResult] = await connection.query(
+    `INSERT INTO orders
+       (user_id, total_amount, status, Order_type, deadline, import_fee_total,
+        split_parent_order_id, split_kind)
+     VALUES (?, 0, 'Delayed', ?, ?, 0, ?, 'delayed')`,
+    [root.user_id, root.Order_type, root.deadline || null, rootOrderId],
+  )
+  const childOrderId = Number(insertResult.insertId)
+
+  const [shippingRows] = await connection.query(
+    `SELECT name, phone, address, notes, Shipping_Carrier
+     FROM shipping WHERE order_id = ? ORDER BY ship_id DESC LIMIT 1`,
+    [rootOrderId],
+  )
+  if (shippingRows.length > 0) {
+    const shipping = shippingRows[0]
+    await connection.query(
+      `INSERT INTO shipping (order_id, name, phone, address, notes, Shipping_Carrier)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [childOrderId, shipping.name, shipping.phone, shipping.address, shipping.notes, shipping.Shipping_Carrier],
+    )
+  }
+  return childOrderId
+}
+
 // ─────────────────────────────────────────────
 // POST /api/admin/inventory-intake/rounds/:round_id/split-missing
 // เลือกหลายรายการ (รวมทั้งรอบ) แล้วตั้งเป็น "ตกหล่น" + แยกออกเป็นออเดอร์เพิ่ม
@@ -7163,6 +7197,7 @@ app.post(
                 COALESCE(od.arrival_status, 'Pending') AS arrival_status,
                 COALESCE(o.split_parent_order_id, 0) AS split_parent_order_id,
                 COALESCE(o.split_kind, '') AS split_kind,
+                od.item_type, od.preorder_round_id,
                 p.prod_name AS product_name,
                 EXISTS (
                   SELECT 1 FROM preorder_import_fee_confirmations pifc
@@ -7196,11 +7231,8 @@ app.post(
         return res.status(404).json({ error: 'ไม่พบรายการที่เลือกในรอบนี้ (ข้อมูลอาจเปลี่ยนไปแล้ว กรุณารีเฟรช)' })
       }
 
-      const blocked = selectedDetails.filter(
-        (detail) =>
-          Number(detail.fee_confirmed) === 1 ||
-          String(detail.arrival_status || '').toLowerCase() === 'missing',
-      )
+      // ยืนยันค่านำเข้าแล้ว = ต้องไปจัดการที่หน้าสินค้าขาด/ตกหล่น
+      const blocked = selectedDetails.filter((detail) => Number(detail.fee_confirmed) === 1)
       if (blocked.length > 0) {
         await connection.rollback()
         const names = [...new Set(blocked.map((detail) => detail.product_name || `#${detail.prod_id}`))]
@@ -7212,35 +7244,70 @@ app.post(
       const splitResults = []
       const touchedParentOrders = new Set()
       const childOrderIds = new Set()
+      const childByRoot = new Map()
       let skippedCount = 0
       let movedQty = 0
 
       for (const detail of selectedDetails) {
         const orderedQty = Math.max(Number(detail.ordered_qty) || 0, 0)
-        const receivedQty = Math.max(Number(detail.received_qty) || 0, 0)
+        const receivedQty = Math.min(Math.max(Number(detail.received_qty) || 0, 0), orderedQty)
+        const shortageQty = Math.max(orderedQty - receivedQty, 0)
         const arrival = String(detail.arrival_status || '').toLowerCase()
 
-        // ข้ามรายการที่รับครบแล้ว / ไม่มีจำนวน / อยู่ในออเดอร์ตกหล่นอยู่แล้ว
-        if (
-          orderedQty <= 0 ||
-          receivedQty >= orderedQty ||
-          arrival === 'arrived' ||
-          Number(detail.split_parent_order_id) > 0
-        ) {
+        // ข้ามรายการที่รับครบแล้ว / ไม่มีจำนวน / อยู่ในขั้นตอนคืนเงิน (Missing)
+        if (shortageQty <= 0 || arrival === 'arrived' || arrival === 'missing') {
           skippedCount += 1
           continue
         }
 
-        await connection.query(
-          `UPDATE order_details SET arrival_status = 'Delayed' WHERE detail_id = ?`,
-          [detail.detail_id],
-        )
+        // แยกได้หลายครั้ง: รายการที่อยู่ในออเดอร์ตกหล่นแล้วก็แยกต่อไปยังออเดอร์ตกหล่นใบใหม่ได้
+        // ทุกใบผูกกับออเดอร์หลัก (root) เสมอ เพื่อให้ตรวจสลิปชำระเงินจากออเดอร์หลักได้
+        const sourceOrderId = Number(detail.order_id)
+        const rootOrderId = Number(detail.split_parent_order_id) > 0
+          ? Number(detail.split_parent_order_id)
+          : sourceOrderId
+        if (!childByRoot.has(rootOrderId)) {
+          childByRoot.set(rootOrderId, await createDelayedChildOrder(connection, rootOrderId))
+        }
+        const childOrderId = childByRoot.get(rootOrderId)
+        const unitPrice = Number(detail.unit_price) || 0
 
-        const childOrderId = await splitDelayedItemsFromOrder(
-          connection,
-          Number(detail.order_id),
-          Number(detail.detail_id),
+        // ส่วนที่รับมาแล้วคงไว้ในออเดอร์เดิม ย้ายไปเฉพาะจำนวนที่ยังไม่มา
+        if (receivedQty > 0) {
+          await connection.query(
+            `UPDATE order_details SET qty = ?, received_qty = ?, arrival_status = 'Arrived' WHERE detail_id = ?`,
+            [receivedQty, receivedQty, detail.detail_id],
+          )
+        } else {
+          await connection.query(
+            `UPDATE order_details
+             SET qty = 0, received_qty = 0, arrival_status = 'Arrived', Import_fee = 0
+             WHERE detail_id = ?`,
+            [detail.detail_id],
+          )
+        }
+
+        const [insertResult] = await connection.query(
+          `INSERT INTO order_details
+             (order_id, prod_id, flavor, Price, qty, received_qty, arrival_status, Import_fee,
+              item_type, preorder_round_id)
+           VALUES (?, ?, ?, ?, ?, 0, 'Delayed', 0, ?, ?)`,
+          [
+            childOrderId,
+            detail.prod_id,
+            detail.flavor || null,
+            unitPrice,
+            shortageQty,
+            detail.item_type || null,
+            detail.preorder_round_id || roundId,
+          ],
         )
+        if (detail.pack_size) {
+          await connection.query('UPDATE order_details SET pack_size = ? WHERE detail_id = ?', [
+            detail.pack_size,
+            insertResult.insertId,
+          ])
+        }
 
         await connection.query(
           `UPDATE inventory_intake_session_items
@@ -7249,16 +7316,18 @@ app.post(
           [detail.detail_id],
         )
 
-        touchedParentOrders.add(Number(detail.order_id))
-        if (childOrderId) childOrderIds.add(Number(childOrderId))
-        movedQty += orderedQty
+        touchedParentOrders.add(sourceOrderId)
+        childOrderIds.add(childOrderId)
+        movedQty += shortageQty
         splitResults.push({
           detail_id: Number(detail.detail_id),
-          order_id: Number(detail.order_id),
-          split_order_id: childOrderId ? Number(childOrderId) : null,
+          order_id: sourceOrderId,
+          root_order_id: rootOrderId,
+          split_order_id: childOrderId,
+          new_detail_id: Number(insertResult.insertId),
           product_name: detail.product_name || '',
           flavor: detail.flavor || '',
-          qty: orderedQty,
+          qty: shortageQty,
         })
       }
 
@@ -7271,7 +7340,27 @@ app.post(
 
       const parentOrders = []
       for (const orderId of touchedParentOrders) {
-        const summary = await recalculateOrderAfterShortageSplit(connection, orderId)
+        let summary = await recalculateOrderAfterShortageSplit(connection, orderId)
+        const [emptyRows] = await connection.query(
+          `SELECT COALESCE(SUM(od.qty), 0) AS total_qty,
+                  MAX(COALESCE(o.split_parent_order_id, 0)) AS split_parent_order_id
+           FROM orders o LEFT JOIN order_details od ON od.order_id = o.order_id
+           WHERE o.order_id = ?`,
+          [orderId],
+        )
+        if (
+          summary &&
+          Number(emptyRows[0]?.total_qty || 0) === 0 &&
+          !['shipped', 'delivered', 'cancelled'].includes(String(summary.status || '').toLowerCase())
+        ) {
+          // ออเดอร์ตกหล่นใบเก่าที่ย้ายของออกหมด = ปิดใบ, ออเดอร์หลักที่ย้ายออกหมด = รอของจากออเดอร์ตกหล่น
+          const nextStatus = Number(emptyRows[0]?.split_parent_order_id || 0) > 0 ? 'Cancelled' : 'Delayed'
+          await connection.query('UPDATE orders SET status = ?, total_amount = 0 WHERE order_id = ?', [
+            nextStatus,
+            orderId,
+          ])
+          summary = { ...summary, status: nextStatus, total_amount: 0 }
+        }
         if (summary) parentOrders.push(summary)
       }
 
